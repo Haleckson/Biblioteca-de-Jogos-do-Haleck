@@ -42,6 +42,7 @@ export default function GameDetailDrawer({
   const [tempDiaryMedias, setTempDiaryMedias] = useState<MediaItem[]>([]);
   const [editingDiaryId, setEditingDiaryId] = useState<string | null>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
+  const [zoomedImage, setZoomedImage] = useState<string | null>(null);
 
   if (!game) return null;
 
@@ -95,6 +96,7 @@ export default function GameDetailDrawer({
 
     setIsUploadingMedia(true);
     try {
+      let currentIndex = tempDiaryMedias.length;
       for (const file of files) {
         const isVideo = file.type.startsWith("video/");
         if (isVideo) {
@@ -112,8 +114,10 @@ export default function GameDetailDrawer({
             reader.readAsDataURL(file);
           });
         } else {
+          currentIndex++;
+          const fileNameParam = `${game.name}_diario_${currentIndex}`;
           // Upload to ImgBB automatically
-          const uploadedUrl = await uploadToImgBB(file);
+          const uploadedUrl = await uploadToImgBB(file, fileNameParam);
           setTempDiaryMedias((prev) => [
             ...prev,
             { src: uploadedUrl, isVideo: false }
@@ -311,8 +315,8 @@ export default function GameDetailDrawer({
                       <div>
                         <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold">Status</div>
                         <div className="mt-1.5 flex flex-wrap gap-1">
-                          {game.status.map((s) => (
-                            <span key={s} className={`px-2.5 py-1 rounded-full text-xs font-bold ${chipClass(s)}`}>
+                          {game.status.map((s, idx) => (
+                            <span key={`${s}-${idx}`} className={`px-2.5 py-1 rounded-full text-xs font-bold ${chipClass(s)}`}>
                               {s}
                             </span>
                           ))}
@@ -358,8 +362,8 @@ export default function GameDetailDrawer({
                       <div className="sm:col-span-2 lg:col-span-4">
                         <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold">Gêneros</div>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {game.genre.map((g) => (
-                            <span key={g} className="px-2.5 py-1 rounded-xl bg-purple-950/40 text-purple-300 text-xs font-bold border border-purple-900/40">
+                          {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
+                            <span key={`${g}-${idx}`} className="px-2.5 py-1 rounded-xl bg-purple-950/40 text-purple-300 text-xs font-bold border border-purple-900/40">
                               {g}
                             </span>
                           ))}
@@ -368,8 +372,8 @@ export default function GameDetailDrawer({
                       <div className="sm:col-span-2 lg:col-span-4">
                         <div className="text-zinc-500 text-xs uppercase tracking-widest font-bold">Tags</div>
                         <div className="mt-1.5 flex flex-wrap gap-1.5">
-                          {game.tags.map((t) => (
-                            <span key={t} className="px-2.5 py-1 rounded-xl bg-zinc-900 text-cyan-300 text-xs font-bold border border-cyan-900/30">
+                          {[...game.tags].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
+                            <span key={`${t}-${idx}`} className="px-2.5 py-1 rounded-xl bg-zinc-900 text-cyan-300 text-xs font-bold border border-cyan-900/30">
                               {t}
                             </span>
                           ))}
@@ -621,9 +625,10 @@ export default function GameDetailDrawer({
                                         ) : (
                                           <img
                                             src={m.src}
-                                            className="w-full h-full object-contain"
+                                            className="w-full h-full object-contain cursor-zoom-in transition-transform duration-300 hover:scale-[1.03]"
                                             alt="Anexo de diário"
                                             referrerPolicy="no-referrer"
+                                            onClick={() => setZoomedImage(m.src)}
                                             onError={(e: any) => {
                                               (e.target as HTMLImageElement).src = "https://placehold.co/400x300/040406/ffffff?text=Falha+de+Mídia";
                                             }}
@@ -657,6 +662,46 @@ export default function GameDetailDrawer({
           </div>
         </div>
       )}
+
+      {/* Zoomed Image Dialog Overlay */}
+      <AnimatePresence>
+        {zoomedImage && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-black/90 backdrop-blur-md cursor-zoom-out"
+              onClick={() => setZoomedImage(null)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.92, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.92, y: 15 }}
+              transition={{ type: "spring", damping: 28, stiffness: 350 }}
+              className="relative max-w-5xl max-h-[90vh] z-10 flex flex-col items-center justify-center pointer-events-none"
+            >
+              <img
+                src={zoomedImage}
+                alt="Imagem ampliada do diário"
+                className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl pointer-events-auto cursor-zoom-out border border-zinc-800"
+                onClick={() => setZoomedImage(null)}
+                referrerPolicy="no-referrer"
+                onError={(e: any) => {
+                  (e.target as HTMLImageElement).src = "https://placehold.co/800x600/040406/ffffff?text=Falha+de+Mídia";
+                }}
+              />
+              <button
+                onClick={() => setZoomedImage(null)}
+                className="absolute -top-3 -right-3 sm:top-4 sm:right-4 p-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white transition-all cursor-pointer border border-zinc-800/80 pointer-events-auto shadow-xl"
+                aria-label="Fechar zoom"
+              >
+                <X size={20} />
+              </button>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </AnimatePresence>
   );
 }

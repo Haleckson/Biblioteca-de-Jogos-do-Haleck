@@ -1,5 +1,6 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue, set } from "firebase/database";
+import { getAuth } from "firebase/auth";
 import { Game } from "../types";
 
 // Read Firebase configuration from environment variables with provided fallbacks
@@ -26,13 +27,15 @@ export const isFirebaseConfigured = (): boolean => {
 };
 
 let db: any = null;
+export let auth: any = null;
 
 if (isFirebaseConfigured()) {
   try {
     const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     db = getDatabase(app);
+    auth = getAuth(app);
   } catch (error) {
-    console.error("Erro ao inicializar o Firebase Realtime Database:", error);
+    console.error("Erro ao inicializar o Firebase:", error);
   }
 }
 

@@ -19,6 +19,8 @@ interface GameFormModalProps {
   globalGenres: string[];
   onAddGlobalTag: (tag: string) => void;
   onAddGlobalGenre: (genre: string) => void;
+  onDeleteGlobalTag?: (tag: string) => void;
+  onDeleteGlobalGenre?: (genre: string) => void;
   triggerAlert: (title: string, msg: string) => void;
 }
 
@@ -31,6 +33,8 @@ export default function GameFormModal({
   globalGenres,
   onAddGlobalTag,
   onAddGlobalGenre,
+  onDeleteGlobalTag,
+  onDeleteGlobalGenre,
   triggerAlert
 }: GameFormModalProps) {
   // Form fields state
@@ -128,7 +132,8 @@ export default function GameFormModal({
 
     setIsUploadingCover(true);
     try {
-      const imageUrl = await uploadToImgBB(file);
+      const fileNameParam = `${name.trim() || "jogo"}_cover`;
+      const imageUrl = await uploadToImgBB(file, fileNameParam);
       setTempUploadedCover(imageUrl);
       setCoverUrl(""); // override text input with direct ImgBB url
     } catch (err: any) {
@@ -148,7 +153,8 @@ export default function GameFormModal({
 
     setIsUploadingIcon(true);
     try {
-      const imageUrl = await uploadToImgBB(file);
+      const fileNameParam = `${name.trim() || "jogo"}_icon`;
+      const imageUrl = await uploadToImgBB(file, fileNameParam);
       setTempUploadedIcon(imageUrl);
     } catch (err: any) {
       console.error(err);
@@ -454,18 +460,35 @@ export default function GameFormModal({
                   {globalGenres.map((genre) => {
                     const isSelected = selectedGenres.includes(genre);
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={genre}
-                        onClick={() => toggleGenre(genre)}
-                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
                           isSelected
                             ? "bg-purple-600/25 text-purple-300 border-purple-500/40"
-                            : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200"
+                            : "bg-zinc-950 text-zinc-400 border-zinc-800"
                         }`}
                       >
-                        {genre}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleGenre(genre)}
+                          className="hover:text-white transition-colors cursor-pointer"
+                        >
+                          {genre}
+                        </button>
+                        {onDeleteGlobalGenre && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteGlobalGenre(genre);
+                            }}
+                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
+                            title="Excluir gênero"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

@@ -10,9 +10,20 @@ import StatsCards from "./components/StatsCards";
 import GameCard from "./components/GameCard";
 import GameFormModal from "./components/GameFormModal";
 import GameDetailDrawer from "./components/GameDetailDrawer";
-import { CustomAlert, CustomConfirm } from "./components/CustomDialogs";
-import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud } from "lucide-react";
-import { isFirebaseConfigured, syncFromFirebase, saveToFirebase } from "./utils/firebase";
+import { CustomAlert, CustomConfirm, CustomPasswordPrompt } from "./components/CustomDialogs";
+import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock } from "lucide-react";
+import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, auth } from "./utils/firebase";
+import { uploadToImgBB } from "./utils/imgbb";
+import {
+  signInWithGoogleDrive,
+  isDriveAuthenticated,
+  signOutDrive,
+  backupLibraryToDrive
+} from "./utils/googleDrive";
+
+const sortAlphabetically = (arr: string[]) => {
+  return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
+};
 
 export default function App() {
   // Core game data storage & custom tags/genres
@@ -28,18 +39,20 @@ export default function App() {
   const [globalTags, setGlobalTags] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("globalTagsList");
-      return saved ? JSON.parse(saved) : DEFAULT_TAGS;
+      const list = saved ? JSON.parse(saved) : DEFAULT_TAGS;
+      return sortAlphabetically(list);
     } catch {
-      return DEFAULT_TAGS;
+      return sortAlphabetically(DEFAULT_TAGS);
     }
   });
 
   const [globalGenres, setGlobalGenres] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("globalGenresList");
-      return saved ? JSON.parse(saved) : DEFAULT_GENRES;
+      const list = saved ? JSON.parse(saved) : DEFAULT_GENRES;
+      return sortAlphabetically(list);
     } catch {
-      return DEFAULT_GENRES;
+      return sortAlphabetically(DEFAULT_GENRES);
     }
   });
 
@@ -65,6 +78,21 @@ export default function App() {
     message: "",
     onConfirm: () => {}
   });
+  const [passwordState, setPasswordState] = useState({
+    isOpen: false,
+    title: "",
+    message: "",
+    onConfirm: () => {}
+  });
+
+  const triggerPasswordPrompt = (title: string, message: string, onConfirm: () => void) => {
+    setPasswordState({
+      isOpen: true,
+      title,
+      message,
+      onConfirm
+    });
+  };
 
   // Synced local storage effects
   useEffect(() => {
@@ -87,23 +115,183 @@ export default function App() {
   const isIncomingFirebaseUpdate = useRef(false);
   const hasInitiallySynced = useRef(!isFirebaseConfigured());
   const [isSaving, setIsSaving] = useState(false);
+  const [isDriveConnected, setIsDriveConnected] = useState(false);
+  const [backupStatus, setBackupStatus] = useState<string | null>(null);
 
-  const handleManualSave = async () => {
+  const [isAdmin, setIsAdmin] = useState<boolean>(() => {
+    return sessionStorage.getItem("admin_unlocked") === "true";
+  });
+
+  const ensureAdmin = (actionName: string, onAuthorized: () => void | Promise<void>) => {
+    if (isAdmin) {
+      onAuthorized();
+    } else {
+      triggerPasswordPrompt(
+        "Acesso Restrito",
+        `Para ${actionName}, insira a senha do administrador para liberar o modo de edição.`,
+        () => {
+          setIsAdmin(true);
+          sessionStorage.setItem("admin_unlocked", "true");
+          onAuthorized();
+        }
+      );
+    }
+  };
+
+  useEffect(() => {
+    setIsDriveConnected(isDriveAuthenticated());
+  }, []);
+
+  const handleConnectDrive = async () => {
+    ensureAdmin("conectar ao Google Drive", async () => {
+      try {
+        setBackupStatus("Conectando ao Google Drive...");
+        await signInWithGoogleDrive();
+        setIsDriveConnected(true);
+        triggerAlert(
+          "Google Drive Conectado",
+          "Sua conta foi conectada! Agora, ao salvar, um backup completo de mídias e metadados será enviado para uma pasta organizada no seu Google Drive."
+        );
+      } catch (err: any) {
+        console.error(err);
+        triggerAlert(
+          "Erro de Conexão",
+          `Não foi possível conectar ao Google Drive: ${err.message || err}`
+        );
+      } finally {
+        setBackupStatus(null);
+      }
+    });
+  };
+
+  const handleDisconnectDrive = () => {
+    ensureAdmin("desconectar o Google Drive", () => {
+      triggerConfirm(
+        "Desconectar Google Drive",
+        "Tem certeza que deseja desconectar o backup do Google Drive?",
+        async () => {
+          try {
+            await signOutDrive();
+            setIsDriveConnected(false);
+            triggerAlert("Desconectado", "Sua conta do Google Drive foi desconectada.");
+          } catch (err: any) {
+            console.error(err);
+            triggerAlert("Erro", `Erro ao desconectar: ${err.message}`);
+          }
+        }
+      );
+    });
+  };
+
+  const handleManualSave = () => {
+    ensureAdmin("salvar as alterações", executeSave);
+  };
+
+  const executeSave = async () => {
     setIsSaving(true);
+    setBackupStatus("Preparando envio...");
     try {
-      await saveToFirebase(games, globalTags, globalGenres);
+      let gamesUpdated = false;
+      const processedGames = await Promise.all(
+        games.map(async (game) => {
+          let gameUpdated = false;
+          let updatedCover = game.cover;
+          let updatedIcon = game.icon;
+
+          // Check if cover is base64
+          if (game.cover && game.cover.startsWith("data:")) {
+            try {
+              setBackupStatus(`Enviando capa de ${game.name}...`);
+              updatedCover = await uploadToImgBB(game.cover, `${game.name}_cover`);
+              gameUpdated = true;
+            } catch (err) {
+              console.error(`Falha ao carregar a capa do jogo ${game.name} para o ImgBB:`, err);
+            }
+          }
+
+          // Check if icon is base64 upload
+          if (game.icon && game.icon.startsWith("data:") && game.iconType === "upload") {
+            try {
+              setBackupStatus(`Enviando ícone de ${game.name}...`);
+              updatedIcon = await uploadToImgBB(game.icon, `${game.name}_icon`);
+              gameUpdated = true;
+            } catch (err) {
+              console.error(`Falha ao carregar o ícone do jogo ${game.name} para o ImgBB:`, err);
+            }
+          }
+
+          // Check diary entry media items for base64 data
+          const updatedDiary = await Promise.all(
+            (game.diary || []).map(async (entry) => {
+              let entryUpdated = false;
+              const updatedMedias = await Promise.all(
+                (entry.medias || []).map(async (media, mediaIdx) => {
+                  if (media.src && media.src.startsWith("data:")) {
+                    try {
+                      setBackupStatus(`Enviando imagem do diário de ${game.name}...`);
+                      const uploadedSrc = await uploadToImgBB(media.src, `${game.name}_diario_${mediaIdx + 1}`);
+                      entryUpdated = true;
+                      return { ...media, src: uploadedSrc };
+                    } catch (err) {
+                      console.error(`Falha ao carregar imagem do diário do jogo ${game.name} para o ImgBB:`, err);
+                    }
+                  }
+                  return media;
+                })
+              );
+
+              if (entryUpdated) {
+                gameUpdated = true;
+                return { ...entry, medias: updatedMedias };
+              }
+              return entry;
+              })
+          );
+
+          if (gameUpdated) {
+            gamesUpdated = true;
+            return {
+              ...game,
+              cover: updatedCover,
+              icon: updatedIcon,
+              diary: updatedDiary
+            };
+          }
+          return game;
+        })
+      );
+
+      let finalGames = games;
+      if (gamesUpdated) {
+        setGames(processedGames);
+        finalGames = processedGames;
+      }
+
+      setBackupStatus("Salvando no Firebase...");
+      await saveToFirebase(finalGames, globalTags, globalGenres);
+
+      // Sincronizar mídias e metadados no Google Drive se autenticado
+      if (isDriveAuthenticated()) {
+        await backupLibraryToDrive(finalGames, globalTags, globalGenres, (statusMsg) => {
+          setBackupStatus(statusMsg);
+        });
+      }
+
       triggerAlert(
         "Sucesso ao Salvar",
-        "As alterações da sua biblioteca de jogos foram enviadas com sucesso e salvas em tempo real no Firebase!"
+        isDriveAuthenticated()
+          ? "Alterações salvas no Firebase e backup de segurança gerado no seu Google Drive com sucesso!"
+          : "As alterações e todas as novas imagens foram salvas e enviadas com sucesso em tempo real!"
       );
     } catch (err: any) {
       console.error(err);
       triggerAlert(
         "Erro ao Salvar",
-        `Houve um erro ao enviar os dados para o Firebase: ${err.message || err}`
+        `Houve um erro ao enviar os dados: ${err.message || err}`
       );
     } finally {
       setIsSaving(false);
+      setBackupStatus(null);
     }
   };
 
@@ -115,8 +303,8 @@ export default function App() {
       
       if (remoteGames.length > 0 || remoteTags.length > 0 || remoteGenres.length > 0) {
         setGames(remoteGames);
-        setGlobalTags(remoteTags);
-        setGlobalGenres(remoteGenres);
+        setGlobalTags(sortAlphabetically(remoteTags));
+        setGlobalGenres(sortAlphabetically(remoteGenres));
       } else {
         // If Firebase is empty, initialize it with current local/default data
         saveToFirebase(games, globalTags, globalGenres).catch((err) => {
@@ -152,45 +340,91 @@ export default function App() {
 
   // Actions
   const handleRandomCover = () => {
-    const nextIdx = Math.floor(Math.random() * COVER_BANK.length);
-    setCoverImage(COVER_BANK[nextIdx]);
+    ensureAdmin("alterar a imagem de capa", () => {
+      const nextIdx = Math.floor(Math.random() * COVER_BANK.length);
+      setCoverImage(COVER_BANK[nextIdx]);
+    });
   };
 
   const handleResetData = () => {
-    triggerConfirm(
-      "Restaurar Catálogo",
-      "Queres repor a biblioteca de videojogos para as configurações padrão de demonstração? Isso substituirá dados personalizados atuais.",
-      () => {
-        setGames(SAMPLE_GAMES);
-        setGlobalTags(DEFAULT_TAGS);
-        setGlobalGenres(DEFAULT_GENRES);
-        setCoverImage(COVER_BANK[0]);
-        setDetailGameId(null);
-        triggerAlert("Restauro Efetuado", "O catálogo foi restaurado com sucesso.");
-      }
-    );
+    ensureAdmin("restaurar o catálogo", () => {
+      triggerConfirm(
+        "Restaurar Catálogo",
+        "Queres repor a biblioteca de videojogos para as configurações padrão de demonstração? Isso substituirá dados personalizados atuais.",
+        () => {
+          setGames(SAMPLE_GAMES);
+          setGlobalTags(sortAlphabetically(DEFAULT_TAGS));
+          setGlobalGenres(sortAlphabetically(DEFAULT_GENRES));
+          setCoverImage(COVER_BANK[0]);
+          setDetailGameId(null);
+          triggerAlert("Restauro Efetuado", "O catálogo foi restaurado com sucesso.");
+        }
+      );
+    });
   };
 
   const handleAddGlobalTag = (newTag: string) => {
     if (!globalTags.includes(newTag)) {
-      setGlobalTags((prev) => [...prev, newTag]);
+      setGlobalTags((prev) => sortAlphabetically([...prev, newTag]));
     }
   };
 
   const handleAddGlobalGenre = (newGenre: string) => {
     if (!globalGenres.includes(newGenre)) {
-      setGlobalGenres((prev) => [...prev, newGenre]);
+      setGlobalGenres((prev) => sortAlphabetically([...prev, newGenre]));
     }
   };
 
+  const handleDeleteGlobalTag = (tagToDelete: string) => {
+    ensureAdmin("excluir esta tag permanentemente", () => {
+      triggerConfirm(
+        "Excluir Tag Global",
+        `Tem certeza que deseja remover a tag "${tagToDelete}" de todo o sistema? Ela também será removida de todos os jogos que a possuem.`,
+        () => {
+          setGlobalTags((prev) => sortAlphabetically(prev.filter((t) => t !== tagToDelete)));
+          setGames((prev) =>
+            prev.map((g) => ({
+              ...g,
+              tags: g.tags ? g.tags.filter((t) => t !== tagToDelete) : []
+            }))
+          );
+          triggerAlert("Excluída", `A tag "${tagToDelete}" foi removida.`);
+        }
+      );
+    });
+  };
+
+  const handleDeleteGlobalGenre = (genreToDelete: string) => {
+    ensureAdmin("excluir este gênero permanentemente", () => {
+      triggerConfirm(
+        "Excluir Gênero Global",
+        `Tem certeza que deseja remover o gênero "${genreToDelete}" de todo o sistema? Ele também será removido de todos os jogos que o possuem.`,
+        () => {
+          setGlobalGenres((prev) => sortAlphabetically(prev.filter((g) => g !== genreToDelete)));
+          setGames((prev) =>
+            prev.map((g) => ({
+              ...g,
+              genre: g.genre ? g.genre.filter((gen) => gen !== genreToDelete) : []
+            }))
+          );
+          triggerAlert("Excluído", `O gênero "${genreToDelete}" foi removido.`);
+        }
+      );
+    });
+  };
+
   const handleOpenAddForm = () => {
-    setEditGame(null);
-    setIsFormOpen(true);
+    ensureAdmin("adicionar um novo jogo", () => {
+      setEditGame(null);
+      setIsFormOpen(true);
+    });
   };
 
   const handleOpenEditForm = (game: Game) => {
-    setEditGame(game);
-    setIsFormOpen(true);
+    ensureAdmin("editar este jogo", () => {
+      setEditGame(game);
+      setIsFormOpen(true);
+    });
   };
 
   // Create or Update
@@ -217,37 +451,56 @@ export default function App() {
   };
 
   const handleDeleteGame = (gameId: string) => {
-    setGames((prev) => prev.filter((g) => g.id !== gameId));
-    setDetailGameId(null);
+    ensureAdmin("excluir este jogo", () => {
+      triggerConfirm(
+        "Excluir Jogo",
+        "Tem certeza que deseja excluir este jogo permanentemente da biblioteca?",
+        () => {
+          setGames((prev) => prev.filter((g) => g.id !== gameId));
+          setDetailGameId(null);
+          triggerAlert("Excluído", "O jogo foi removido com sucesso.");
+        }
+      );
+    });
   };
 
   // Diary Actions
   const handleSaveDiaryEntry = (gameId: string, entry: DiaryEntry) => {
-    setGames((prev) =>
-      prev.map((g) => {
-        if (g.id === gameId) {
-          const diary = g.diary || [];
-          const exists = diary.some((d) => d.id === entry.id);
-          const updatedDiary = exists
-            ? diary.map((d) => (d.id === entry.id ? entry : d))
-            : [entry, ...diary];
-          return { ...g, diary: updatedDiary };
-        }
-        return g;
-      })
-    );
+    ensureAdmin("salvar entrada no diário", () => {
+      setGames((prev) =>
+        prev.map((g) => {
+          if (g.id === gameId) {
+            const diary = g.diary || [];
+            const exists = diary.some((d) => d.id === entry.id);
+            const updatedDiary = exists
+              ? diary.map((d) => (d.id === entry.id ? entry : d))
+              : [entry, ...diary];
+            return { ...g, diary: updatedDiary };
+          }
+          return g;
+        })
+      );
+    });
   };
 
   const handleDeleteDiaryEntry = (gameId: string, entryId: string) => {
-    setGames((prev) =>
-      prev.map((g) => {
-        if (g.id === gameId) {
-          const updatedDiary = (g.diary || []).filter((d) => d.id !== entryId);
-          return { ...g, diary: updatedDiary };
+    ensureAdmin("remover entrada do diário", () => {
+      triggerConfirm(
+        "Excluir Entrada",
+        "Tem certeza que deseja apagar esta entrada do diário?",
+        () => {
+          setGames((prev) =>
+            prev.map((g) => {
+              if (g.id === gameId) {
+                const updatedDiary = (g.diary || []).filter((d) => d.id !== entryId);
+                return { ...g, diary: updatedDiary };
+              }
+              return g;
+            })
+          );
         }
-        return g;
-      })
-    );
+      );
+    });
   };
 
   // Helper selectors
@@ -364,7 +617,7 @@ export default function App() {
             <h1 className="text-3xl sm:text-4xl md:text-5xl font-black font-orbitron tracking-wider text-transparent bg-gradient-to-r from-cyan-400 via-white to-purple-400 bg-clip-text uppercase">
               Biblioteca do Haleck
             </h1>
-            <div className="mt-2.5 flex flex-wrap gap-2">
+            <div className="mt-2.5 flex flex-wrap items-center gap-2">
               {isFirebaseConfigured() ? (
                 <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-800/30 shadow-sm shadow-emerald-950/10">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
@@ -376,29 +629,88 @@ export default function App() {
                   Modo Local (Offline)
                 </span>
               )}
+
+              {isFirebaseConfigured() && (
+                isDriveConnected ? (
+                  <button
+                    onClick={handleDisconnectDrive}
+                    className="inline-flex items-center gap-1.5 text-[11px] font-bold text-cyan-400 bg-cyan-950/40 hover:bg-cyan-900/30 px-2.5 py-1 rounded-full border border-cyan-800/30 shadow-sm shadow-cyan-950/10 cursor-pointer transition-all"
+                    title="Google Drive conectado para backup de segurança. Clique para desconectar."
+                  >
+                    <HardDrive size={11} className="animate-pulse" />
+                    Google Drive Ativo (Backup)
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleConnectDrive}
+                    className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-cyan-400 px-2.5 py-1 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
+                    title="Conectar com o Google Drive para fazer backup automático dos dados e mídias."
+                  >
+                    <HardDrive size={11} />
+                    Conectar Google Drive
+                  </button>
+                )
+              )}
+
+              {isAdmin ? (
+                <button
+                  onClick={() => {
+                    setIsAdmin(false);
+                    sessionStorage.removeItem("admin_unlocked");
+                    triggerAlert("Sessão Encerrada", "Você voltou para o Modo de Leitura.");
+                  }}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-400 bg-amber-950/40 hover:bg-red-950/40 hover:text-red-400 px-2.5 py-1 rounded-full border border-amber-800/30 shadow-sm shadow-amber-950/10 cursor-pointer transition-all"
+                  title="Modo de Edição liberado. Clique para bloquear e voltar ao modo de leitura."
+                >
+                  <Unlock size={11} />
+                  Modo Admin (Ativo)
+                </button>
+              ) : (
+                <button
+                  onClick={() => {
+                    ensureAdmin("liberar o modo de edição", () => {
+                      triggerAlert("Modo Admin Ativo", "Você agora tem permissões de administrador!");
+                    });
+                  }}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-amber-400 px-2.5 py-1 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
+                  title="Modo de Leitura (Sem edição). Clique para inserir a senha do administrador."
+                >
+                  <Lock size={11} />
+                  Modo Leitura (Bloqueado)
+                </button>
+              )}
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {isFirebaseConfigured() && (
-              <button
-                onClick={handleManualSave}
-                disabled={isSaving}
-                className="bg-zinc-900/90 hover:bg-zinc-800 text-zinc-100 border border-zinc-700/60 text-sm font-bold px-5 py-3 rounded-xl shadow-lg hover:border-cyan-500/50 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
-                title="Sincronizar e salvar alterações manualmente na nuvem"
-              >
-                <Cloud size={16} className={`${isSaving ? "animate-spin text-cyan-400" : "text-cyan-400"}`} />
-                {isSaving ? "Salvando..." : "Salvar no Firebase"}
-              </button>
-            )}
+          <div className="flex flex-col items-end gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              {isFirebaseConfigured() && (
+                <button
+                  onClick={handleManualSave}
+                  disabled={isSaving}
+                  className="bg-zinc-900/90 hover:bg-zinc-800 text-zinc-100 border border-zinc-700/60 text-sm font-bold px-5 py-3 rounded-xl shadow-lg hover:border-cyan-500/50 transition-all flex items-center gap-2 cursor-pointer disabled:opacity-50"
+                  title="Sincronizar e salvar alterações manualmente na nuvem"
+                >
+                  <Cloud size={16} className={`${isSaving ? "animate-spin text-cyan-400" : "text-cyan-400"}`} />
+                  {isSaving ? "Salvando..." : "Salvar"}
+                </button>
+              )}
 
-            <button
-              onClick={handleOpenAddForm}
-              className="bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-700 hover:to-cyan-600 text-white text-sm font-bold px-5 py-3 rounded-xl shadow-lg shadow-purple-600/20 hover:shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer"
-            >
-              <Plus size={16} />
-              Adicionar Jogo
-            </button>
+              <button
+                onClick={handleOpenAddForm}
+                className="bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-700 hover:to-cyan-600 text-white text-sm font-bold px-5 py-3 rounded-xl shadow-lg shadow-purple-600/20 hover:shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer"
+              >
+                <Plus size={16} />
+                Adicionar Jogo
+              </button>
+            </div>
+
+            {backupStatus && (
+              <div className="text-xs text-cyan-400 font-mono animate-pulse flex items-center gap-1.5 self-end">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 animate-ping" />
+                {backupStatus}
+              </div>
+            )}
           </div>
         </div>
 
@@ -490,6 +802,8 @@ export default function App() {
         globalGenres={globalGenres}
         onAddGlobalTag={handleAddGlobalTag}
         onAddGlobalGenre={handleAddGlobalGenre}
+        onDeleteGlobalTag={handleDeleteGlobalTag}
+        onDeleteGlobalGenre={handleDeleteGlobalGenre}
         triggerAlert={triggerAlert}
       />
 
@@ -520,6 +834,17 @@ export default function App() {
         message={confirmState.message}
         onConfirm={confirmState.onConfirm}
         onCancel={() => setConfirmState((prev) => ({ ...prev, isOpen: false }))}
+      />
+
+      <CustomPasswordPrompt
+        isOpen={passwordState.isOpen}
+        title={passwordState.title}
+        message={passwordState.message}
+        onConfirm={() => {
+          setPasswordState((prev) => ({ ...prev, isOpen: false }));
+          passwordState.onConfirm();
+        }}
+        onCancel={() => setPasswordState((prev) => ({ ...prev, isOpen: false }))}
       />
     </div>
   );

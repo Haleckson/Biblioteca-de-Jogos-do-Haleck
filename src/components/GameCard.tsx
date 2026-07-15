@@ -133,33 +133,33 @@ export default function GameCard({ game, onClick }: GameCardProps) {
       </div>
       <div className="p-5 flex flex-col flex-1 justify-between">
         <div>
-          <div className="flex items-center gap-3">
-            {renderIcon(game, "w-10 h-10 rounded-2xl shrink-0")}
-            <div className="min-w-0">
-              <h3 className="text-lg font-extrabold text-white truncate group-hover:text-cyan-300 transition-colors">
+          <div className="flex items-start gap-3">
+            {renderIcon(game, "w-10 h-10 rounded-2xl shrink-0 mt-0.5")}
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base sm:text-lg font-extrabold text-white group-hover:text-cyan-300 transition-colors break-words leading-tight">
                 {game.name}
               </h3>
-              <p className="text-[11px] uppercase tracking-[0.25em] text-purple-400 font-bold truncate">
+              <p className="text-[11px] uppercase tracking-[0.25em] text-purple-400 font-bold mt-0.5 truncate">
                 {game.series || "Série autónoma"}
               </p>
             </div>
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5 items-center">
-            {game.status.map((s) => (
-              <span key={s} className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${chipClass(s)}`}>
+            {game.status.map((s, idx) => (
+              <span key={`${s}-${idx}`} className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${chipClass(s)}`}>
                 {s}
               </span>
             ))}
-            {game.genre.map((g) => (
-              <span key={g} className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-950/50 text-purple-300 border border-purple-500/30">
+            {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
+              <span key={`${g}-${idx}`} className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-950/50 text-purple-300 border border-purple-500/30">
                 {g}
               </span>
             ))}
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {game.tags.slice(0, 3).map((t) => (
+            {[...game.tags].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).slice(0, 3).map((t, idx) => (
               <span
-                key={t}
+                key={`${t}-${idx}`}
                 className="px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-zinc-950 border border-cyan-500/30 text-cyan-300"
               >
                 {t}
