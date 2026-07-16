@@ -33,4 +33,9 @@ export interface Game {
   endDate: string; // YYYY-MM-DD or empty
   releaseDate: string; // YYYY-MM-DD
   diary: DiaryEntry[];
+  coverPosition?: number;
+  hltbMain?: string;
+  hltbExtra?: string;
+  hltbCompletionist?: string;
+  hltbId?: string;
 }

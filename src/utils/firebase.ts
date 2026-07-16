@@ -91,6 +91,11 @@ export const syncFromFirebase = (
             startDate: game.startDate || "",
             endDate: game.endDate || "",
             releaseDate: game.releaseDate || "",
+            coverPosition: typeof game.coverPosition === "number" ? game.coverPosition : 50,
+            hltbMain: game.hltbMain || "",
+            hltbExtra: game.hltbExtra || "",
+            hltbCompletionist: game.hltbCompletionist || "",
+            hltbId: game.hltbId || "",
             diary: diaryRaw.map((entry: any) => {
               const mediasRaw = Array.isArray(entry.medias)
                 ? entry.medias

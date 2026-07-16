@@ -254,6 +254,45 @@ async function urlToBlob(url: string): Promise<Blob | null> {
 }
 
 /**
+ * Converts any image blob to webp format using standard client-side HTML5 Canvas.
+ */
+async function convertBlobToWebp(blob: Blob): Promise<Blob> {
+  if (blob.type === "image/webp" || blob.type === "image/gif") return blob;
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(blob);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(blob);
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob(
+        (webpBlob) => {
+          if (webpBlob) {
+            resolve(webpBlob);
+          } else {
+            resolve(blob);
+          }
+        },
+        "image/webp",
+        1.0
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(blob);
+    };
+    img.src = url;
+  });
+}
+
+/**
  * Main function to back up the complete library data and all uploaded media files to Google Drive.
  */
 export async function backupLibraryToDrive(
@@ -298,28 +337,28 @@ export async function backupLibraryToDrive(
 
     // Back up game cover directly inside the game folder
     if (game.cover && game.cover.startsWith("http")) {
-      const coverExt = game.cover.includes(".png") ? "png" : "jpg";
-      const coverName = `capa.${coverExt}`;
+      const coverName = "capa.webp";
       const exists = await findFileByName(coverName, gameFolderId, false);
       if (!exists) {
         onProgress?.(`Fazendo backup da capa de ${game.name}...`);
         const blob = await urlToBlob(game.cover);
         if (blob) {
-          await uploadOrUpdateFile(coverName, blob.type || "image/jpeg", blob, gameFolderId);
+          const webpBlob = await convertBlobToWebp(blob);
+          await uploadOrUpdateFile(coverName, "image/webp", webpBlob, gameFolderId);
         }
       }
     }
 
     // Back up custom icon directly inside the game folder
     if (game.icon && game.icon.startsWith("http") && game.iconType === "upload") {
-      const iconExt = game.icon.includes(".png") ? "png" : "jpg";
-      const iconName = `icone.${iconExt}`;
+      const iconName = "icone.webp";
       const exists = await findFileByName(iconName, gameFolderId, false);
       if (!exists) {
         onProgress?.(`Fazendo backup do ícone de ${game.name}...`);
         const blob = await urlToBlob(game.icon);
         if (blob) {
-          await uploadOrUpdateFile(iconName, blob.type || "image/png", blob, gameFolderId);
+          const webpBlob = await convertBlobToWebp(blob);
+          await uploadOrUpdateFile(iconName, "image/webp", webpBlob, gameFolderId);
         }
       }
     }
@@ -353,15 +392,15 @@ export async function backupLibraryToDrive(
           for (let mediaIdx = 0; mediaIdx < entry.medias.length; mediaIdx++) {
             const media = entry.medias[mediaIdx];
             if (media.src && media.src.startsWith("http") && !media.isVideo) {
-              const mediaExt = media.src.includes(".png") ? "png" : "jpg";
-              const mediaName = `diario_entrada_${entryIdx + 1}_media_${mediaIdx + 1}.${mediaExt}`;
+              const mediaName = `diario_entrada_${entryIdx + 1}_media_${mediaIdx + 1}.webp`;
 
               const exists = await findFileByName(mediaName, gameDiaryFolderId, false);
               if (!exists) {
                 onProgress?.(`Fazendo backup da imagem do diário de ${game.name} (${mediaIdx + 1})...`);
                 const blob = await urlToBlob(media.src);
                 if (blob) {
-                  await uploadOrUpdateFile(mediaName, blob.type || "image/jpeg", blob, gameDiaryFolderId);
+                  const webpBlob = await convertBlobToWebp(blob);
+                  await uploadOrUpdateFile(mediaName, "image/webp", webpBlob, gameDiaryFolderId);
                 }
               }
             }
@@ -420,6 +459,18 @@ export async function uploadSingleMediaBackup(
       const response = await fetch(fileOrBase64);
       blob = await response.blob();
       mimeType = blob.type || "image/jpeg";
+    }
+
+    // Convert to webp if it is an image (excluding gifs)
+    if (mimeType.startsWith("image/") && mimeType !== "image/gif") {
+      blob = await convertBlobToWebp(blob);
+      mimeType = "image/webp";
+      const lastDotIndex = fileName.lastIndexOf(".");
+      if (lastDotIndex !== -1) {
+        fileName = fileName.substring(0, lastDotIndex) + ".webp";
+      } else {
+        fileName = fileName + ".webp";
+      }
     }
 
     const fileId = await uploadOrUpdateFile(fileName, mimeType, blob, targetFolderId);

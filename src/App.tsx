@@ -57,7 +57,18 @@ export default function App() {
   });
 
   const [coverImage, setCoverImage] = useState<string>(() => {
-    return localStorage.getItem("globalCover") || COVER_BANK[0];
+    // Pick a random cover from the games collection on every page load
+    const initialGames = (() => {
+      try {
+        const savedGames = localStorage.getItem("gameLibrary");
+        return savedGames ? JSON.parse(savedGames) : SAMPLE_GAMES;
+      } catch {
+        return SAMPLE_GAMES;
+      }
+    })();
+    const covers = (initialGames as Game[]).map((g) => g.cover).filter(Boolean);
+    const pool = covers.length > 0 ? covers : COVER_BANK;
+    return pool[Math.floor(Math.random() * pool.length)];
   });
 
   // Filters State
@@ -340,10 +351,14 @@ export default function App() {
 
   // Actions
   const handleRandomCover = () => {
-    ensureAdmin("alterar a imagem de capa", () => {
-      const nextIdx = Math.floor(Math.random() * COVER_BANK.length);
-      setCoverImage(COVER_BANK[nextIdx]);
-    });
+    const covers = games.map((g) => g.cover).filter(Boolean);
+    const pool = covers.length > 0 ? covers : COVER_BANK;
+    
+    // Filter out the current cover to guarantee it changes if possible
+    const available = pool.filter((c) => c !== coverImage);
+    const finalPool = available.length > 0 ? available : pool;
+    const randomCover = finalPool[Math.floor(Math.random() * finalPool.length)];
+    setCoverImage(randomCover);
   };
 
   const handleResetData = () => {
@@ -413,6 +428,54 @@ export default function App() {
     });
   };
 
+  const handleEditGlobalTag = (oldTag: string, newTag: string) => {
+    if (!newTag || newTag.trim() === "" || oldTag === newTag) return;
+    ensureAdmin("editar esta tag permanentemente", () => {
+      setGlobalTags((prev) => {
+        const filtered = prev.filter((t) => t !== oldTag);
+        if (filtered.includes(newTag)) return sortAlphabetically(filtered);
+        return sortAlphabetically([...filtered, newTag]);
+      });
+      setGames((prev) =>
+        prev.map((g) => {
+          if (g.tags && g.tags.includes(oldTag)) {
+            const updatedTags = g.tags.map((t) => (t === oldTag ? newTag : t));
+            return {
+              ...g,
+              tags: Array.from(new Set(updatedTags))
+            };
+          }
+          return g;
+        })
+      );
+      triggerAlert("Editada", `A tag "${oldTag}" foi renomeada para "${newTag}".`);
+    });
+  };
+
+  const handleEditGlobalGenre = (oldGenre: string, newGenre: string) => {
+    if (!newGenre || newGenre.trim() === "" || oldGenre === newGenre) return;
+    ensureAdmin("editar este gênero permanentemente", () => {
+      setGlobalGenres((prev) => {
+        const filtered = prev.filter((g) => g !== oldGenre);
+        if (filtered.includes(newGenre)) return sortAlphabetically(filtered);
+        return sortAlphabetically([...filtered, newGenre]);
+      });
+      setGames((prev) =>
+        prev.map((g) => {
+          if (g.genre && g.genre.includes(oldGenre)) {
+            const updatedGenres = g.genre.map((gen) => (gen === oldGenre ? newGenre : gen));
+            return {
+              ...g,
+              genre: Array.from(new Set(updatedGenres))
+            };
+          }
+          return g;
+        })
+      );
+      triggerAlert("Editado", `O gênero "${oldGenre}" foi renomeado para "${newGenre}".`);
+    });
+  };
+
   const handleOpenAddForm = () => {
     ensureAdmin("adicionar um novo jogo", () => {
       setEditGame(null);
@@ -425,6 +488,12 @@ export default function App() {
       setEditGame(game);
       setIsFormOpen(true);
     });
+  };
+
+  const handleUpdateGame = (updatedGame: Game) => {
+    setGames((prev) =>
+      prev.map((g) => (g.id === updatedGame.id ? updatedGame : g))
+    );
   };
 
   // Create or Update
@@ -619,12 +688,12 @@ export default function App() {
             </h1>
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               {isFirebaseConfigured() ? (
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-800/30 shadow-sm shadow-emerald-950/10">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-400 bg-emerald-950/40 px-3.5 py-1.5 rounded-full border border-emerald-800/30 shadow-sm shadow-emerald-950/10">
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                   Nuvem Ativa (Realtime DB)
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 bg-zinc-900/60 px-2.5 py-1 rounded-full border border-zinc-800/40">
+                <span className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-400 bg-zinc-900/60 px-3.5 py-1.5 rounded-full border border-zinc-800/40">
                   <span className="w-1.5 h-1.5 rounded-full bg-zinc-600" />
                   Modo Local (Offline)
                 </span>
@@ -634,7 +703,7 @@ export default function App() {
                 isDriveConnected ? (
                   <button
                     onClick={handleDisconnectDrive}
-                    className="inline-flex items-center gap-1.5 text-[11px] font-bold text-cyan-400 bg-cyan-950/40 hover:bg-cyan-900/30 px-2.5 py-1 rounded-full border border-cyan-800/30 shadow-sm shadow-cyan-950/10 cursor-pointer transition-all"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-400 bg-cyan-950/40 hover:bg-cyan-900/30 px-3.5 py-1.5 rounded-full border border-cyan-800/30 shadow-sm shadow-cyan-950/10 cursor-pointer transition-all"
                     title="Google Drive conectado para backup de segurança. Clique para desconectar."
                   >
                     <HardDrive size={11} className="animate-pulse" />
@@ -643,7 +712,7 @@ export default function App() {
                 ) : (
                   <button
                     onClick={handleConnectDrive}
-                    className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-cyan-400 px-2.5 py-1 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-cyan-400 px-3.5 py-1.5 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
                     title="Conectar com o Google Drive para fazer backup automático dos dados e mídias."
                   >
                     <HardDrive size={11} />
@@ -659,7 +728,7 @@ export default function App() {
                     sessionStorage.removeItem("admin_unlocked");
                     triggerAlert("Sessão Encerrada", "Você voltou para o Modo de Leitura.");
                   }}
-                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-400 bg-amber-950/40 hover:bg-red-950/40 hover:text-red-400 px-2.5 py-1 rounded-full border border-amber-800/30 shadow-sm shadow-amber-950/10 cursor-pointer transition-all"
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-400 bg-amber-950/40 hover:bg-red-950/40 hover:text-red-400 px-3.5 py-1.5 rounded-full border border-amber-800/30 shadow-sm shadow-amber-950/10 cursor-pointer transition-all"
                   title="Modo de Edição liberado. Clique para bloquear e voltar ao modo de leitura."
                 >
                   <Unlock size={11} />
@@ -672,7 +741,7 @@ export default function App() {
                       triggerAlert("Modo Admin Ativo", "Você agora tem permissões de administrador!");
                     });
                   }}
-                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-amber-400 px-2.5 py-1 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-amber-400 px-3.5 py-1.5 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
                   title="Modo de Leitura (Sem edição). Clique para inserir a senha do administrador."
                 >
                   <Lock size={11} />
@@ -804,6 +873,8 @@ export default function App() {
         onAddGlobalGenre={handleAddGlobalGenre}
         onDeleteGlobalTag={handleDeleteGlobalTag}
         onDeleteGlobalGenre={handleDeleteGlobalGenre}
+        onEditGlobalTag={handleEditGlobalTag}
+        onEditGlobalGenre={handleEditGlobalGenre}
         triggerAlert={triggerAlert}
       />
 
@@ -818,6 +889,8 @@ export default function App() {
         onDeleteDiaryEntry={handleDeleteDiaryEntry}
         triggerAlert={triggerAlert}
         triggerConfirm={triggerConfirm}
+        isAdmin={isAdmin}
+        onUpdateGame={handleUpdateGame}
       />
 
       {/* Custom dialog components */}

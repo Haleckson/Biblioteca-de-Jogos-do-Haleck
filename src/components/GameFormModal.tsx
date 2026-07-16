@@ -6,7 +6,7 @@
 import React, { useState, useEffect } from "react";
 import { Game } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2 } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2, Search, Clock, RefreshCw } from "lucide-react";
 import { COVER_BANK } from "../data";
 import { uploadToImgBB } from "../utils/imgbb";
 
@@ -21,6 +21,8 @@ interface GameFormModalProps {
   onAddGlobalGenre: (genre: string) => void;
   onDeleteGlobalTag?: (tag: string) => void;
   onDeleteGlobalGenre?: (genre: string) => void;
+  onEditGlobalTag?: (oldTag: string, newTag: string) => void;
+  onEditGlobalGenre?: (oldGenre: string, newGenre: string) => void;
   triggerAlert: (title: string, msg: string) => void;
 }
 
@@ -35,6 +37,8 @@ export default function GameFormModal({
   onAddGlobalGenre,
   onDeleteGlobalTag,
   onDeleteGlobalGenre,
+  onEditGlobalTag,
+  onEditGlobalGenre,
   triggerAlert
 }: GameFormModalProps) {
   // Form fields state
@@ -64,10 +68,87 @@ export default function GameFormModal({
   const [showNewTag, setShowNewTag] = useState(false);
   const [newTagVal, setNewTagVal] = useState("");
 
+  const [editingGenre, setEditingGenre] = useState<string | null>(null);
+  const [editingGenreValue, setEditingGenreValue] = useState("");
+  const [editingTag, setEditingTag] = useState<string | null>(null);
+  const [editingTagValue, setEditingTagValue] = useState("");
+
   // ImgBB Uploaded Image covers/icons
   const [tempUploadedCover, setTempUploadedCover] = useState("");
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isUploadingIcon, setIsUploadingIcon] = useState(false);
+
+  // HowLongToBeat States
+  const [hltbMain, setHltbMain] = useState("");
+  const [hltbExtra, setHltbExtra] = useState("");
+  const [hltbCompletionist, setHltbCompletionist] = useState("");
+  const [hltbId, setHltbId] = useState("");
+
+  const [isFetchingHltb, setIsFetchingHltb] = useState(false);
+  const [hltbUrlInput, setHltbUrlInput] = useState("");
+  const [showHltbImport, setShowHltbImport] = useState(false);
+
+  const handleLoadHltbUrl = async () => {
+    const input = hltbUrlInput.trim();
+    if (!input) {
+      triggerAlert("Link Vazio", "Por favor, insira o link da página do jogo do HowLongToBeat ou o ID numérico.");
+      return;
+    }
+
+    setIsFetchingHltb(true);
+    try {
+      const response = await fetch(`/api/hltb?url=${encodeURIComponent(input)}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      // Set the 3 times
+      setHltbMain(data.gameplayMain ? `${data.gameplayMain}h` : "");
+      setHltbExtra(data.gameplayMainExtra ? `${data.gameplayMainExtra}h` : "");
+      setHltbCompletionist(data.gameplayCompletionist ? `${data.gameplayCompletionist}h` : "");
+      if (data.id) {
+        setHltbId(data.id);
+      }
+      
+      setShowHltbImport(false);
+      setHltbUrlInput("");
+      triggerAlert("Sucesso", "Métricas carregadas com sucesso do HowLongToBeat!");
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao carregar", `Não foi possível extrair dados: ${err.message || err}`);
+    } finally {
+      setIsFetchingHltb(false);
+    }
+  };
+
+  const handleRefreshHltb = async () => {
+    if (!hltbId) {
+      triggerAlert("ID ausente", "Não há um ID do HowLongToBeat associado a este jogo para atualizar.");
+      return;
+    }
+    setIsFetchingHltb(true);
+    try {
+      const response = await fetch(`/api/hltb?url=${encodeURIComponent(hltbId)}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      setHltbMain(data.gameplayMain ? `${data.gameplayMain}h` : "");
+      setHltbExtra(data.gameplayMainExtra ? `${data.gameplayMainExtra}h` : "");
+      setHltbCompletionist(data.gameplayCompletionist ? `${data.gameplayCompletionist}h` : "");
+      
+      triggerAlert("Métricas Atualizadas", "As médias do HowLongToBeat foram atualizadas com sucesso!");
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao atualizar", `Não foi possível atualizar dados: ${err.message || err}`);
+    } finally {
+      setIsFetchingHltb(false);
+    }
+  };
 
   // Initialize form
   useEffect(() => {
@@ -99,6 +180,12 @@ export default function GameFormModal({
       setSelectedStatus(game.status || []);
       setSelectedGenres(game.genre || []);
       setSelectedTags(game.tags || []);
+
+      // HLTB values
+      setHltbMain(game.hltbMain || "");
+      setHltbExtra(game.hltbExtra || "");
+      setHltbCompletionist(game.hltbCompletionist || "");
+      setHltbId(game.hltbId || "");
     } else {
       // Clear all
       setName("");
@@ -119,11 +206,22 @@ export default function GameFormModal({
       setSelectedStatus([]);
       setSelectedGenres([]);
       setSelectedTags([]);
+
+      // HLTB values
+      setHltbMain("");
+      setHltbExtra("");
+      setHltbCompletionist("");
+      setHltbId("");
     }
     setShowNewGenre(false);
     setShowNewTag(false);
     setNewGenreVal("");
     setNewTagVal("");
+
+    // Clear HLTB import states
+    setIsFetchingHltb(false);
+    setHltbUrlInput("");
+    setShowHltbImport(false);
   }, [game, isOpen]);
 
   const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -251,6 +349,10 @@ export default function GameFormModal({
       genre: selectedGenres,
       tags: selectedTags,
       platform: platform.trim() || "PC",
+      hltbMain,
+      hltbExtra,
+      hltbCompletionist,
+      hltbId,
       ...(game ? { diary: game.diary } : { diary: [] })
     });
   };
@@ -391,6 +493,150 @@ export default function GameFormModal({
                 </div>
               </div>
 
+              {/* HowLongToBeat (HLTB) Integration Section */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4.5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse" />
+                    <h4 className="text-xs font-black uppercase tracking-widest text-zinc-300">
+                      Métricas HowLongToBeat
+                    </h4>
+                  </div>
+                  <div className="flex gap-2">
+                    {hltbId && (
+                      <button
+                        type="button"
+                        onClick={handleRefreshHltb}
+                        disabled={isFetchingHltb}
+                        className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-colors px-2.5 py-1.5 bg-amber-950/20 border border-amber-800/30 rounded-xl hover:bg-amber-950/40 font-semibold cursor-pointer disabled:opacity-50"
+                        title="Atualizar dados direto do HowLongToBeat"
+                      >
+                        {isFetchingHltb ? (
+                          <Loader2 size={12} className="animate-spin text-amber-500" />
+                        ) : (
+                          <RefreshCw size={12} />
+                        )}
+                        <span>Sincronizar</span>
+                      </button>
+                    )}
+                    {!showHltbImport && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowHltbImport(true);
+                        }}
+                        className="text-xs font-bold text-purple-400 hover:text-purple-300 flex items-center gap-1.5 transition-colors px-2.5 py-1.5 bg-purple-950/20 border border-purple-800/30 rounded-xl hover:bg-purple-950/40 font-semibold cursor-pointer"
+                      >
+                        <Globe size={12} />
+                        {hltbMain ? "Vincular Outro Link" : "Importar via Link"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {showHltbImport ? (
+                  <div className="space-y-3">
+                    <p className="text-[10px] text-zinc-400">
+                      Cole o link da página do jogo no HowLongToBeat (ex: <code className="text-purple-300 bg-zinc-950 px-1 py-0.5 rounded">https://howlongtobeat.com/game/10270</code>) ou apenas o ID numérico:
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={hltbUrlInput}
+                        onChange={(e) => setHltbUrlInput(e.target.value)}
+                        placeholder="Cole o link ou ID do HLTB..."
+                        className="flex-1 bg-zinc-950 border border-zinc-850 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleLoadHltbUrl();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleLoadHltbUrl}
+                        disabled={isFetchingHltb}
+                        className="px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        {isFetchingHltb ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Check size={12} />
+                        )}
+                        <span>Carregar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowHltbImport(false)}
+                        className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {hltbMain || hltbExtra || hltbCompletionist ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                          {hltbMain && (
+                            <button
+                              type="button"
+                              onClick={() => setPlaytime(hltbMain)}
+                              className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-purple-500/40 hover:bg-purple-950/10 text-left transition-all group/metric"
+                              title="Clique para aplicar este tempo como Tempo de Jogo"
+                            >
+                              <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">História Principal</span>
+                              <span className="text-sm font-black text-purple-400 font-mono mt-0.5 block flex items-center justify-between">
+                                <span>{hltbMain}</span>
+                                <span className="text-[9px] opacity-0 group-hover/metric:opacity-100 transition-opacity text-purple-500 font-sans">Usar →</span>
+                              </span>
+                            </button>
+                          )}
+                          {hltbExtra && (
+                            <button
+                              type="button"
+                              onClick={() => setPlaytime(hltbExtra)}
+                              className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-cyan-500/40 hover:bg-cyan-950/10 text-left transition-all group/metric"
+                              title="Clique para aplicar este tempo como Tempo de Jogo"
+                            >
+                              <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">História + Extras</span>
+                              <span className="text-sm font-black text-cyan-400 font-mono mt-0.5 block flex items-center justify-between">
+                                <span>{hltbExtra}</span>
+                                <span className="text-[9px] opacity-0 group-hover/metric:opacity-100 transition-opacity text-cyan-500 font-sans">Usar →</span>
+                              </span>
+                            </button>
+                          )}
+                          {hltbCompletionist && (
+                            <button
+                              type="button"
+                              onClick={() => setPlaytime(hltbCompletionist)}
+                              className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 hover:border-pink-500/40 hover:bg-pink-950/10 text-left transition-all group/metric"
+                              title="Clique para aplicar este tempo como Tempo de Jogo"
+                            >
+                              <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">Complecionista (100%)</span>
+                              <span className="text-sm font-black text-pink-400 font-mono mt-0.5 block flex items-center justify-between">
+                                <span>{hltbCompletionist}</span>
+                                <span className="text-[9px] opacity-0 group-hover/metric:opacity-100 transition-opacity text-pink-500 font-sans">Usar →</span>
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-zinc-400 text-center flex items-center justify-center gap-1">
+                          <Clock size={10} className="text-zinc-500" />
+                          <span>Dica: Clique em qualquer card de tempo acima para preencher o "Tempo de Jogo"!</span>
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="text-center py-3 text-xs text-zinc-500">
+                        Nenhuma métrica vinculada a este jogo ainda. Clique em "Importar via Link" para colar a página do HowLongToBeat!
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
                   Plataforma
@@ -459,7 +705,51 @@ export default function GameFormModal({
                 <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-32 overflow-y-auto">
                   {globalGenres.map((genre) => {
                     const isSelected = selectedGenres.includes(genre);
-                    return (
+                    const isEditing = editingGenre === genre;
+                    return isEditing ? (
+                      <div
+                        key={genre}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
+                      >
+                        <input
+                          type="text"
+                          value={editingGenreValue}
+                          onChange={(e) => setEditingGenreValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (onEditGlobalGenre && editingGenreValue.trim()) {
+                                onEditGlobalGenre(genre, editingGenreValue.trim());
+                              }
+                              setEditingGenre(null);
+                            } else if (e.key === "Escape") {
+                              setEditingGenre(null);
+                            }
+                          }}
+                          className="w-20 bg-transparent text-white outline-none border-b border-cyan-500 text-xs py-0.5"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onEditGlobalGenre && editingGenreValue.trim()) {
+                              onEditGlobalGenre(genre, editingGenreValue.trim());
+                            }
+                            setEditingGenre(null);
+                          }}
+                          className="text-green-400 hover:text-green-300 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingGenre(null)}
+                          className="text-zinc-400 hover:text-zinc-200 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
                       <div
                         key={genre}
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
@@ -475,6 +765,20 @@ export default function GameFormModal({
                         >
                           {genre}
                         </button>
+                        {onEditGlobalGenre && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingGenre(genre);
+                              setEditingGenreValue(genre);
+                            }}
+                            className="text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
+                            title="Editar gênero"
+                          >
+                            ✎
+                          </button>
+                        )}
                         {onDeleteGlobalGenre && (
                           <button
                             type="button"
@@ -482,7 +786,7 @@ export default function GameFormModal({
                               e.stopPropagation();
                               onDeleteGlobalGenre(genre);
                             }}
-                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
+                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-0.5"
                             title="Excluir gênero"
                           >
                             ×
@@ -530,19 +834,94 @@ export default function GameFormModal({
                 <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-36 overflow-y-auto">
                   {globalTags.map((tag) => {
                     const isSelected = selectedTags.includes(tag);
-                    return (
-                      <button
-                        type="button"
+                    const isEditing = editingTag === tag;
+                    return isEditing ? (
+                      <div
                         key={tag}
-                        onClick={() => toggleTag(tag)}
-                        className={`px-3 py-1.5 rounded-xl border text-xs font-semibold transition-all ${
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
+                      >
+                        <input
+                          type="text"
+                          value={editingTagValue}
+                          onChange={(e) => setEditingTagValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (onEditGlobalTag && editingTagValue.trim()) {
+                                onEditGlobalTag(tag, editingTagValue.trim());
+                              }
+                              setEditingTag(null);
+                            } else if (e.key === "Escape") {
+                              setEditingTag(null);
+                            }
+                          }}
+                          className="w-20 bg-transparent text-white outline-none border-b border-cyan-500 text-xs py-0.5"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onEditGlobalTag && editingTagValue.trim()) {
+                              onEditGlobalTag(tag, editingTagValue.trim());
+                            }
+                            setEditingTag(null);
+                          }}
+                          className="text-green-400 hover:text-green-300 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTag(null)}
+                          className="text-zinc-400 hover:text-zinc-200 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        key={tag}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
                           isSelected
                             ? "bg-cyan-600/25 text-cyan-300 border-cyan-500/40"
-                            : "bg-zinc-950 text-zinc-400 border-zinc-800 hover:text-zinc-200"
+                            : "bg-zinc-950 text-zinc-400 border-zinc-800"
                         }`}
                       >
-                        {tag}
-                      </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleTag(tag)}
+                          className="hover:text-white transition-colors cursor-pointer"
+                        >
+                          {tag}
+                        </button>
+                        {onEditGlobalTag && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingTag(tag);
+                              setEditingTagValue(tag);
+                            }}
+                            className="text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
+                            title="Editar tag"
+                          >
+                            ✎
+                          </button>
+                        )}
+                        {onDeleteGlobalTag && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteGlobalTag(tag);
+                            }}
+                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-0.5"
+                            title="Excluir tag"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
                     );
                   })}
                 </div>

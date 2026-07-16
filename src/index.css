@@ -67,3 +67,56 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   filter: invert(61%) sepia(81%) saturate(1914%) hue-rotate(152deg) brightness(99%) contrast(97%);
 }
 
+/* contenteditable placeholder support */
+[contenteditable]:empty:before {
+  content: attr(placeholder);
+  color: #71717a; /* zinc-500 */
+  cursor: text;
+  pointer-events: none;
+}
+
+/* Custom rich text / prose formatting for paragraphs and spacing */
+.prose {
+  font-size: 0.875rem; /* text-sm equivalent */
+  line-height: 1.75;
+}
+
+.prose p, .prose > div {
+  margin-bottom: 1.125rem !important;
+}
+
+.prose p:last-child, .prose > div:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* Preserve whitespace, newlines, and tab stops */
+.prose-content {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.prose ul, .prose-content ul {
+  list-style-type: disc !important;
+  padding-left: 1.5rem !important;
+  margin-bottom: 1.125rem !important;
+}
+
+.prose ol, .prose-content ol {
+  list-style-type: decimal !important;
+  padding-left: 1.5rem !important;
+  margin-bottom: 1.125rem !important;
+}
+
+.prose li, .prose-content li {
+  margin-bottom: 0.375rem !important;
+}
+
+.prose a, .prose-content a {
+  color: #22d3ee !important; /* cyan-400 */
+  text-decoration: underline !important;
+}
+
+.prose a:hover, .prose-content a:hover {
+  color: #67e8f9 !important; /* cyan-300 */
+}
+

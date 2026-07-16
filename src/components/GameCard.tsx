@@ -167,11 +167,29 @@ export default function GameCard({ game, onClick }: GameCardProps) {
             ))}
           </div>
         </div>
-        <div className="mt-4 pt-4 border-t border-zinc-700/60 flex items-center justify-between">
-          <span className="text-xs text-zinc-300 font-mono font-bold">
-            {game.playtime || "00h 00m"}
-          </span>
-          {renderStars(game.rating || 0)}
+        <div className="mt-4 pt-4 border-t border-zinc-700/60">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-zinc-300 font-mono font-bold">
+              {game.playtime || "00h 00m"}
+            </span>
+            {renderStars(game.rating || 0)}
+          </div>
+          {(game.hltbMain || game.hltbExtra || game.hltbCompletionist) && (
+            <div className="mt-3 pt-2.5 border-t border-zinc-800/60 grid grid-cols-3 gap-1 text-center bg-zinc-950/40 rounded-xl p-1.5 border border-zinc-800/40">
+              <div>
+                <span className="block text-[7px] text-zinc-500 uppercase tracking-wider font-bold">Campanha</span>
+                <span className="text-[10px] font-black text-purple-400 font-mono leading-none">{game.hltbMain || "-"}</span>
+              </div>
+              <div>
+                <span className="block text-[7px] text-zinc-500 uppercase tracking-wider font-bold">História+Ext</span>
+                <span className="text-[10px] font-black text-cyan-400 font-mono leading-none">{game.hltbExtra || "-"}</span>
+              </div>
+              <div>
+                <span className="block text-[7px] text-zinc-500 uppercase tracking-wider font-bold">100%</span>
+                <span className="text-[10px] font-black text-pink-400 font-mono leading-none">{game.hltbCompletionist || "-"}</span>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </motion.div>
