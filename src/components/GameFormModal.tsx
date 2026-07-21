@@ -6,9 +6,10 @@
 import React, { useState, useEffect } from "react";
 import { Game } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2, Search, Clock, RefreshCw } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
 import { COVER_BANK } from "../data";
 import { uploadToImgBB } from "../utils/imgbb";
+import { formatHltbTime } from "../utils/hltbFormatter";
 
 interface GameFormModalProps {
   isOpen: boolean;
@@ -45,8 +46,12 @@ export default function GameFormModal({
   const [name, setName] = useState("");
   const [series, setSeries] = useState("");
   const [publisher, setPublisher] = useState("");
+  const [studio, setStudio] = useState("");
   const [playtime, setPlaytime] = useState("");
+  const [replayed, setReplayed] = useState(false);
+  const [replayCount, setReplayCount] = useState<number>(0);
   const [platform, setPlatform] = useState("");
+  const [difficulty, setDifficulty] = useState("");
   const [rating, setRating] = useState(0);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -77,6 +82,8 @@ export default function GameFormModal({
   const [tempUploadedCover, setTempUploadedCover] = useState("");
   const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [isUploadingIcon, setIsUploadingIcon] = useState(false);
+  const [isDragOverIcon, setIsDragOverIcon] = useState(false);
+  const [isDragOverCover, setIsDragOverCover] = useState(false);
 
   // HowLongToBeat States
   const [hltbMain, setHltbMain] = useState("");
@@ -87,6 +94,111 @@ export default function GameFormModal({
   const [isFetchingHltb, setIsFetchingHltb] = useState(false);
   const [hltbUrlInput, setHltbUrlInput] = useState("");
   const [showHltbImport, setShowHltbImport] = useState(false);
+
+  // Metacritic States
+  const [metacriticUrl, setMetacriticUrl] = useState("");
+  const [metacriticCritScore, setMetacriticCritScore] = useState<number | undefined>(undefined);
+  const [metacriticUserScore, setMetacriticUserScore] = useState<number | undefined>(undefined);
+
+  const [isFetchingMetacritic, setIsFetchingMetacritic] = useState(false);
+  const [metacriticUrlInput, setMetacriticUrlInput] = useState("");
+  const [showMetacriticImport, setShowMetacriticImport] = useState(false);
+  const [metacriticPlatforms, setMetacriticPlatforms] = useState<{ code: string; name: string }[]>([]);
+  const [selectedMetacriticPlatform, setSelectedMetacriticPlatform] = useState<string>("");
+
+  const [isFetchingAIMetadata, setIsFetchingAIMetadata] = useState(false);
+  const [gameCandidates, setGameCandidates] = useState<any[]>([]);
+  const [isSelectingCandidate, setIsSelectingCandidate] = useState(false);
+
+  const applyGameCandidate = (data: any) => {
+    if (data.name) setName(data.name);
+    if (data.developer) setStudio(data.developer);
+    if (data.publisher) setPublisher(data.publisher);
+    if (data.series) setSeries(data.series);
+    if (data.releaseDate) setReleaseDate(data.releaseDate);
+    if (data.platforms && data.platforms.length > 0) {
+      setPlatform(data.platforms.join(", "));
+    }
+
+    if (data.metacritic !== undefined && data.metacritic !== null) {
+      setMetacriticCritScore(data.metacritic);
+    }
+
+    if (data.hltbMain !== undefined && data.hltbMain !== null) {
+      setHltbMain(formatHltbTime(data.hltbMain));
+    }
+    if (data.hltbMainExtra !== undefined && data.hltbMainExtra !== null) {
+      setHltbExtra(formatHltbTime(data.hltbMainExtra));
+    }
+    if (data.hltbCompletionist !== undefined && data.hltbCompletionist !== null) {
+      setHltbCompletionist(formatHltbTime(data.hltbCompletionist));
+    }
+
+    if (data.coverUrl) {
+      setCoverUrl(data.coverUrl);
+      setTempUploadedCover(data.coverUrl);
+    }
+
+    if (data.iconUrl) {
+      setActiveIconTab("url");
+      setIconUrl(data.iconUrl);
+    }
+
+    if (data.genres && Array.isArray(data.genres)) {
+      data.genres.forEach((genreName: string) => {
+        const capitalized = genreName.trim();
+        if (capitalized) {
+          if (!globalGenres.includes(capitalized)) {
+            onAddGlobalGenre(capitalized);
+          }
+          setSelectedGenres((prev) => {
+            if (prev.includes(capitalized)) return prev;
+            return [...prev, capitalized];
+          });
+        }
+      });
+    }
+  };
+
+  const handleFetchAIMetadata = async () => {
+    const term = name.trim();
+    if (!term) {
+      triggerAlert("Título Vazio", "Por favor, digite o título do jogo para buscar os metadados com Inteligência Artificial.");
+      return;
+    }
+
+    setIsFetchingAIMetadata(true);
+    try {
+      const response = await fetch(`/api/game-metadata?q=${encodeURIComponent(term)}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data && Array.isArray(data.games)) {
+        if (data.games.length === 0) {
+          triggerAlert("Sem Resultados", `Não encontramos nenhuma sugestão para "${term}". Por favor, digite o título por extenso.`);
+        } else if (data.games.length === 1) {
+          applyGameCandidate(data.games[0]);
+          triggerAlert("Metadados Carregados!", `Encontramos os detalhes de "${data.games[0].name}" e preenchemos a ficha de jogo com dados de alta qualidade.`);
+        } else {
+          setGameCandidates(data.games);
+          setIsSelectingCandidate(true);
+        }
+      } else {
+        // Fallback for single object response format
+        applyGameCandidate(data);
+        triggerAlert("Metadados Carregados!", `Encontramos os detalhes de "${data.name || term}" e preenchemos a ficha de jogo com dados de alta qualidade.`);
+      }
+    } catch (err: any) {
+      console.error("Erro ao carregar metadados via IA:", err);
+      triggerAlert("Busca por IA indisponível", `Não foi possível carregar os metadados automáticos: ${err.message || err}`);
+    } finally {
+      setIsFetchingAIMetadata(false);
+    }
+  };
 
   const handleLoadHltbUrl = async () => {
     const input = hltbUrlInput.trim();
@@ -105,9 +217,9 @@ export default function GameFormModal({
       const data = await response.json();
       
       // Set the 3 times
-      setHltbMain(data.gameplayMain ? `${data.gameplayMain}h` : "");
-      setHltbExtra(data.gameplayMainExtra ? `${data.gameplayMainExtra}h` : "");
-      setHltbCompletionist(data.gameplayCompletionist ? `${data.gameplayCompletionist}h` : "");
+      setHltbMain(data.gameplayMain ? formatHltbTime(data.gameplayMain) : "");
+      setHltbExtra(data.gameplayMainExtra ? formatHltbTime(data.gameplayMainExtra) : "");
+      setHltbCompletionist(data.gameplayCompletionist ? formatHltbTime(data.gameplayCompletionist) : "");
       if (data.id) {
         setHltbId(data.id);
       }
@@ -137,9 +249,9 @@ export default function GameFormModal({
       }
       const data = await response.json();
       
-      setHltbMain(data.gameplayMain ? `${data.gameplayMain}h` : "");
-      setHltbExtra(data.gameplayMainExtra ? `${data.gameplayMainExtra}h` : "");
-      setHltbCompletionist(data.gameplayCompletionist ? `${data.gameplayCompletionist}h` : "");
+      setHltbMain(data.gameplayMain ? formatHltbTime(data.gameplayMain) : "");
+      setHltbExtra(data.gameplayMainExtra ? formatHltbTime(data.gameplayMainExtra) : "");
+      setHltbCompletionist(data.gameplayCompletionist ? formatHltbTime(data.gameplayCompletionist) : "");
       
       triggerAlert("Métricas Atualizadas", "As médias do HowLongToBeat foram atualizadas com sucesso!");
     } catch (err: any) {
@@ -150,14 +262,132 @@ export default function GameFormModal({
     }
   };
 
+  const handleLoadMetacriticUrl = async () => {
+    const input = metacriticUrlInput.trim();
+    if (!input) {
+      triggerAlert("Link Vazio", "Por favor, insira o link da página do jogo do Metacritic.");
+      return;
+    }
+
+    setIsFetchingMetacritic(true);
+    try {
+      const response = await fetch(`/api/metacritic?url=${encodeURIComponent(input)}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      const targetUrl = data.metacriticUrl || input;
+      setMetacriticUrl(targetUrl);
+      
+      const platformsList = data.platforms || [];
+      setMetacriticPlatforms(platformsList);
+
+      let matchedPlatformCode = "";
+      if (platformsList.length > 0 && platform) {
+        const platformLower = platform.toLowerCase();
+        const found = platformsList.find((p: any) => 
+          p.name.toLowerCase().includes(platformLower) || 
+          platformLower.includes(p.name.toLowerCase()) ||
+          p.code.toLowerCase().includes(platformLower) ||
+          platformLower.includes(p.code.toLowerCase())
+        );
+        if (found) {
+          matchedPlatformCode = found.code;
+        }
+      }
+
+      if (matchedPlatformCode) {
+        setSelectedMetacriticPlatform(matchedPlatformCode);
+        const platResponse = await fetch(`/api/metacritic?url=${encodeURIComponent(targetUrl)}&platform=${matchedPlatformCode}`);
+        if (platResponse.ok) {
+          const platData = await platResponse.json();
+          setMetacriticCritScore(platData.metacriticCritScore !== null ? platData.metacriticCritScore : undefined);
+          setMetacriticUserScore(platData.metacriticUserScore !== null ? platData.metacriticUserScore : undefined);
+          triggerAlert("Sucesso", `Dados da plataforma "${matchedPlatformCode}" carregados com sucesso!`);
+        } else {
+          setMetacriticCritScore(data.metacriticCritScore !== null ? data.metacriticCritScore : undefined);
+          setMetacriticUserScore(data.metacriticUserScore !== null ? data.metacriticUserScore : undefined);
+          triggerAlert("Sucesso", "Dados gerais carregados com sucesso!");
+        }
+      } else {
+        setSelectedMetacriticPlatform("");
+        setMetacriticCritScore(data.metacriticCritScore !== null ? data.metacriticCritScore : undefined);
+        setMetacriticUserScore(data.metacriticUserScore !== null ? data.metacriticUserScore : undefined);
+        triggerAlert("Sucesso", "Dados carregados com sucesso do Metacritic!");
+      }
+      
+      setShowMetacriticImport(false);
+      setMetacriticUrlInput("");
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao carregar", `Não foi possível extrair dados: ${err.message || err}`);
+    } finally {
+      setIsFetchingMetacritic(false);
+    }
+  };
+
+  const handleSelectFormPlatform = async (platformCode: string) => {
+    setSelectedMetacriticPlatform(platformCode);
+    if (!metacriticUrl) return;
+    setIsFetchingMetacritic(true);
+    try {
+      const response = await fetch(`/api/metacritic?url=${encodeURIComponent(metacriticUrl)}&platform=${platformCode}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      }
+      const data = await response.json();
+      setMetacriticCritScore(data.metacriticCritScore !== null ? data.metacriticCritScore : undefined);
+      setMetacriticUserScore(data.metacriticUserScore !== null ? data.metacriticUserScore : undefined);
+      triggerAlert("Atualizado", `Notas atualizadas para a plataforma selecionada!`);
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro", `Não foi possível carregar notas para esta plataforma: ${err.message || err}`);
+    } finally {
+      setIsFetchingMetacritic(false);
+    }
+  };
+
+  const handleRefreshMetacritic = async () => {
+    if (!metacriticUrl) {
+      triggerAlert("Link ausente", "Não há um link do Metacritic associado a este jogo para atualizar.");
+      return;
+    }
+    setIsFetchingMetacritic(true);
+    try {
+      const response = await fetch(`/api/metacritic?url=${encodeURIComponent(metacriticUrl)}&platform=${selectedMetacriticPlatform}`);
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      }
+      const data = await response.json();
+      
+      setMetacriticCritScore(data.metacriticCritScore !== null ? data.metacriticCritScore : undefined);
+      setMetacriticUserScore(data.metacriticUserScore !== null ? data.metacriticUserScore : undefined);
+      
+      triggerAlert("Notas Atualizadas", "As notas do Metacritic foram atualizadas com sucesso!");
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao atualizar", `Não foi possível atualizar dados: ${err.message || err}`);
+    } finally {
+      setIsFetchingMetacritic(false);
+    }
+  };
+
   // Initialize form
   useEffect(() => {
     if (game) {
       setName(game.name || "");
       setSeries(game.series || "");
       setPublisher(game.publisher || "");
+      setStudio(game.studio || game.developer || "");
+      setReplayed(!!game.replayed);
+      setReplayCount(game.replayCount || 0);
       setPlaytime(game.playtime || "");
       setPlatform(game.platform || "");
+      setDifficulty(game.difficulty || "");
       setRating(game.rating || 0);
       setStartDate(game.startDate || "");
       setEndDate(game.endDate || "");
@@ -186,13 +416,36 @@ export default function GameFormModal({
       setHltbExtra(game.hltbExtra || "");
       setHltbCompletionist(game.hltbCompletionist || "");
       setHltbId(game.hltbId || "");
+
+      // Metacritic values
+      setMetacriticUrl(game.metacriticUrl || "");
+      setMetacriticCritScore(game.metacriticCritScore !== undefined ? game.metacriticCritScore : undefined);
+      setMetacriticUserScore(game.metacriticUserScore !== undefined ? game.metacriticUserScore : undefined);
+      
+      if (game.metacriticUrl) {
+        fetch(`/api/metacritic?url=${encodeURIComponent(game.metacriticUrl)}`)
+          .then((res) => res.json())
+          .then((data) => {
+            if (data.platforms) {
+              setMetacriticPlatforms(data.platforms);
+            }
+          })
+          .catch((err) => console.error("Erro ao carregar plataformas:", err));
+      } else {
+        setMetacriticPlatforms([]);
+        setSelectedMetacriticPlatform("");
+      }
     } else {
       // Clear all
       setName("");
       setSeries("");
       setPublisher("");
+      setStudio("");
+      setReplayed(false);
+      setReplayCount(0);
       setPlaytime("");
       setPlatform("");
+      setDifficulty("");
       setRating(0);
       setStartDate("");
       setEndDate("");
@@ -212,6 +465,13 @@ export default function GameFormModal({
       setHltbExtra("");
       setHltbCompletionist("");
       setHltbId("");
+
+      // Metacritic values
+      setMetacriticUrl("");
+      setMetacriticCritScore(undefined);
+      setMetacriticUserScore(undefined);
+      setMetacriticPlatforms([]);
+      setSelectedMetacriticPlatform("");
     }
     setShowNewGenre(false);
     setShowNewTag(false);
@@ -222,17 +482,19 @@ export default function GameFormModal({
     setIsFetchingHltb(false);
     setHltbUrlInput("");
     setShowHltbImport(false);
+
+    // Clear Metacritic import states
+    setIsFetchingMetacritic(false);
+    setMetacriticUrlInput("");
+    setShowMetacriticImport(false);
   }, [game, isOpen]);
 
-  const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const uploadCoverFile = async (file: File) => {
     setIsUploadingCover(true);
     try {
       const fileNameParam = `${name.trim() || "jogo"}_cover`;
-      const imageUrl = await uploadToImgBB(file, fileNameParam);
-      setTempUploadedCover(imageUrl);
+      const res = await uploadToImgBB(file, fileNameParam);
+      setTempUploadedCover(res.url);
       setCoverUrl(""); // override text input with direct ImgBB url
     } catch (err: any) {
       console.error(err);
@@ -245,15 +507,12 @@ export default function GameFormModal({
     }
   };
 
-  const handleIconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
+  const uploadIconFile = async (file: File) => {
     setIsUploadingIcon(true);
     try {
       const fileNameParam = `${name.trim() || "jogo"}_icon`;
-      const imageUrl = await uploadToImgBB(file, fileNameParam);
-      setTempUploadedIcon(imageUrl);
+      const res = await uploadToImgBB(file, fileNameParam);
+      setTempUploadedIcon(res.url);
     } catch (err: any) {
       console.error(err);
       triggerAlert(
@@ -262,6 +521,58 @@ export default function GameFormModal({
       );
     } finally {
       setIsUploadingIcon(false);
+    }
+  };
+
+  const handleCoverUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadCoverFile(file);
+  };
+
+  const handleIconUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadIconFile(file);
+  };
+
+  // Drag and drop events for Icon
+  const handleIconDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOverIcon(true);
+  };
+
+  const handleIconDragLeave = () => {
+    setIsDragOverIcon(false);
+  };
+
+  const handleIconDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOverIcon(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      uploadIconFile(file);
+    } else if (file) {
+      triggerAlert("Formato Inválido", "Por favor, envie apenas arquivos de imagem para o ícone.");
+    }
+  };
+
+  // Drag and drop events for Cover
+  const handleCoverDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOverCover(true);
+  };
+
+  const handleCoverDragLeave = () => {
+    setIsDragOverCover(false);
+  };
+
+  const handleCoverDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragOverCover(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && file.type.startsWith("image/")) {
+      uploadCoverFile(file);
+    } else if (file) {
+      triggerAlert("Formato Inválido", "Por favor, envie apenas arquivos de imagem para a capa do jogo.");
     }
   };
 
@@ -337,6 +648,7 @@ export default function GameFormModal({
       name: name.trim(),
       series: series.trim(),
       publisher: publisher.trim(),
+      studio: studio.trim(),
       playtime: playtime.trim() || "00h 00m",
       rating: Math.min(5, Math.max(0, rating)),
       startDate,
@@ -346,6 +658,9 @@ export default function GameFormModal({
       icon: finalIcon,
       iconType: activeIconTab,
       status: selectedStatus,
+      replayed,
+      replayCount: replayed ? Math.max(1, replayCount) : 0,
+      difficulty: difficulty.trim(),
       genre: selectedGenres,
       tags: selectedTags,
       platform: platform.trim() || "PC",
@@ -353,6 +668,9 @@ export default function GameFormModal({
       hltbExtra,
       hltbCompletionist,
       hltbId,
+      metacriticUrl,
+      metacriticCritScore,
+      metacriticUserScore,
       ...(game ? { diary: game.diary } : { diary: [] })
     });
   };
@@ -386,11 +704,116 @@ export default function GameFormModal({
               </button>
             </div>
 
+            {isSelectingCandidate && (
+              <div className="absolute inset-x-0 bottom-0 top-[73px] bg-zinc-950 z-40 flex flex-col p-6 space-y-6">
+                <div className="text-center space-y-2 border-b border-zinc-900 pb-4 shrink-0">
+                  <h4 className="text-base font-black text-cyan-400 uppercase tracking-wider flex items-center justify-center gap-2">
+                    <Sparkles size={16} className="text-purple-400" />
+                    Qual é o jogo correto?
+                  </h4>
+                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                    Encontramos múltiplos resultados para sua busca. Selecione o jogo exato para preencher a Ficha Técnica com alta precisão:
+                  </p>
+                </div>
+
+                <div className="flex-1 overflow-y-auto pr-1 space-y-3">
+                  {gameCandidates.map((cand, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => {
+                        applyGameCandidate(cand);
+                        setIsSelectingCandidate(false);
+                        triggerAlert("Metadados Carregados!", `Encontramos os detalhes de "${cand.name}" e preenchemos a ficha de jogo com sucesso.`);
+                      }}
+                      className="w-full group flex gap-4 text-left p-3.5 rounded-2xl bg-zinc-900/40 border border-zinc-850 hover:border-cyan-500/50 hover:bg-zinc-900/85 transition-all cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                    >
+                      <div className="w-16 h-24 bg-black rounded-xl overflow-hidden border border-zinc-800 shrink-0">
+                        <img
+                          src={cand.coverUrl || "https://images.unsplash.com/photo-1538481199705-c710c4e965fc?auto=format&fit=crop&q=80&w=150"}
+                          alt={cand.name}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = `https://placehold.co/150x225/0c0a0f/ffffff?text=${encodeURIComponent(cand.name)}`;
+                          }}
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
+                        <div>
+                          <h5 className="text-sm font-black text-white group-hover:text-cyan-400 transition-colors line-clamp-1">
+                            {cand.name}
+                          </h5>
+                          {cand.releaseDate && (
+                            <span className="text-[10px] font-mono text-zinc-400 block mt-1">
+                              Lançamento: {cand.releaseDate.split("-")[0] || cand.releaseDate}
+                            </span>
+                          )}
+                          {cand.developer && (
+                            <span className="text-[10px] text-zinc-500 block mt-0.5 line-clamp-1">
+                              Estúdio: {cand.developer}
+                            </span>
+                          )}
+                        </div>
+                        {cand.platforms && cand.platforms.length > 0 && (
+                          <div className="flex flex-wrap gap-1 mt-2">
+                            {cand.platforms.slice(0, 4).map((plat: string) => (
+                              <span key={plat} className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-750 text-zinc-300">
+                                {plat}
+                              </span>
+                            ))}
+                            {cand.platforms.length > 4 && (
+                              <span className="text-[8px] font-mono text-zinc-500">
+                                +{cand.platforms.length - 4}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex justify-between items-center pt-4 border-t border-zinc-900 shrink-0">
+                  <p className="text-[10px] text-zinc-500">Não encontrou o jogo? Volte e preencha manualmente.</p>
+                  <button
+                    type="button"
+                    onClick={() => setIsSelectingCandidate(false)}
+                    className="px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all cursor-pointer"
+                  >
+                    Voltar ao Formulário
+                  </button>
+                </div>
+              </div>
+            )}
+
             <form onSubmit={handleSubmit} className="p-6 space-y-5">
               <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                  Título do Jogo *
-                </label>
+                <div className="flex justify-between items-center mb-1.5">
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
+                    Título do Jogo *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleFetchAIMetadata}
+                    disabled={isFetchingAIMetadata}
+                    className={`text-xs font-bold text-cyan-400 flex items-center gap-1 hover:text-cyan-300 transition-colors cursor-pointer ${
+                      isFetchingAIMetadata ? "opacity-50 cursor-not-allowed" : ""
+                    }`}
+                  >
+                    {isFetchingAIMetadata ? (
+                      <>
+                        <Loader2 size={12} className="animate-spin text-cyan-400" />
+                        <span>Buscando Metadados...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={12} className="text-purple-400 animate-pulse" />
+                        <span>Preencher via IA</span>
+                      </>
+                    )}
+                  </button>
+                </div>
                 <input
                   type="text"
                   value={name}
@@ -416,7 +839,7 @@ export default function GameFormModal({
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                    Estúdio / Publisher
+                    Publicadora
                   </label>
                   <input
                     type="text"
@@ -426,6 +849,19 @@ export default function GameFormModal({
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                  Estúdio/Developer
+                </label>
+                <input
+                  type="text"
+                  value={studio}
+                  onChange={(e) => setStudio(e.target.value)}
+                  placeholder="Ex: Retro Studios / MercurySteam"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -637,6 +1073,141 @@ export default function GameFormModal({
                 )}
               </div>
 
+              {/* Metacritic Integration Section */}
+              <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4.5 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse" />
+                    <h4 className="text-xs font-black uppercase tracking-widest text-zinc-300">
+                      Notas do Metacritic
+                    </h4>
+                  </div>
+                  <div className="flex gap-2">
+                    {metacriticUrl && (
+                      <button
+                        type="button"
+                        onClick={handleRefreshMetacritic}
+                        disabled={isFetchingMetacritic}
+                        className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1 transition-colors px-2.5 py-1.5 bg-amber-950/20 border border-amber-800/30 rounded-xl hover:bg-amber-950/40 font-semibold cursor-pointer disabled:opacity-50"
+                        title="Atualizar notas direto do Metacritic"
+                      >
+                        {isFetchingMetacritic ? (
+                          <Loader2 size={12} className="animate-spin text-amber-500" />
+                        ) : (
+                          <RefreshCw size={12} />
+                        )}
+                        <span>Sincronizar</span>
+                      </button>
+                    )}
+                    {!showMetacriticImport && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowMetacriticImport(true);
+                        }}
+                        className="text-xs font-bold text-amber-400 hover:text-amber-300 flex items-center gap-1.5 transition-colors px-2.5 py-1.5 bg-amber-950/20 border border-amber-800/30 rounded-xl hover:bg-amber-950/40 font-semibold cursor-pointer"
+                      >
+                        <Globe size={12} />
+                        {metacriticUrl ? "Vincular Outro Link" : "Importar via Link"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {showMetacriticImport ? (
+                  <div className="space-y-3">
+                    <p className="text-[10px] text-zinc-400">
+                      Cole o link da página do jogo no Metacritic (ex: <code className="text-amber-300 bg-zinc-950 px-1 py-0.5 rounded">https://www.metacritic.com/game/metroid-dread/</code>):
+                    </p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={metacriticUrlInput}
+                        onChange={(e) => setMetacriticUrlInput(e.target.value)}
+                        placeholder="Cole o link do Metacritic..."
+                        className="flex-1 bg-zinc-950 border border-zinc-850 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-amber-500"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            e.preventDefault();
+                            handleLoadMetacriticUrl();
+                          }
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleLoadMetacriticUrl}
+                        disabled={isFetchingMetacritic}
+                        className="px-3 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                      >
+                        {isFetchingMetacritic ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Check size={12} />
+                        )}
+                        <span>Carregar</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowMetacriticImport(false)}
+                        className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-colors cursor-pointer"
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {metacriticCritScore !== undefined || metacriticUserScore !== undefined ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {metacriticCritScore !== undefined && (
+                            <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-left">
+                              <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">Média da Crítica (Metascore)</span>
+                              <span className="text-sm font-black text-amber-400 font-mono mt-0.5 block flex items-center justify-between">
+                                <span>{metacriticCritScore}</span>
+                              </span>
+                            </div>
+                          )}
+                          {metacriticUserScore !== undefined && (
+                            <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 text-left">
+                              <span className="block text-[9px] font-black uppercase text-zinc-500 tracking-wider">Média dos Usuários</span>
+                              <span className="text-sm font-black text-cyan-400 font-mono mt-0.5 block flex items-center justify-between">
+                                <span>{metacriticUserScore.toFixed(1)}</span>
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        {metacriticUrl && metacriticPlatforms.length > 0 && (
+                          <div className="pt-2 border-t border-zinc-850/60">
+                            <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider mb-1 text-left">
+                              Extrair dados da plataforma:
+                            </label>
+                            <select
+                              value={selectedMetacriticPlatform}
+                              onChange={(e) => handleSelectFormPlatform(e.target.value)}
+                              disabled={isFetchingMetacritic}
+                              className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-300 focus:outline-none focus:ring-1 focus:ring-amber-500 disabled:opacity-50 cursor-pointer"
+                            >
+                              <option value="">Geral (Média Principal)</option>
+                              {metacriticPlatforms.map((p) => (
+                                <option key={p.code} value={p.code}>
+                                  {p.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="text-center py-3 text-xs text-zinc-500">
+                        Nenhuma nota do Metacritic vinculada a este jogo ainda. Clique em "Importar via Link"!
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
                   Plataforma
@@ -646,6 +1217,19 @@ export default function GameFormModal({
                   value={platform}
                   onChange={(e) => setPlatform(e.target.value)}
                   placeholder="Ex: Nintendo Switch, PS5, PC"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                  Dificuldade
+                </label>
+                <input
+                  type="text"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value)}
+                  placeholder="Ex: Normal, Hard, Marcha da Morte"
                   className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
                 />
               </div>
@@ -666,6 +1250,38 @@ export default function GameFormModal({
                       {status}
                     </label>
                   ))}
+                </div>
+                <div className="mt-2 px-1">
+                  <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={replayed}
+                      onChange={(e) => {
+                        setReplayed(e.target.checked);
+                        if (e.target.checked && replayCount === 0) {
+                          setReplayCount(1);
+                        }
+                      }}
+                      className="rounded border-zinc-800 bg-zinc-950 text-purple-500 focus:ring-purple-500 h-4 w-4 accent-purple-500"
+                    />
+                    <span className="flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider text-purple-300">
+                      <RotateCcw size={12} className="stroke-[2.5]" />
+                      Replay
+                    </span>
+                  </label>
+                  {replayed && (
+                    <div className="mt-2 pl-6 flex items-center gap-2 animate-fade-in">
+                      <span className="text-xs text-zinc-400 font-medium">Quantidade de Replays:</span>
+                      <input
+                        type="number"
+                        min="1"
+                        value={replayCount || 1}
+                        onChange={(e) => setReplayCount(Math.max(1, parseInt(e.target.value) || 1))}
+                        className="w-16 px-2 py-1 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white font-mono text-center focus:outline-none focus:border-purple-500"
+                      />
+                    </div>
+                  )}
+                  <p className="text-[10px] text-zinc-500 italic mt-1 font-sans">Marca que as estatísticas atuais correspondem a uma nova jogada (Replay)</p>
                 </div>
               </div>
 
@@ -703,12 +1319,12 @@ export default function GameFormModal({
                 )}
 
                 <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-32 overflow-y-auto">
-                  {globalGenres.map((genre) => {
+                  {globalGenres.map((genre, idx) => {
                     const isSelected = selectedGenres.includes(genre);
                     const isEditing = editingGenre === genre;
                     return isEditing ? (
                       <div
-                        key={genre}
+                        key={`genre-edit-${genre}-${idx}`}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
                       >
                         <input
@@ -751,7 +1367,7 @@ export default function GameFormModal({
                       </div>
                     ) : (
                       <div
-                        key={genre}
+                        key={`genre-view-${genre}-${idx}`}
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
                           isSelected
                             ? "bg-purple-600/25 text-purple-300 border-purple-500/40"
@@ -832,12 +1448,12 @@ export default function GameFormModal({
                 )}
 
                 <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-36 overflow-y-auto">
-                  {globalTags.map((tag) => {
+                  {globalTags.map((tag, idx) => {
                     const isSelected = selectedTags.includes(tag);
                     const isEditing = editingTag === tag;
                     return isEditing ? (
                       <div
-                        key={tag}
+                        key={`tag-edit-${tag}-${idx}`}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
                       >
                         <input
@@ -880,7 +1496,7 @@ export default function GameFormModal({
                       </div>
                     ) : (
                       <div
-                        key={tag}
+                        key={`tag-view-${tag}-${idx}`}
                         className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
                           isSelected
                             ? "bg-cyan-600/25 text-cyan-300 border-cyan-500/40"
@@ -972,35 +1588,49 @@ export default function GameFormModal({
                 )}
 
                 {activeIconTab === "upload" && (
-                  <div className="flex items-center gap-3 p-3 rounded-2xl bg-zinc-900 border border-zinc-800">
-                    <label className={`px-4 py-2 rounded-xl transition-all font-semibold border text-zinc-300 border-zinc-800 cursor-pointer flex items-center gap-1.5 ${isUploadingIcon ? "bg-zinc-900 opacity-60 cursor-not-allowed" : "bg-zinc-950 hover:bg-zinc-800"}`}>
-                      {isUploadingIcon ? (
-                        <>
-                          <Loader2 size={14} className="animate-spin text-cyan-400" />
-                          <span>Enviando...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Upload size={14} className="text-purple-400" />
-                          <span>Escolher Ficheiro</span>
-                        </>
-                      )}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        disabled={isUploadingIcon}
-                        onChange={handleIconUpload}
-                        className="hidden"
-                      />
-                    </label>
-                    {tempUploadedIcon && (
-                      <div className="flex items-center gap-2">
+                  <div 
+                    onDragOver={handleIconDragOver}
+                    onDragLeave={handleIconDragLeave}
+                    onDrop={handleIconDrop}
+                    className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
+                      isDragOverIcon 
+                        ? "border-cyan-500 bg-cyan-950/10 scale-[1.01]" 
+                        : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
+                    }`}
+                    onClick={() => {
+                      const iconInput = document.getElementById("icon-file-input");
+                      if (iconInput) iconInput.click();
+                    }}
+                  >
+                    <input
+                      id="icon-file-input"
+                      type="file"
+                      accept="image/*"
+                      disabled={isUploadingIcon}
+                      onChange={handleIconUpload}
+                      className="hidden"
+                    />
+                    {isUploadingIcon ? (
+                      <div className="flex flex-col items-center gap-2 py-1 text-center">
+                        <Loader2 size={20} className="animate-spin text-cyan-400" />
+                        <span className="text-xs text-zinc-300 font-medium animate-pulse">Enviando ícone...</span>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-1.5 text-center">
+                        <Upload size={18} className="text-purple-400" />
+                        <p className="text-xs font-semibold text-zinc-300">
+                          Arraste o ícone aqui ou <span className="text-cyan-400 underline decoration-dashed underline-offset-4">escolha um arquivo</span>
+                        </p>
+                      </div>
+                    )}
+                    {tempUploadedIcon && !isUploadingIcon && (
+                      <div className="absolute right-3 top-3 flex items-center gap-1.5 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800 px-2 py-1 rounded-xl">
                         <img
                           src={tempUploadedIcon}
-                          className="w-9 h-9 rounded-xl object-cover border border-cyan-500"
+                          className="w-5 h-5 rounded-md object-cover border border-cyan-500"
                           alt="Icon Preview"
                         />
-                        <span className="text-[10px] text-zinc-400">Ícone salvo</span>
+                        <span className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider">Salvo</span>
                       </div>
                     )}
                   </div>
@@ -1033,28 +1663,44 @@ export default function GameFormModal({
                       placeholder="https://images.unsplash.com/photo-..."
                       className="w-full px-4 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm text-white mb-2"
                     />
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-500">Ou ficheiro local:</span>
-                      <label className={`px-3 py-2 rounded-xl border text-zinc-300 border-zinc-800 cursor-pointer flex items-center gap-1.5 ${isUploadingCover ? "bg-zinc-900 opacity-60 cursor-not-allowed" : "bg-zinc-900 hover:bg-zinc-800"}`}>
-                        {isUploadingCover ? (
-                          <>
-                            <Loader2 size={12} className="animate-spin text-cyan-400" />
-                            <span>Enviando...</span>
-                          </>
-                        ) : (
-                          <>
-                            <Upload size={12} className="text-purple-400" />
-                            <span>Escolher Ficheiro</span>
-                          </>
-                        )}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={isUploadingCover}
-                          onChange={handleCoverUpload}
-                          className="hidden"
-                        />
-                      </label>
+                    <div 
+                      onDragOver={handleCoverDragOver}
+                      onDragLeave={handleCoverDragLeave}
+                      onDrop={handleCoverDrop}
+                      className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
+                        isDragOverCover 
+                          ? "border-purple-500 bg-purple-950/10 scale-[1.01]" 
+                          : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
+                      }`}
+                      onClick={() => {
+                        const coverInput = document.getElementById("cover-file-input");
+                        if (coverInput) coverInput.click();
+                      }}
+                    >
+                      <input
+                        id="cover-file-input"
+                        type="file"
+                        accept="image/*"
+                        disabled={isUploadingCover}
+                        onChange={handleCoverUpload}
+                        className="hidden"
+                      />
+                      {isUploadingCover ? (
+                        <div className="flex flex-col items-center gap-2 py-1 text-center">
+                          <Loader2 size={20} className="animate-spin text-cyan-400" />
+                          <span className="text-xs text-zinc-300 font-medium animate-pulse">Enviando imagem de capa...</span>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col items-center gap-1.5 text-center">
+                          <Upload size={18} className="text-purple-400" />
+                          <p className="text-xs font-semibold text-zinc-300">
+                            Arraste a capa aqui ou <span className="text-purple-400 underline decoration-dashed underline-offset-4">escolha um arquivo</span>
+                          </p>
+                          <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">
+                            Formatos: JPG, PNG, WEBP, GIF
+                          </p>
+                        </div>
+                      )}
                     </div>
                   </div>
                   {(tempUploadedCover || coverUrl) && (

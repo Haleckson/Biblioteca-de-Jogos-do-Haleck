@@ -20,10 +20,15 @@ function sanitizeFilename(name: string): string {
     .trim();
 }
 
+export interface ImgBBUploadResponse {
+  url: string;
+  deleteUrl?: string;
+}
+
 /**
- * Uploads an image file or base64 string to ImgBB and returns the public direct image URL.
+ * Uploads an image file or base64 string to ImgBB and returns the public direct image URL and deletion URL.
  */
-export async function uploadToImgBB(imageSource: File | string, customName?: string): Promise<string> {
+export async function uploadToImgBB(imageSource: File | string, customName?: string): Promise<ImgBBUploadResponse> {
   if (!IMGBB_API_KEY) {
     throw new Error("Chave de API do ImgBB não está configurada.");
   }
@@ -60,7 +65,10 @@ export async function uploadToImgBB(imageSource: File | string, customName?: str
 
   const payload = await response.json();
   if (payload && payload.data && payload.data.url) {
-    return payload.data.url;
+    return {
+      url: payload.data.url,
+      deleteUrl: payload.data.delete_url
+    };
   }
 
   throw new Error("Falha ao obter URL direta do ImgBB na resposta.");

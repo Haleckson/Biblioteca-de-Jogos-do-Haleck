@@ -6,6 +6,7 @@
 export interface MediaItem {
   src: string;
   isVideo: boolean;
+  deleteUrl?: string;
 }
 
 export interface DiaryEntry {
@@ -27,6 +28,8 @@ export interface Game {
   genre: string[];
   tags: string[];
   publisher: string;
+  developer?: string;
+  studio?: string;
   playtime: string;
   rating: number; // 0 to 5, step 0.5
   startDate: string; // YYYY-MM-DD
@@ -34,8 +37,22 @@ export interface Game {
   releaseDate: string; // YYYY-MM-DD
   diary: DiaryEntry[];
   coverPosition?: number;
+  coverPositionX?: number;
+  coverZoom?: number;
+  replayed?: boolean;
+  replayCount?: number;
+  difficulty?: string;
   hltbMain?: string;
   hltbExtra?: string;
   hltbCompletionist?: string;
   hltbId?: string;
+  metacriticUrl?: string;
+  metacriticCritScore?: number;
+  metacriticUserScore?: number;
 }
+
+export function splitEntities(val: string | undefined | null): string[] {
+  if (!val) return [];
+  return val.split("; ").map((s) => s.trim()).filter(Boolean);
+}
+

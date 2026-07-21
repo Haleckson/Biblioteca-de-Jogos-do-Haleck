@@ -86,16 +86,26 @@ export const syncFromFirebase = (
             genre: Array.isArray(game.genre) ? game.genre : [],
             tags: Array.isArray(game.tags) ? game.tags : [],
             publisher: game.publisher || "",
+            studio: game.studio || "",
+            developer: game.developer || "",
             playtime: game.playtime || "",
             rating: typeof game.rating === "number" ? game.rating : 0,
             startDate: game.startDate || "",
             endDate: game.endDate || "",
             releaseDate: game.releaseDate || "",
             coverPosition: typeof game.coverPosition === "number" ? game.coverPosition : 50,
+            coverPositionX: typeof game.coverPositionX === "number" ? game.coverPositionX : 50,
+            coverZoom: typeof game.coverZoom === "number" ? game.coverZoom : 100,
+            replayed: !!game.replayed,
+            replayCount: typeof game.replayCount === "number" ? game.replayCount : undefined,
+            difficulty: game.difficulty || "",
             hltbMain: game.hltbMain || "",
             hltbExtra: game.hltbExtra || "",
             hltbCompletionist: game.hltbCompletionist || "",
             hltbId: game.hltbId || "",
+            metacriticUrl: game.metacriticUrl || "",
+            metacriticCritScore: typeof game.metacriticCritScore === "number" ? game.metacriticCritScore : undefined,
+            metacriticUserScore: typeof game.metacriticUserScore === "number" ? game.metacriticUserScore : undefined,
             diary: diaryRaw.map((entry: any) => {
               const mediasRaw = Array.isArray(entry.medias)
                 ? entry.medias
@@ -143,6 +153,29 @@ export const syncFromFirebase = (
 };
 
 /**
+ * Recursively removes undefined values from an object or array to prevent Firebase errors.
+ */
+const sanitizeDataForFirebase = (val: any): any => {
+  if (val === undefined) {
+    return null;
+  }
+  if (Array.isArray(val)) {
+    return val.map((v) => sanitizeDataForFirebase(v));
+  }
+  if (val !== null && typeof val === "object") {
+    const res: Record<string, any> = {};
+    for (const key of Object.keys(val)) {
+      const v = val[key];
+      if (v !== undefined) {
+        res[key] = sanitizeDataForFirebase(v);
+      }
+    }
+    return res;
+  }
+  return val;
+};
+
+/**
  * Saves the entire game library to Firebase Realtime Database.
  */
 export const saveToFirebase = async (
@@ -155,10 +188,14 @@ export const saveToFirebase = async (
   }
 
   const dbRef = ref(db, "library");
+  const sanitizedGames = sanitizeDataForFirebase(games);
+  const sanitizedTags = sanitizeDataForFirebase(globalTags);
+  const sanitizedGenres = sanitizeDataForFirebase(globalGenres);
+
   await set(dbRef, {
-    games,
-    globalTags,
-    globalGenres,
+    games: sanitizedGames,
+    globalTags: sanitizedTags,
+    globalGenres: sanitizedGenres,
     lastUpdated: new Date().toISOString(),
   });
 };
