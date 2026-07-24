@@ -1208,6 +1208,112 @@ app.post("/api/delete-imgbb", express.json(), async (req, res) => {
   }
 });
 
+// Endpoint to upload media to ImgBB securely from server side
+app.post("/api/upload-imgbb", express.json({ limit: "50mb" }), async (req, res) => {
+  try {
+    const { image, name, userApiKey } = req.body;
+    if (!image) {
+      res.status(400).json({ error: "O parâmetro 'image' é obrigatório para upload." });
+      return;
+    }
+
+    // Key selection priority:
+    // 1. Explicit user key passed from client (from UI settings / localStorage)
+    // 2. Server env vars: VITE_IMGBB_API_KEY, IMGBB_API_KEY, IMGBB_KEY
+    // 3. Fallback public key
+    let apiKey = typeof userApiKey === "string" ? userApiKey.trim() : "";
+    if (!apiKey) {
+      apiKey = (
+        process.env.VITE_IMGBB_API_KEY ||
+        process.env.IMGBB_API_KEY ||
+        process.env.IMGBB_KEY ||
+        ""
+      ).trim();
+    }
+
+    const DEFAULT_FALLBACK_KEY = "d112b9aaf62217ffd155269d04f96f6b";
+    const isUsingFallbackKey = !apiKey || apiKey === DEFAULT_FALLBACK_KEY;
+    if (!apiKey) {
+      apiKey = DEFAULT_FALLBACK_KEY;
+    }
+
+    // Prepare binary Blob from base64 for ImgBB upload
+    let base64Data = image;
+    let mimeType = "image/png";
+    if (typeof image === "string" && image.includes("base64,")) {
+      const parts = image.split("base64,");
+      base64Data = parts[1];
+      const mimeMatch = parts[0].match(/data:(image\/[a-zA-Z0-9\+\-\.]+);/);
+      if (mimeMatch) {
+        mimeType = mimeMatch[1];
+      }
+    }
+
+    const imageBuffer = Buffer.from(base64Data, "base64");
+    const blob = new Blob([imageBuffer], { type: mimeType });
+    const filename = name ? (name.includes(".") ? name : `${name}.png`) : "image.png";
+
+    const formData = new FormData();
+    formData.append("image", blob, filename);
+    if (name) {
+      formData.append("name", name);
+    }
+
+    console.log(`[Server ImgBB Upload] Tentando upload com a chave: ${apiKey.substring(0, 6)}... (fallback: ${isUsingFallbackKey})`);
+
+    const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
+      method: "POST",
+      body: formData,
+    });
+
+    const responseText = await imgbbRes.text();
+    let payload: any = null;
+    try {
+      payload = JSON.parse(responseText);
+    } catch {
+      // JSON parse error
+    }
+
+    if (!imgbbRes.ok || (payload && payload.success === false)) {
+      const errorMsg = payload?.error?.message || responseText || "Erro no serviço do ImgBB";
+      const statusCode = imgbbRes.status;
+
+      console.error(`[Server ImgBB Upload Error] Status: ${statusCode}, Mensagem: ${errorMsg}`);
+
+      if (isUsingFallbackKey) {
+        res.status(400).json({
+          error: `A chave pública padrão do ImgBB atingiu o limite de requisições (Rate Limit).\n\n` +
+                 `Como resolver:\n` +
+                 `1. Obtenha uma chave gratuita em https://api.imgbb.com/\n` +
+                 `2. Insira sua chave no botão de Configurações do ImgBB no topo da página ou adicione em 'VITE_IMGBB_API_KEY' nas variáveis de ambiente do aplicativo.`,
+          isFallbackKey: true,
+          details: errorMsg
+        });
+        return;
+      }
+
+      res.status(statusCode || 400).json({
+        error: `Erro retornado pelo ImgBB: ${errorMsg}`,
+        details: errorMsg
+      });
+      return;
+    }
+
+    if (payload?.data?.url) {
+      res.json({
+        url: payload.data.url,
+        deleteUrl: payload.data.delete_url
+      });
+      return;
+    }
+
+    res.status(500).json({ error: "Resposta inesperada da API do ImgBB." });
+  } catch (err: any) {
+    console.error("Erro interno ao processar upload do ImgBB no servidor:", err);
+    res.status(500).json({ error: err.message || "Erro interno no servidor ao fazer upload." });
+  }
+});
+
 // Endpoint for AI-powered game journal text correction
 app.post("/api/correct-text", express.json(), async (req, res) => {
   const { text, gameName } = req.body;

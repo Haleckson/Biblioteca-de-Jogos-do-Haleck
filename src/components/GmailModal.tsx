@@ -135,7 +135,7 @@ export default function GmailModal({
       />
 
       {/* Modal Card */}
-      <div className="relative w-full max-w-lg rounded-3xl border border-zinc-800 bg-[#080a10]/95 shadow-2xl overflow-hidden text-white z-10">
+      <div className="relative w-full max-w-3xl lg:max-w-4xl xl:max-w-5xl rounded-3xl border border-zinc-800 bg-[#080a10]/95 shadow-2xl overflow-hidden text-white z-10">
         {/* Header */}
         <div className="px-6 py-4 border-b border-zinc-900 flex items-center justify-between bg-zinc-950/40">
           <div className="flex items-center gap-2">

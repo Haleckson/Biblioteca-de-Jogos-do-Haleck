@@ -9,8 +9,8 @@
  */
 
 const env = (import.meta as any).env || {};
-// Fallback key to ensure immediate out-of-the-box operation if the user hasn't configured theirs
-const IMGBB_API_KEY = env.VITE_IMGBB_API_KEY || "f372a593e8a447538e6426b362fc3604";
+// Fallback key provided by the user for immediate out-of-the-box operation
+const IMGBB_API_KEY = env.VITE_IMGBB_API_KEY || "d112b9aaf62217ffd155269d04f96f6b";
 
 /**
  * Helper to sanitize filenames to be safe for URLs/ImgBB.
@@ -94,6 +94,35 @@ function compressImage(imageSource: File | string, maxWidth = 800, maxHeight = 8
   });
 }
 
+/**
+ * Helper to get or set custom user ImgBB API key stored in browser localStorage
+ */
+export function getCustomImgBBKey(): string {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      return (localStorage.getItem("imgbb_custom_api_key") || "").trim();
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return "";
+}
+
+export function setCustomImgBBKey(key: string): void {
+  try {
+    if (typeof window !== "undefined" && window.localStorage) {
+      const trimmed = key.trim();
+      if (trimmed) {
+        localStorage.setItem("imgbb_custom_api_key", trimmed);
+      } else {
+        localStorage.removeItem("imgbb_custom_api_key");
+      }
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
 export interface ImgBBUploadResponse {
   url: string;
   deleteUrl?: string;
@@ -114,6 +143,41 @@ const QUEUE_DELAY_MS = 2000; // 2 seconds between uploads to respect API rate li
 // Helper delay function
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+function dataURItoBlob(dataURI: string): Blob {
+  try {
+    const isDataURI = dataURI.includes("base64,");
+    const rawBase64 = isDataURI ? dataURI.split("base64,")[1] : dataURI;
+    const mimeString = isDataURI
+      ? dataURI.split("base64,")[0].split(":")[1]?.split(";")[0] || "image/png"
+      : "image/png";
+
+    const byteString = atob(rawBase64);
+    const ab = new ArrayBuffer(byteString.length);
+    const ia = new Uint8Array(ab);
+    for (let i = 0; i < byteString.length; i++) {
+      ia[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([ab], { type: mimeString });
+  } catch {
+    return new Blob([dataURI], { type: "image/png" });
+  }
+}
+
+/**
+ * Converts imageSource (File or string) to base64 or Data URI string
+ */
+async function getImageAsBase64(imageSource: File | string): Promise<string> {
+  if (typeof imageSource === "string") {
+    return imageSource;
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = (err) => reject(err);
+    reader.readAsDataURL(imageSource);
+  });
+}
+
 /**
  * Execute the upload of an image with retry mechanism and backoff if rate limits are hit.
  */
@@ -123,109 +187,123 @@ async function executeUploadWithRetry(
   attempt = 1,
   maxAttempts = 3
 ): Promise<ImgBBUploadResponse> {
-  if (!IMGBB_API_KEY) {
-    throw new Error(
-      "A Chave de API do ImgBB não está configurada.\n\n" +
-      "Como resolver:\n" +
-      "1. Acesse https://api.imgbb.com/ e crie uma chave gratuita.\n" +
-      "2. Adicione 'VITE_IMGBB_API_KEY' com sua chave nas configurações de segredos do AI Studio (Secrets)."
-    );
-  }
+  const customUserKey = getCustomImgBBKey();
+  const base64Str = await getImageAsBase64(imageSource);
+  const sanitizedName = customName ? sanitizeFilename(customName) : "image";
 
-  const formData = new FormData();
+  console.log(`[ImgBB Queue] Tentativa ${attempt} de ${maxAttempts} enviando mídia (${sanitizedName})...`);
 
-  if (imageSource instanceof File) {
-    formData.append("image", imageSource);
-  } else if (typeof imageSource === "string") {
-    // Extract base64 part if it's a full data URI
-    let base64Data = imageSource;
-    if (imageSource.includes("base64,")) {
-      base64Data = imageSource.split("base64,")[1];
-    }
-    formData.append("image", base64Data);
-  } else {
-    throw new Error("Formato de imagem inválido para upload.");
-  }
-
-  if (customName) {
-    formData.append("name", sanitizeFilename(customName));
-  }
-
+  // 1. Primary path: Use our backend proxy route (/api/upload-imgbb)
   try {
-    console.log(`[ImgBB Queue] Iniciando tentativa ${attempt} de ${maxAttempts} para: ${customName || "imagem"}`);
-    const response = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, {
+    const res = await fetch("/api/upload-imgbb", {
       method: "POST",
-      body: formData,
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        image: base64Str,
+        name: sanitizedName,
+        userApiKey: customUserKey,
+      }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      let isRateLimit = false;
-      let parsedMsg = "";
+    const data = await res.json().catch(() => null);
 
-      try {
-        const parsed = JSON.parse(errorText);
-        if (parsed?.error?.message) {
-          parsedMsg = parsed.error.message;
-        }
-        if (parsed?.error?.code === 100 || errorText.toLowerCase().includes("rate limit") || errorText.toLowerCase().includes("limit reached")) {
-          isRateLimit = true;
-        }
-      } catch (e) {
-        // Ignorar se não for JSON válido
-      }
-
-      if (isRateLimit || response.status === 429 || response.status === 400) {
-        if (attempt < maxAttempts) {
-          const backoffDelay = attempt * 4000; // 4s, 8s, etc.
-          console.warn(`[ImgBB Queue] Rate limit detectado na tentativa ${attempt}. Aguardando ${backoffDelay}ms para nova tentativa...`);
-          await sleep(backoffDelay);
-          return executeUploadWithRetry(imageSource, customName, attempt + 1, maxAttempts);
-        }
-
-        throw new Error(
-          `Limite de uploads atingido (Rate Limit) ou chave inválida no ImgBB.\n\n` +
-          `Como resolver:\n` +
-          `1. Crie uma conta gratuita em https://api.imgbb.com/ e clique em 'Começar' ou 'Obter Chave de API' para gerar sua própria chave de upload de graça.\n` +
-          `2. Abra as Configurações do seu aplicativo (ícone de engrenagem no topo direito do AI Studio) > menu 'Secrets'.\n` +
-          `3. Adicione uma variável com o nome 'VITE_IMGBB_API_KEY' e coloque a sua chave do ImgBB recém-criada.\n` +
-          `4. Reinicie ou recarregue o aplicativo para usá-lo com sua própria cota ilimitada!`
-        );
-      }
-
-      throw new Error(parsedMsg || `Erro na API do ImgBB: Código ${response.status}`);
-    }
-
-    const payload = await response.json();
-    if (payload && payload.data && payload.data.url) {
-      console.log(`[ImgBB Queue] Upload com sucesso na tentativa ${attempt}! URL: ${payload.data.url}`);
+    if (res.ok && data?.url) {
+      console.log(`[ImgBB Queue] Upload via servidor bem-sucedido! URL: ${data.url}`);
       return {
-        url: payload.data.url,
-        deleteUrl: payload.data.delete_url
+        url: data.url,
+        deleteUrl: data.deleteUrl,
       };
     }
 
-    throw new Error("Falha ao obter URL direta do ImgBB na resposta.");
-  } catch (err: any) {
-    console.error(`[ImgBB Queue] Falha na tentativa ${attempt}:`, err);
-    
-    // Bubble up friendly known messages
-    if (err.message && (err.message.includes("Limite de uploads") || err.message.includes("VITE_IMGBB_API_KEY"))) {
-      throw err;
-    }
+    const serverErrMsg = data?.error || data?.details || `HTTP ${res.status}`;
+    const isRateLimit =
+      res.status === 429 ||
+      (data?.error && data.error.toLowerCase().includes("rate limit")) ||
+      (data?.error && data.error.toLowerCase().includes("limite"));
 
-    // Otherwise retry on standard network failures as well
-    if (attempt < maxAttempts) {
-      const backoffDelay = attempt * 3000;
-      console.warn(`[ImgBB Queue] Falha de rede/conexão. Aguardando ${backoffDelay}ms para nova tentativa...`);
+    if (isRateLimit && attempt < maxAttempts) {
+      const backoffDelay = attempt * 4000;
+      console.warn(`[ImgBB Queue] Rate limit detectado no servidor (tentativa ${attempt}). Aguardando ${backoffDelay}ms...`);
       await sleep(backoffDelay);
       return executeUploadWithRetry(imageSource, customName, attempt + 1, maxAttempts);
     }
 
-    throw new Error(
-      `Erro de conexão/upload com o ImgBB: ${err.message || err}\n\n` +
-      `Para contornar este problema e ter uploads ilimitados, recomendamos configurar sua própria chave 'VITE_IMGBB_API_KEY' gratuita nas configurações de 'Secrets' do AI Studio.`
-    );
+    if (data?.error) {
+      throw new Error(data.error);
+    }
+
+    throw new Error(`Erro na API de upload: ${serverErrMsg}`);
+  } catch (serverErr: any) {
+    console.warn(`[ImgBB Queue] Servidor proxy não concluiu (tentativa ${attempt}):`, serverErr?.message || serverErr);
+
+    // If server explicit custom message about fallback key or missing key, throw it directly
+    if (
+      serverErr?.message &&
+      (serverErr.message.includes("chave pública padrão") || serverErr.message.includes("Configurações"))
+    ) {
+      throw serverErr;
+    }
+
+    // 2. Direct fallback to ImgBB API from browser if server route fails completely
+    try {
+      const effectiveKey =
+        customUserKey ||
+        IMGBB_API_KEY ||
+        "d112b9aaf62217ffd155269d04f96f6b";
+
+      const formData = new FormData();
+      if (imageSource instanceof File) {
+        formData.append("image", imageSource);
+      } else {
+        const imageBlob = dataURItoBlob(base64Str);
+        formData.append("image", imageBlob, `${sanitizedName}.png`);
+      }
+      formData.append("name", sanitizedName);
+
+      const directRes = await fetch(`https://api.imgbb.com/1/upload?key=${effectiveKey}`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const directText = await directRes.text();
+      let directPayload: any = null;
+      try {
+        directPayload = JSON.parse(directText);
+      } catch {
+        // ignore
+      }
+
+      if (directRes.ok && directPayload?.data?.url) {
+        return {
+          url: directPayload.data.url,
+          deleteUrl: directPayload.data.delete_url,
+        };
+      }
+
+      const directErrorMsg = directPayload?.error?.message || directText || `Status ${directRes.status}`;
+
+      if ((directRes.status === 429 || directRes.status === 400) && attempt < maxAttempts) {
+        const backoffDelay = attempt * 4000;
+        await sleep(backoffDelay);
+        return executeUploadWithRetry(imageSource, customName, attempt + 1, maxAttempts);
+      }
+
+      throw new Error(`ImgBB Direct: ${directErrorMsg}`);
+    } catch (directErr: any) {
+      if (attempt < maxAttempts) {
+        const backoffDelay = attempt * 3000;
+        await sleep(backoffDelay);
+        return executeUploadWithRetry(imageSource, customName, attempt + 1, maxAttempts);
+      }
+
+      throw new Error(
+        serverErr?.message ||
+        directErr?.message ||
+        "Ocorreu um erro ao fazer upload para o ImgBB. Verifique sua chave nas configurações."
+      );
+    }
   }
 }
 

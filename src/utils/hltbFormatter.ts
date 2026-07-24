@@ -14,12 +14,14 @@ export function formatHltbTime(val: string | number | undefined | null): string 
   let valStr = String(val).trim();
   if (valStr === "" || valStr === "-" || valStr === "—") return "";
 
-  // If it already matches the "Xh Ym" pattern, extract, pad, and return it
+  // If it already matches the "Xh Ym" pattern
   const hourMinMatch = valStr.match(/^(\d+)h\s*(\d+)m$/i);
   if (hourMinMatch) {
     const h = parseInt(hourMinMatch[1], 10);
     const m = parseInt(hourMinMatch[2], 10);
-    return `${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m`;
+    const hStr = h < 10 ? `0${h}` : `${h}`;
+    const mStr = m < 10 ? `0${m}` : `${m}`;
+    return `${hStr}h ${mStr}m`;
   }
 
   let hasHalf = false;
@@ -29,7 +31,6 @@ export function formatHltbTime(val: string | number | undefined | null): string 
   }
 
   // Extract all digits and decimal points (e.g., "20.5h" -> "20.5")
-  // Replace commas with dots if any (e.g. "20,5" -> "20.5")
   const cleanedNumStr = valStr.replace(/,/g, ".").replace(/[^\d\.]/g, "");
   const parsedFloat = parseFloat(cleanedNumStr);
 
@@ -53,8 +54,8 @@ export function formatHltbTime(val: string | number | undefined | null): string 
     mins = mins % 60;
   }
 
-  const hStr = String(hours).padStart(2, "0");
-  const mStr = String(mins).padStart(2, "0");
+  const hStr = hours < 10 ? `0${hours}` : `${hours}`;
+  const mStr = mins < 10 ? `0${mins}` : `${mins}`;
 
   return `${hStr}h ${mStr}m`;
 }

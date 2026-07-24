@@ -4,16 +4,21 @@
  */
 
 import React, { memo } from "react";
-import { Game, splitEntities } from "../types";
+import { Game, splitEntities, getDlcMode, getGameTrophies } from "../types";
 import { motion } from "motion/react";
-import { Clock, Folder, Tag, Layers, RotateCcw, Shield } from "lucide-react";
+import { Clock, Folder, Tag, Layers, RotateCcw, Shield, Maximize2, Settings } from "lucide-react";
 import { formatHltbTime } from "../utils/hltbFormatter";
+import TrophyBadge, { TrophiesList } from "./TrophyBadge";
+import { formatHoursAndMinutes, getTotalGamePlaytimeHours } from "./DashboardView";
 
 export interface GameCardProps {
   game: Game;
   onClick: () => void;
   isAdmin?: boolean;
   onUpdateGame?: (updatedGame: Game) => void;
+  onOpenZoom?: (src: string) => void;
+  onOpenGameEstimateModal?: (game: Game) => void;
+  onEditGame?: (game: Game) => void;
   key?: string | number;
 }
 
@@ -178,7 +183,7 @@ export function getStatusBorderClass(statusList: string[]) {
   return "!border-zinc-700/60 hover:!border-cyan-500/50 shadow-[0_0_12px_rgba(6,182,212,0.05)] hover:shadow-[0_0_20px_rgba(6,182,212,0.15)]";
 }
 
-function GameCardComponent({ game, onClick, isAdmin, onUpdateGame }: GameCardProps) {
+function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, onOpenGameEstimateModal, onEditGame }: GameCardProps) {
   const coverImg = game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800";
   const firstGenre = game.genre && game.genre.length ? game.genre[0] : "Geral";
 
@@ -293,7 +298,8 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame }: GameCardPro
   const imageStyle: React.CSSProperties = {
     objectPosition: `${activePosX}% ${activePosY}%`,
     transformOrigin: `${activePosX}% ${activePosY}%`,
-    transform: `scale(${activeZoom / 100})`,
+    transform: `scale(${Math.max(1, activeZoom / 100)})`,
+    objectFit: "cover",
     transition: isAdjusting ? "none" : "transform 0.3s ease-out",
   };
 
@@ -321,10 +327,15 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame }: GameCardPro
         onMouseLeave={handleCardMouseUpOrLeave}
         className={`relative h-56 overflow-hidden shrink-0 ${isAdjusting ? "cursor-move border-2 border-dashed border-cyan-400" : ""}`}
       >
-        <div className="w-full h-full overflow-hidden group-hover:scale-[1.03] transition-transform duration-500 ease-out">
+        <div className="w-full h-full overflow-hidden group-hover:scale-[1.03] transition-transform duration-500 ease-out relative">
           <img
             src={coverImg}
-            className="w-full h-full object-cover origin-center select-none pointer-events-none"
+            alt=""
+            className="absolute inset-0 w-full h-full object-cover blur-md scale-110 opacity-50 select-none pointer-events-none"
+          />
+          <img
+            src={coverImg}
+            className="w-full h-full object-cover origin-center select-none pointer-events-none relative z-10"
             style={imageStyle}
             alt={game.name}
             referrerPolicy="no-referrer"
@@ -334,44 +345,107 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame }: GameCardPro
           />
         </div>
         <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
-        {game.replayed && (
-          <div 
-            className="absolute top-4 left-4 flex items-center gap-1 px-2 py-1 rounded-xl bg-violet-950/95 backdrop-blur-md text-purple-300 border border-purple-500/40 shadow-lg shadow-purple-950/50" 
-            title={`Status: Replay (${game.replayCount || 1}x)`}
-          >
-            <RotateCcw size={12} className="stroke-[2.5]" />
-            <span className="text-[10px] font-extrabold font-mono">{(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x</span>
-          </div>
-        )}
-        <div className="absolute top-4 right-4 flex flex-wrap gap-1 justify-end max-w-[70%] z-25">
-          {splitEntities(game.platform || "PC").map((p, pIdx) => {
-            const style = getPlatformBadgeStyle(p);
-            return (
-              <span 
-                key={`${p}-${pIdx}`}
-                className={`px-2.5 py-1 rounded-xl bg-zinc-950/90 backdrop-blur-md text-[10px] font-extrabold uppercase tracking-widest border shadow-sm ${style.text} ${style.border} ${style.bg} ${style.glow}`}
-                title={`Plataforma: ${p}`}
-              >
-                {p}
+        
+        {/* Status badges container */}
+        <div className="absolute top-4 left-4 flex flex-col gap-1.5 z-20">
+          {game.replayed && (
+            <div 
+              className="flex items-center gap-1 px-2 py-1 rounded-xl bg-violet-950/95 backdrop-blur-md text-purple-300 border border-purple-500/40 shadow-lg shadow-purple-950/50" 
+              title={`Status: Replay (${game.replayCount || 1}x)`}
+            >
+              <RotateCcw size={12} className="stroke-[2.5]" />
+              <span className="text-[10px] font-extrabold font-mono">{(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x</span>
+            </div>
+          )}
+          {getDlcMode(game) !== "none" && (
+            <div 
+              className="flex items-center gap-1 px-2 py-1 rounded-xl bg-amber-950/95 backdrop-blur-md text-amber-300 border border-amber-500/40 shadow-lg shadow-amber-950/50" 
+              title={getDlcMode(game) === "plus_dlc" ? "Status: Jogo Base + DLC" : "Status: Expansão / DLC"}
+            >
+              <Layers size={12} className="stroke-[2.5]" />
+              <span className="text-[10px] font-extrabold font-mono uppercase tracking-wider">
+                {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}
               </span>
-            );
-          })}
+            </div>
+          )}
+        </div>
+        <div className="absolute top-4 right-4 flex flex-col items-end gap-1.5 z-25">
+          <div className="flex flex-wrap gap-1 justify-end max-w-[100%]">
+            {splitEntities(game.platform || "PC").map((p, pIdx) => {
+              const style = getPlatformBadgeStyle(p);
+              return (
+                <span 
+                  key={`${p}-${pIdx}`}
+                  className={`px-2.5 py-1 rounded-xl bg-zinc-950/90 backdrop-blur-md text-[10px] font-extrabold uppercase tracking-widest border shadow-sm ${style.text} ${style.border} ${style.bg} ${style.glow}`}
+                  title={`Plataforma: ${p}`}
+                >
+                  {p}
+                </span>
+              );
+            })}
+          </div>
+          {onOpenGameEstimateModal && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpenGameEstimateModal(game);
+              }}
+              className="opacity-0 group-hover:opacity-100 transition-all duration-200 w-7 h-7 rounded-xl bg-amber-950/95 hover:bg-amber-900 text-amber-300 border border-amber-500/40 shadow-lg flex items-center justify-center cursor-pointer backdrop-blur-md hover:scale-110 active:scale-95"
+              title="Calcular estimativa de tempo para terminar este jogo"
+            >
+              <Clock size={13} className="text-amber-400 shrink-0" />
+            </button>
+          )}
         </div>
 
-        {isAdmin && !isAdjusting && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setTempPosX(posX);
-              setTempPosY(posY);
-              setTempZoom(zoom);
-              setIsAdjusting(true);
-            }}
-            className="absolute bottom-3 right-3 z-20 w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-950/80 hover:bg-cyan-500 hover:text-black text-zinc-400 border border-zinc-800/80 font-extrabold text-xs tracking-widest transition-all duration-300 shadow-lg cursor-pointer animate-fade-in"
-            title="Ajustar Imagem"
-          >
-            ...
-          </button>
+        {!isAdjusting && (
+          <div className="absolute bottom-3 right-3 z-20 flex items-center gap-1.5 opacity-0 group-hover:opacity-100 transition-all duration-300">
+            {onOpenZoom && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOpenZoom(coverImg);
+                }}
+                className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-950/80 hover:bg-cyan-500 hover:text-black text-cyan-400 border border-zinc-800/80 transition-all duration-300 shadow-lg cursor-pointer hover:scale-110 active:scale-95"
+                title="Ampliar capa em tela cheia"
+              >
+                <Maximize2 size={13} />
+              </button>
+            )}
+
+            {isAdmin && onEditGame && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onEditGame(game);
+                }}
+                className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-950/80 hover:bg-cyan-500 hover:text-black text-cyan-400 border border-zinc-800/80 transition-all duration-300 shadow-lg cursor-pointer hover:scale-110 active:scale-95"
+                title="Editar Ficha do Jogo"
+              >
+                <Settings size={13} />
+              </button>
+            )}
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setTempPosX(posX);
+                  setTempPosY(posY);
+                  setTempZoom(zoom);
+                  setIsAdjusting(true);
+                }}
+                className="w-7 h-7 flex items-center justify-center rounded-lg bg-zinc-950/80 hover:bg-cyan-500 hover:text-black text-zinc-400 border border-zinc-800/80 font-extrabold text-xs tracking-widest transition-all duration-300 shadow-lg cursor-pointer hover:scale-110 active:scale-95"
+                title="Ajustar Imagem de Capa"
+              >
+                ...
+              </button>
+            )}
+          </div>
         )}
 
         {isAdjusting && (
@@ -431,7 +505,12 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame }: GameCardPro
             {renderIcon(game, "w-11 h-11 rounded-2xl shrink-0 mt-0.5 shadow-md border border-zinc-800")}
             <div className="min-w-0 flex-1">
               <h3 className="text-base sm:text-lg font-extrabold text-white group-hover:text-cyan-300 transition-colors break-words leading-tight">
-                {game.name}
+                <span className="align-middle">{game.name}</span>
+                {getGameTrophies(game).length > 0 && (
+                  <span className="inline-flex align-middle ml-2 shrink-0">
+                    <TrophiesList trophies={getGameTrophies(game)} mode="card" />
+                  </span>
+                )}
               </h3>
               <div 
                 className="flex flex-wrap items-center gap-1 mt-1 text-xs uppercase tracking-wider text-purple-400 font-bold"
@@ -497,42 +576,76 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame }: GameCardPro
         <div className="mt-4 pt-4 border-t border-zinc-850">
           <div className="flex items-start justify-between gap-3">
             <div 
-              className="flex items-center gap-1.5 text-xs text-zinc-300 font-semibold bg-zinc-950/60 px-2.5 py-1.5 rounded-xl border border-zinc-800/50 mt-1 shrink-0"
-              title={`Tempo de Jogo Registrado: ${game.playtime || "00h 00m"}`}
+              className="flex flex-col gap-1.5 bg-zinc-950/80 p-2 rounded-xl border border-zinc-800/60 shrink-0"
+              title="Tempo Pessoal: Jogatina Atual/Última, Jogatinas Passadas e Tempo Total"
             >
-              <Clock size={12} className="text-cyan-400" />
-              <span className="font-mono">{game.playtime || "00h 00m"}</span>
+              <div className="flex items-center gap-1.5 text-[11px] text-purple-300 font-mono font-medium" title={`Jogatina Atual / Última: ${game.playtime || "0h"} (tempo dedicado na sessão atual ou final)`}>
+                <Clock size={11} className="text-purple-400 shrink-0" />
+                <span>{game.playtime || "0h"}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] text-cyan-300 font-mono font-medium" title={`Jogatinas Passadas (Extras): ${game.additionalPlaytime || "0h"} (tempo de outras jogatinas anteriores que foram contabilizadas ao rejogar)`}>
+                <Clock size={11} className="text-cyan-400 shrink-0" />
+                <span>{game.additionalPlaytime || "0h"}</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-[11px] text-emerald-300 font-mono font-bold" title={`Tempo Total Investido: ${formatHoursAndMinutes(getTotalGamePlaytimeHours(game))} (somatório de todas as jogatinas)`}>
+                <Clock size={11} className="text-emerald-400 shrink-0" />
+                <span>{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</span>
+              </div>
             </div>
-            <div className="flex flex-col items-end gap-1 flex-1 min-w-0">
+            <div 
+              className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2 rounded-xl border border-zinc-800/60 flex-1 min-w-0"
+              title="Avaliações e Notas do Jogo"
+            >
               <div 
-                className="flex items-center gap-1.5 justify-end w-full"
+                className="flex items-center justify-between gap-1.5 w-full"
                 title={`Avaliação Pessoal: ${game.rating || 0} de 5 estrelas`}
               >
-                <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-0.5">
-                  Pessoal <span className="text-zinc-300 font-mono text-[8px]">({game.rating || 0})</span>:
+                <span className="text-[9px] font-bold text-zinc-300 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0"></span>
+                  Pessoal <span className="text-zinc-400 font-mono text-[8px]">({game.rating || 0})</span>
                 </span>
-                <div className="shrink-0">{renderStars(game.rating || 0, `${game.id}-top-personal`)}</div>
+                <div className="shrink-0 flex items-center">{renderStars(game.rating || 0, `${game.id}-top-personal`)}</div>
               </div>
-              {game.metacriticCritScore !== undefined && game.metacriticCritScore !== null && (
+
+              {game.metacriticCritScore !== undefined && game.metacriticCritScore !== null ? (
                 <div 
-                  className="flex items-center gap-1.5 justify-end w-full"
+                  className="flex items-center justify-between gap-1.5 w-full"
                   title={`Nota da Crítica (Metacritic): ${game.metacriticCritScore} de 100`}
                 >
-                  <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-0.5">
-                    Crítica <span className="font-mono text-[8px]">({game.metacriticCritScore})</span>:
+                  <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
+                    Crítica <span className="font-mono text-[8px]">({game.metacriticCritScore})</span>
                   </span>
-                  <div className="shrink-0">{renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-top-crit`, "w-3.5 h-3.5", "", game.metacriticCritScore >= 95)}</div>
+                  <div className="shrink-0 flex items-center">{renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-top-crit`, "w-3.5 h-3.5", "", game.metacriticCritScore >= 95)}</div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-1.5 w-full opacity-40">
+                  <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-wider font-sans flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
+                    Crítica
+                  </span>
+                  <span className="text-[9px] font-mono text-zinc-600">N/A</span>
                 </div>
               )}
-              {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null && (
+
+              {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null ? (
                 <div 
-                  className="flex items-center gap-1.5 justify-end w-full"
+                  className="flex items-center justify-between gap-1.5 w-full"
                   title={`Nota do Público (Metacritic): ${game.metacriticUserScore.toFixed(1)} de 10`}
                 >
-                  <span className="text-[9px] font-bold text-cyan-400 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-0.5">
-                    Público <span className="font-mono text-[8px]">({game.metacriticUserScore.toFixed(1)})</span>:
+                  <span className="text-[9px] font-bold text-cyan-400 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
+                    Público <span className="font-mono text-[8px]">({game.metacriticUserScore.toFixed(1)})</span>
                   </span>
-                  <div className="shrink-0">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-3.5 h-3.5", "", game.metacriticUserScore >= 9.5)}</div>
+                  <div className="shrink-0 flex items-center">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-3.5 h-3.5", "", game.metacriticUserScore >= 9.5)}</div>
+                </div>
+              ) : (
+                <div className="flex items-center justify-between gap-1.5 w-full opacity-40">
+                  <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-wider font-sans flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
+                    Público
+                  </span>
+                  <span className="text-[9px] font-mono text-zinc-600">N/A</span>
                 </div>
               )}
             </div>

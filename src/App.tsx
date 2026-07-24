@@ -10,10 +10,12 @@ import StatsCards from "./components/StatsCards";
 import GameCard from "./components/GameCard";
 import GameFormModal from "./components/GameFormModal";
 import GameDetailDrawer from "./components/GameDetailDrawer";
-import { CustomAlert, CustomConfirm, CustomPasswordPrompt } from "./components/CustomDialogs";
-import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock, Mail, Move, ArrowUp, RotateCcw } from "lucide-react";
+import GameEstimateModal from "./components/GameEstimateModal";
+import { CustomAlert, CustomConfirm, CustomPasswordPrompt, CustomDriveConnectPrompt } from "./components/CustomDialogs";
+import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock, Mail, Move, ArrowUp, RotateCcw, Key, Settings, BarChart3 } from "lucide-react";
+import { DashboardView } from "./components/DashboardView";
 import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, auth } from "./utils/firebase";
-import { uploadToImgBB } from "./utils/imgbb";
+import { uploadToImgBB, getCustomImgBBKey } from "./utils/imgbb";
 import {
   signInWithGoogleDrive,
   isDriveAuthenticated,
@@ -22,6 +24,10 @@ import {
 } from "./utils/googleDrive";
 import GmailModal from "./components/GmailModal";
 import { isGmailAuthenticated } from "./utils/gmail";
+import ImgBBModal from "./components/ImgBBModal";
+import WelcomeRoleModal from "./components/WelcomeRoleModal";
+import SiteSettingsModal from "./components/SiteSettingsModal";
+import ImageZoomLightbox from "./components/ImageZoomLightbox";
 
 const sortAlphabetically = (arr: string[]) => {
   return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
@@ -73,7 +79,8 @@ export default function App() {
     return pool[Math.floor(Math.random() * pool.length)];
   });
 
-  // Filters State
+  // View Mode & Filters State
+  const [activeViewMode, setActiveViewMode] = useState<"library" | "dashboard">("library");
   const [activeTab, setActiveTab] = useState<string>("Todos");
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [platformFilter, setPlatformFilter] = useState<string>("All");
@@ -231,6 +238,7 @@ export default function App() {
   const [detailGameId, setDetailGameId] = useState<string | null>(null);
   const [editGame, setEditGame] = useState<Game | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
+  const [estimateGameModal, setEstimateGameModal] = useState<Game | null>(null);
 
   // Custom alert & confirm states
   const [alertState, setAlertState] = useState({ isOpen: false, title: "", message: "" });
@@ -323,8 +331,34 @@ export default function App() {
   const [isGmailConnected, setIsGmailConnected] = useState(false);
   const [gmailModalOpen, setGmailModalOpen] = useState(false);
   const [gmailTargetGame, setGmailTargetGame] = useState<Game | null>(null);
+  const [imgBBModalOpen, setImgBBModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [drivePromptOpen, setDrivePromptOpen] = useState(false);
+  const [globalZoomImage, setGlobalZoomImage] = useState<{ src: string; allImages?: string[]; title?: string } | null>(null);
+  const [welcomeModalOpen, setWelcomeModalOpen] = useState<boolean>(() => {
+    return sessionStorage.getItem("role_choice_done") !== "true";
+  });
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
   const isFirstMount = useRef(true);
+
+  const handleSelectViewer = () => {
+    setIsAdmin(false);
+    sessionStorage.removeItem("admin_unlocked");
+    sessionStorage.setItem("role_choice_done", "true");
+    setWelcomeModalOpen(false);
+  };
+
+  const handleSelectEditor = (passwordInput: string): boolean => {
+    if (passwordInput === "159753") {
+      setIsAdmin(true);
+      sessionStorage.setItem("admin_unlocked", "true");
+      sessionStorage.setItem("role_choice_done", "true");
+      setWelcomeModalOpen(false);
+      triggerAlert("Modo Editor Ativo", "Acesso liberado! Você agora tem permissões de administrador.");
+      return true;
+    }
+    return false;
+  };
 
   const hasBase64Images = (gamesList: Game[]): boolean => {
     return gamesList.some((game) => {
@@ -465,7 +499,31 @@ export default function App() {
         }
       );
     } else {
-      ensureAdmin("salvar as alterações", executeSave);
+      ensureAdmin("salvar as alterações", () => {
+        if (!isDriveAuthenticated()) {
+          setDrivePromptOpen(true);
+        } else {
+          executeSave();
+        }
+      });
+    }
+  };
+
+  const handleConnectDriveAndSave = async () => {
+    setDrivePromptOpen(false);
+    try {
+      setBackupStatus("Conectando ao Google Drive...");
+      await signInWithGoogleDrive();
+      setIsDriveConnected(true);
+      executeSave();
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert(
+        "Erro de Conexão",
+        `Não foi possível conectar ao Google Drive: ${err.message || err}`
+      );
+    } finally {
+      setBackupStatus(null);
     }
   };
 
@@ -530,22 +588,21 @@ export default function App() {
 
               if (entryUpdated) {
                 gameUpdated = true;
-                return { ...entry, medias: updatedMedias };
               }
-              return entry;
-              })
+              return { ...entry, medias: updatedMedias };
+            })
           );
 
           if (gameUpdated) {
             gamesUpdated = true;
-            return {
-              ...game,
-              cover: updatedCover,
-              icon: updatedIcon,
-              diary: updatedDiary
-            };
           }
-          return game;
+
+          return {
+            ...game,
+            cover: updatedCover,
+            icon: updatedIcon,
+            diary: updatedDiary
+          };
         })
       );
 
@@ -1208,54 +1265,23 @@ export default function App() {
               Biblioteca do Haleck
             </h1>
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              {isFirebaseConfigured() && (
-                isDriveConnected ? (
-                  <button
-                    onClick={handleDisconnectDrive}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-400 bg-cyan-950/40 hover:bg-cyan-900/30 px-3.5 py-1.5 rounded-full border border-cyan-800/30 shadow-sm shadow-cyan-950/10 cursor-pointer transition-all"
-                    title="Conta Google conectada para backup no Drive e uploads no YouTube. Clique para desconectar."
-                  >
-                    <HardDrive size={11} className="animate-pulse" />
-                    Google Ativo (Drive & YouTube)
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleConnectDrive}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-cyan-400 px-3.5 py-1.5 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
-                    title="Conectar com a conta Google para fazer backup automático no Drive e upload automatizado de vídeos no YouTube."
-                  >
-                    <HardDrive size={11} />
-                    Conectar Google (Drive/YouTube)
-                  </button>
-                )
-              )}
-
-              {isFirebaseConfigured() && (
-                isGmailConnected ? (
-                  <button
-                    onClick={() => {
-                      setGmailTargetGame(null);
-                      setGmailModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-cyan-400 bg-cyan-950/40 hover:bg-cyan-900/30 px-3.5 py-1.5 rounded-full border border-cyan-800/30 shadow-sm shadow-cyan-950/10 cursor-pointer transition-all"
-                    title="Gmail conectado. Clique para enviar relatórios ou diários."
-                  >
-                    <Mail size={11} />
-                    Gmail Ativo (Enviar Relatório)
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => {
-                      setGmailTargetGame(null);
-                      setGmailModalOpen(true);
-                    }}
-                    className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-cyan-400 px-3.5 py-1.5 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
-                    title="Conectar com o Gmail para compartilhar relatórios ou diários em HTML."
-                  >
-                    <Mail size={11} />
-                    Conectar Gmail
-                  </button>
-                )
+              {/* Google Drive Visual Connection Indicator */}
+              {isDriveConnected ? (
+                <span 
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-400 bg-blue-950/50 px-3.5 py-1.5 rounded-full border border-blue-500/30 shadow-sm shadow-blue-950/20"
+                  title="Google Drive Conectado: Seus backups de mídias e metadados estão sincronizados na nuvem."
+                >
+                  <HardDrive size={12} className="text-sky-400 animate-pulse" />
+                  Google Drive Conectado
+                </span>
+              ) : (
+                <span 
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 bg-zinc-900/40 px-3.5 py-1.5 rounded-full border border-zinc-800/40 shadow-sm"
+                  title="Google Drive Desconectado. Você pode conectar no menu de Configurações (engrenagem) ou ao Clicar em Salvar."
+                >
+                  <HardDrive size={12} className="text-zinc-500" />
+                  Google Drive Desconectado
+                </span>
               )}
 
               {isAdmin ? (
@@ -1341,10 +1367,23 @@ export default function App() {
 
               <button
                 onClick={handleOpenAddForm}
-                className="bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-700 hover:to-cyan-600 text-white text-sm font-bold px-5 py-3 rounded-xl shadow-lg shadow-purple-600/20 hover:shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer"
+                className="bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-700 hover:to-cyan-600 text-white text-sm font-bold font-orbitron tracking-wider px-5 py-3 rounded-xl shadow-lg shadow-purple-600/20 hover:shadow-cyan-500/30 transition-all flex items-center gap-2 cursor-pointer"
               >
                 <Plus size={16} />
                 Adicionar Jogo
+              </button>
+
+              {/* Site Settings Gear Button in top-right banner */}
+              <button
+                onClick={() => {
+                  ensureAdmin("acessar as configurações do site", () => {
+                    setSettingsModalOpen(true);
+                  });
+                }}
+                className="p-3 bg-zinc-900/90 hover:bg-zinc-800 text-cyan-400 hover:text-cyan-300 border border-zinc-700/80 hover:border-cyan-500/50 rounded-xl shadow-lg hover:shadow-cyan-500/20 transition-all flex items-center justify-center cursor-pointer group"
+                title="Configurações do Site (Painel Admin)"
+              >
+                <Settings size={18} className="group-hover:rotate-45 transition-transform duration-300" />
               </button>
             </div>
 
@@ -1357,141 +1396,192 @@ export default function App() {
           </div>
         </div>
 
-        {/* Stats Bento Box Grid */}
-        <StatsCards games={games} activeTab={activeTab} onTabChange={setActiveTab} />
+        {/* Primary View Selector Tabs: Biblioteca vs Estatísticas */}
+        <div className="flex items-center gap-3 mb-8 border-b border-zinc-800/80 pb-4">
+          <button
+            onClick={() => setActiveViewMode("library")}
+            className={`px-5 py-2.5 rounded-2xl font-orbitron font-bold text-xs sm:text-sm tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+              activeViewMode === "library"
+                ? "bg-gradient-to-r from-cyan-500 to-blue-600 text-white shadow-lg shadow-cyan-500/20 border border-cyan-400/40"
+                : "bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800"
+            }`}
+          >
+            <Gamepad2 size={16} />
+            <span>Biblioteca de Jogos</span>
+          </button>
 
-        {/* Filters Controls */}
-        <div className="space-y-4 mb-10">
-          <div className="relative w-full">
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Procurar por título, série, estúdio, tags, gêneros..."
-              className="w-full pl-11 pr-4 py-3 bg-zinc-900 border border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm text-zinc-100 placeholder-zinc-500 shadow-sm"
-            />
-            <div className="absolute left-4 top-3.5 text-zinc-400">
-              <Search size={18} />
+          <button
+            onClick={() => setActiveViewMode("dashboard")}
+            className={`px-5 py-2.5 rounded-2xl font-orbitron font-bold text-xs sm:text-sm tracking-wider transition-all flex items-center gap-2 cursor-pointer ${
+              activeViewMode === "dashboard"
+                ? "bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/20 border border-purple-400/40"
+                : "bg-zinc-900/80 text-zinc-400 hover:text-white hover:bg-zinc-800 border border-zinc-800"
+            }`}
+          >
+            <BarChart3 size={16} />
+            <span>Estatísticas & Analytics</span>
+          </button>
+        </div>
+
+        {activeViewMode === "dashboard" ? (
+          <DashboardView
+            games={games}
+            onSelectGame={(id) => setDetailGameId(id)}
+            onNavigateToLibraryWithStatus={(status) => {
+              setActiveTab(status);
+              setActiveViewMode("library");
+            }}
+            onUpdateGame={handleUpdateGame}
+            isAdmin={isAdmin}
+          />
+        ) : (
+          <>
+            {/* Stats Bento Box Grid */}
+            <StatsCards games={games} activeTab={activeTab} onTabChange={setActiveTab} />
+
+            {/* Filters Controls */}
+            <div className="space-y-4 mb-10">
+              <div className="relative w-full">
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Procurar por título, série, estúdio, tags, gêneros..."
+                  className="w-full pl-11 pr-4 py-3 bg-zinc-900 border border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm text-zinc-100 placeholder-zinc-500 shadow-sm"
+                />
+                <div className="absolute left-4 top-3.5 text-zinc-400">
+                  <Search size={18} />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 bg-zinc-950/60 p-3 rounded-2xl border border-zinc-800/60">
+                <div className="flex items-center gap-1.5 text-zinc-400 text-xs font-bold uppercase tracking-wider px-1">
+                  <Filter size={14} className="text-cyan-400" />
+                  Filtrar por:
+                </div>
+                
+                {/* Platform filter */}
+                <select
+                  value={platformFilter}
+                  onChange={(e) => setPlatformFilter(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
+                >
+                  <option value="All">Todas as Plataformas</option>
+                  {platformOptions
+                    .filter((p) => p !== "All")
+                    .map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                </select>
+
+                {/* Series filter */}
+                <select
+                  value={seriesFilter}
+                  onChange={(e) => setSeriesFilter(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
+                >
+                  <option value="All">Todas as Séries / Sagas</option>
+                  {seriesOptions
+                    .filter((s) => s !== "All")
+                    .map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                </select>
+
+                {/* Publisher filter */}
+                <select
+                  value={publisherFilter}
+                  onChange={(e) => setPublisherFilter(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
+                >
+                  <option value="All">Todas as Publicadoras</option>
+                  {publisherOptions
+                    .filter((p) => p !== "All")
+                    .map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                </select>
+
+                {/* Tag filter */}
+                <select
+                  value={tagFilter}
+                  onChange={(e) => setTagFilter(e.target.value)}
+                  className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
+                >
+                  <option value="All">Todas as Tags</option>
+                  {tagOptions
+                    .filter((t) => t !== "All")
+                    .map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                </select>
+
+                {/* Clean filter helper if any is active */}
+                {(platformFilter !== "All" || seriesFilter !== "All" || publisherFilter !== "All" || tagFilter !== "All") && (
+                  <button
+                    onClick={() => {
+                      setPlatformFilter("All");
+                      setSeriesFilter("All");
+                      setPublisherFilter("All");
+                      setTagFilter("All");
+                    }}
+                    className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1 ml-auto transition-colors cursor-pointer"
+                  >
+                    Limpar Filtros
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3 bg-zinc-950/60 p-3 rounded-2xl border border-zinc-800/60">
-            <div className="flex items-center gap-1.5 text-zinc-400 text-xs font-bold uppercase tracking-wider px-1">
-              <Filter size={14} className="text-cyan-400" />
-              Filtrar por:
+            {/* Games Catalogue Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(310px,1fr))] gap-6">
+              {filteredGames.slice(0, visibleCount).map((game) => (
+                <GameCard
+                  key={game.id}
+                  game={game}
+                  onClick={() => setDetailGameId(game.id)}
+                  isAdmin={isAdmin}
+                  onUpdateGame={handleUpdateGame}
+                  onEditGame={handleOpenEditForm}
+                  onOpenGameEstimateModal={(g) => setEstimateGameModal(g)}
+                  onOpenZoom={(src) =>
+                    setGlobalZoomImage({
+                      src,
+                      allImages: filteredGames.map((g) => g.cover).filter(Boolean),
+                      title: `Capa - ${game.name}`,
+                    })
+                  }
+                />
+              ))}
             </div>
-            
-            {/* Platform filter */}
-            <select
-              value={platformFilter}
-              onChange={(e) => setPlatformFilter(e.target.value)}
-              className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
-            >
-              <option value="All">Todas as Plataformas</option>
-              {platformOptions
-                .filter((p) => p !== "All")
-                .map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-            </select>
 
-            {/* Series filter */}
-            <select
-              value={seriesFilter}
-              onChange={(e) => setSeriesFilter(e.target.value)}
-              className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
-            >
-              <option value="All">Todas as Séries / Sagas</option>
-              {seriesOptions
-                .filter((s) => s !== "All")
-                .map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-            </select>
-
-            {/* Publisher filter */}
-            <select
-              value={publisherFilter}
-              onChange={(e) => setPublisherFilter(e.target.value)}
-              className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
-            >
-              <option value="All">Todas as Publicadoras</option>
-              {publisherOptions
-                .filter((p) => p !== "All")
-                .map((p) => (
-                  <option key={p} value={p}>
-                    {p}
-                  </option>
-                ))}
-            </select>
-
-            {/* Tag filter */}
-            <select
-              value={tagFilter}
-              onChange={(e) => setTagFilter(e.target.value)}
-              className="bg-zinc-900 border border-zinc-800 hover:border-zinc-700 rounded-xl px-3 py-2 text-xs font-semibold text-zinc-300 focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-sm cursor-pointer"
-            >
-              <option value="All">Todas as Tags</option>
-              {tagOptions
-                .filter((t) => t !== "All")
-                .map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-            </select>
-
-            {/* Clean filter helper if any is active */}
-            {(platformFilter !== "All" || seriesFilter !== "All" || publisherFilter !== "All" || tagFilter !== "All") && (
-              <button
-                onClick={() => {
-                  setPlatformFilter("All");
-                  setSeriesFilter("All");
-                  setPublisherFilter("All");
-                  setTagFilter("All");
-                }}
-                className="text-xs text-red-400 hover:text-red-300 font-bold px-2 py-1 ml-auto transition-colors cursor-pointer"
-              >
-                Limpar Filtros
-              </button>
+            {/* Loading Indicator for Infinite Scroll */}
+            {filteredGames.length > visibleCount && (
+              <div className="flex justify-center items-center py-10">
+                <span className="text-xs text-zinc-500 font-mono flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-ping"></span>
+                  Carregando mais jogos...
+                </span>
+              </div>
             )}
-          </div>
-        </div>
 
-        {/* Games Catalogue Grid */}
-        <div className="grid grid-cols-1 sm:grid-cols-[repeat(auto-fill,minmax(310px,1fr))] gap-6">
-          {filteredGames.slice(0, visibleCount).map((game) => (
-            <GameCard
-              key={game.id}
-              game={game}
-              onClick={() => setDetailGameId(game.id)}
-              isAdmin={isAdmin}
-              onUpdateGame={handleUpdateGame}
-            />
-          ))}
-        </div>
-
-        {/* Loading Indicator for Infinite Scroll */}
-        {filteredGames.length > visibleCount && (
-          <div className="flex justify-center items-center py-10">
-            <span className="text-xs text-zinc-500 font-mono flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-ping"></span>
-              Carregando mais jogos...
-            </span>
-          </div>
-        )}
-
-        {/* Empty State Fallback */}
-        {filteredGames.length === 0 && (
-          <div className="text-center py-24 glass rounded-3xl border border-dashed border-zinc-800 p-8">
-            <p className="text-5xl animate-bounce">👾</p>
-            <h3 className="text-xl font-bold text-white mt-4">Nenhum jogo encontrado</h3>
-            <p className="text-sm text-zinc-400 mt-2">Ajuste os filtros ou crie uma nova ficha para este jogo!</p>
-          </div>
+            {/* Empty State Fallback */}
+            {filteredGames.length === 0 && (
+              <div className="text-center py-24 glass rounded-3xl border border-dashed border-zinc-800 p-8">
+                <p className="text-5xl animate-bounce">👾</p>
+                <h3 className="text-xl font-bold text-white mt-4">Nenhum jogo encontrado</h3>
+                <p className="text-sm text-zinc-400 mt-2">Ajuste os filtros ou crie uma nova ficha para este jogo!</p>
+              </div>
+            )}
+          </>
         )}
 
       </div>
@@ -1529,10 +1619,18 @@ export default function App() {
         triggerConfirm={triggerConfirm}
         isAdmin={isAdmin}
         onUpdateGame={handleUpdateGame}
+        onOpenGameEstimateModal={(g) => setEstimateGameModal(g)}
         onSendEmailClick={(game) => {
           setGmailTargetGame(game);
           setGmailModalOpen(true);
         }}
+      />
+
+      {/* Individual Game Estimate Modal */}
+      <GameEstimateModal
+        isOpen={!!estimateGameModal}
+        onClose={() => setEstimateGameModal(null)}
+        game={estimateGameModal}
       />
 
       {/* Custom dialog components */}
@@ -1572,6 +1670,60 @@ export default function App() {
         game={gmailTargetGame}
         gamesListForReport={games}
         triggerAlert={triggerAlert}
+      />
+
+      <WelcomeRoleModal
+        isOpen={welcomeModalOpen}
+        onSelectViewer={handleSelectViewer}
+        onSelectEditor={handleSelectEditor}
+      />
+
+      <SiteSettingsModal
+        isOpen={settingsModalOpen}
+        onClose={() => setSettingsModalOpen(false)}
+        onOpenImgBB={() => setImgBBModalOpen(true)}
+        onExitAdmin={() => {
+          setIsAdmin(false);
+          sessionStorage.removeItem("admin_unlocked");
+          triggerAlert("Sessão Encerrada", "Você voltou para o Modo de Leitura.");
+        }}
+        driveAuthenticated={isDriveConnected}
+        onConnectDrive={handleConnectDrive}
+        onDisconnectDrive={handleDisconnectDrive}
+        gmailUser={isGmailConnected ? "Conta Gmail Conectada" : null}
+        onConnectGmail={() => {
+          setGmailTargetGame(null);
+          setGmailModalOpen(true);
+        }}
+        onDisconnectGmail={() => {
+          setIsGmailConnected(false);
+          triggerAlert("Gmail Desconectado", "Sua sessão do Gmail foi desconectada.");
+        }}
+      />
+
+      <CustomDriveConnectPrompt
+        isOpen={drivePromptOpen}
+        onConnectAndSave={handleConnectDriveAndSave}
+        onSaveWithoutDrive={() => {
+          setDrivePromptOpen(false);
+          executeSave();
+        }}
+        onCancel={() => setDrivePromptOpen(false)}
+      />
+
+      <ImgBBModal
+        isOpen={imgBBModalOpen}
+        onClose={() => setImgBBModalOpen(false)}
+      />
+
+      {/* Global Image Zoom Lightbox */}
+      <ImageZoomLightbox
+        isOpen={!!globalZoomImage}
+        onClose={() => setGlobalZoomImage(null)}
+        currentSrc={globalZoomImage?.src || null}
+        allImages={globalZoomImage?.allImages}
+        onSelectImage={(src) => setGlobalZoomImage((prev) => (prev ? { ...prev, src } : null))}
+        title={globalZoomImage?.title}
       />
 
       {/* Scroll to Top Button */}

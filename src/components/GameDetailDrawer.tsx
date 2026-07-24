@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useEffect, useMemo } from "react";
-import { Game, DiaryEntry, MediaItem, splitEntities } from "../types";
+import { Game, DiaryEntry, MediaItem, splitEntities, getDlcMode, formatDateDisplay, getGameTrophies } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Calendar, Clock, Star, Edit, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move } from "lucide-react";
+import { X, Calendar, Clock, Star, Edit, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move, Layers, Maximize2, ThumbsUp, ThumbsDown } from "lucide-react";
+import ImageZoomLightbox from "./ImageZoomLightbox";
 import { chipClass, renderStars, renderIcon, getPlatformBadgeStyle } from "./GameCard";
 import { uploadToImgBB } from "../utils/imgbb";
 import { getYoutubeEmbedUrl, isYoutubeUrl, uploadVideoToYoutube } from "../utils/youtube";
@@ -15,6 +16,8 @@ import RichTextEditor from "./RichTextEditor";
 import { DiaryMediaGrid } from "./DiaryMediaGrid";
 import { formatHltbTime } from "../utils/hltbFormatter";
 import { cleanHTMLText } from "../utils/htmlSanitizer";
+import TrophyBadge, { TrophiesList } from "./TrophyBadge";
+import { formatHoursAndMinutes, getTotalGamePlaytimeHours } from "./DashboardView";
 
 const parsePeriodStartDate = (period: string): number => {
   try {
@@ -32,6 +35,10 @@ const parsePeriodStartDate = (period: string): number => {
   return 0;
 };
 
+const formatDate = (dateStr: string | undefined | null) => {
+  return formatDateDisplay(dateStr) || "—";
+};
+
 interface GameDetailDrawerProps {
   game: Game | null;
   isOpen: boolean;
@@ -45,6 +52,7 @@ interface GameDetailDrawerProps {
   isAdmin: boolean;
   onUpdateGame?: (updatedGame: Game) => void;
   onSendEmailClick?: (game: Game) => void;
+  onOpenGameEstimateModal?: (game: Game) => void;
 }
 
 export default function GameDetailDrawer({
@@ -59,7 +67,8 @@ export default function GameDetailDrawer({
   triggerConfirm,
   isAdmin,
   onUpdateGame,
-  onSendEmailClick
+  onSendEmailClick,
+  onOpenGameEstimateModal
 }: GameDetailDrawerProps) {
   const [lastGame, setLastGame] = useState<Game | null>(null);
 
@@ -97,18 +106,26 @@ export default function GameDetailDrawer({
   const [controlsVisible, setControlsVisible] = useState(true);
 
   const allImages = useMemo(() => {
-    if (!game || !game.diary) return [];
+    if (!game) return [];
     const images: string[] = [];
-    sortedDiary.forEach((entry) => {
-      if (entry.medias) {
-        entry.medias.forEach((m) => {
-          const isYt = isYoutubeUrl(m.src);
-          if (!isYt && !m.isVideo) {
-            images.push(m.src);
-          }
-        });
-      }
-    });
+    if (game.cover && !images.includes(game.cover)) {
+      images.push(game.cover);
+    }
+    if ((game.iconType === "upload" || game.iconType === "url") && game.icon && game.icon.startsWith("http") && !images.includes(game.icon)) {
+      images.push(game.icon);
+    }
+    if (game.diary) {
+      sortedDiary.forEach((entry) => {
+        if (entry.medias) {
+          entry.medias.forEach((m) => {
+            const isYt = isYoutubeUrl(m.src);
+            if (!isYt && !m.isVideo && !images.includes(m.src)) {
+              images.push(m.src);
+            }
+          });
+        }
+      });
+    }
     return images;
   }, [sortedDiary, game]);
 
@@ -821,11 +838,22 @@ export default function GameDetailDrawer({
                   onPointerMove={handlePointerMove}
                   onPointerUp={handlePointerUp}
                   onPointerCancel={handlePointerUp}
+                  onClick={() => {
+                    if (!isRepositioningCover && game.cover) {
+                      handleOpenZoom(game.cover);
+                    }
+                  }}
                   style={{ touchAction: "none" }}
-                  className={`relative h-56 sm:h-72 shrink-0 bg-black overflow-hidden ${
-                    isAdmin && isRepositioningCover ? "cursor-move select-none" : ""
+                  className={`relative h-56 sm:h-72 shrink-0 bg-black overflow-hidden group/banner ${
+                    isAdmin && isRepositioningCover ? "cursor-move select-none" : "cursor-zoom-in"
                   }`}
                 >
+                  {!isRepositioningCover && game.cover && (
+                    <div className="absolute top-4 right-4 z-20 opacity-0 group-hover/banner:opacity-100 transition-all duration-300 flex items-center gap-1.5 bg-black/70 backdrop-blur-md px-3 py-1.5 rounded-xl border border-zinc-700/80 text-xs font-bold text-white shadow-xl pointer-events-none">
+                      <Maximize2 size={13} className="text-cyan-400" />
+                      <span>Ampliar Banner</span>
+                    </div>
+                  )}
                   {isAdmin && isRepositioningCover && (
                     <div className="absolute top-4 left-4 bg-black/60 backdrop-blur-md text-zinc-300 text-[10px] uppercase tracking-widest font-bold px-2.5 py-1.5 rounded-lg border border-zinc-800/80 flex items-center gap-1.5 pointer-events-none select-none z-10">
                       <span className="animate-pulse text-cyan-400 font-bold">↕</span> Arraste para Mover • Scroll para Zoom
@@ -837,15 +865,22 @@ export default function GameDetailDrawer({
                       Salvo
                     </div>
                   )}
+                  {/* Background blurred cover to prevent cutoffs when zoom < 100% */}
                   <img
-                    className="w-full h-full object-cover pointer-events-none select-none transform"
+                    src={game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200"}
+                    alt=""
+                    className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-50 select-none pointer-events-none"
+                  />
+                  <img
+                    className="w-full h-full object-cover pointer-events-none select-none transform relative z-10"
                     src={game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200"}
                     alt={game.name}
                     referrerPolicy="no-referrer"
                     style={{
                       objectPosition: `${coverPosX}% ${coverPos}%`,
                       transformOrigin: `${coverPosX}% ${coverPos}%`,
-                      transform: `scale(${coverZoom / 100})`,
+                      transform: `scale(${Math.max(1, coverZoom / 100)})`,
+                      objectFit: "cover",
                       userSelect: "none",
                       transition: isDragging ? "none" : "transform 0.3s ease-out",
                     }}
@@ -919,7 +954,7 @@ export default function GameDetailDrawer({
                             e.stopPropagation();
                             setIsRepositioningCover(true);
                           }}
-                          className="w-8 h-8 flex items-center justify-center rounded-lg bg-zinc-950/80 hover:bg-cyan-500 hover:text-black text-zinc-400 border border-zinc-800 font-extrabold text-xs tracking-widest transition-all duration-300 shadow-lg cursor-pointer animate-fade-in"
+                          className="w-8 h-8 flex items-center justify-center rounded-lg bg-zinc-950/80 hover:bg-cyan-500 hover:text-black text-zinc-400 border border-zinc-800 font-extrabold text-xs tracking-widest transition-all duration-300 shadow-lg cursor-pointer opacity-0 group-hover/banner:opacity-100 hover:scale-110 active:scale-95"
                           title="Ajustar Capa"
                         >
                           ...
@@ -932,14 +967,32 @@ export default function GameDetailDrawer({
                 {/* Profile overlap */}
                 <div className="px-4 sm:px-8 space-y-6 relative z-10 -mt-16 sm:-mt-24">
                   <div className="flex flex-col sm:flex-row sm:items-end gap-4">
-                    <div className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-zinc-950 border-4 border-purple-500/30 overflow-hidden shadow-2xl flex items-center justify-center shrink-0">
+                    <div 
+                      onClick={() => {
+                        if (game.icon && (game.iconType === "upload" || game.iconType === "url")) {
+                          handleOpenZoom(game.icon);
+                        } else if (game.cover) {
+                          handleOpenZoom(game.cover);
+                        }
+                      }}
+                      className="w-24 h-24 sm:w-28 sm:h-28 rounded-3xl bg-zinc-950 border-4 border-purple-500/30 overflow-hidden shadow-2xl flex items-center justify-center shrink-0 cursor-zoom-in group/icon relative"
+                      title="Clique para ampliar imagem"
+                    >
                       {renderIcon(game, "w-full h-full object-cover")}
+                      <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/icon:opacity-100 transition-all flex items-center justify-center text-white">
+                        <Maximize2 size={20} />
+                      </div>
                     </div>
                     <div className="pb-1 min-w-0">
-                      <h2 className="text-3xl sm:text-4xl font-black text-white leading-tight break-words">
-                        {game.name}
+                      <h2 className="text-3xl sm:text-4xl font-black text-white leading-tight break-words [text-shadow:_0_2px_10px_rgb(0_0_0_/_90%),_0_1px_3px_rgb(0_0_0_/_100%)] drop-shadow-[0_4px_12px_rgba(0,0,0,0.9)]">
+                        <span className="align-middle">{game.name}</span>
+                        {game.trophy && game.trophy !== "none" && (
+                          <span className="inline-flex align-middle ml-2.5 shrink-0">
+                            <TrophyBadge trophy={game.trophy} mode="detail" />
+                          </span>
+                        )}
                       </h2>
-                      <p className="text-xs sm:text-sm text-cyan-300 uppercase tracking-wider font-bold mt-1">
+                      <p className="text-xs sm:text-sm text-cyan-300 uppercase tracking-wider font-bold mt-1 [text-shadow:_0_2px_10px_rgb(0_0_0_/_95%),_0_1px_3px_rgb(0_0_0_/_100%)] drop-shadow-[0_4px_12px_rgba(0,0,0,0.9)]">
                         {game.series || "Série autónoma"}
                       </p>
                     </div>
@@ -964,6 +1017,15 @@ export default function GameDetailDrawer({
                             >
                               <RotateCcw size={10} className="stroke-[2.5]" />
                               Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
+                            </span>
+                          )}
+                          {getDlcMode(game) !== "none" && (
+                            <span 
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-500/40 shadow-sm" 
+                              title={getDlcMode(game) === "plus_dlc" ? "Status: Jogo Base + DLC" : "Status: Expansão / DLC"}
+                            >
+                              <Layers size={10} className="stroke-[2.5]" />
+                              {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC / Expansão"}
                             </span>
                           )}
                         </div>
@@ -996,6 +1058,30 @@ export default function GameDetailDrawer({
                           )}
                         </div>
                       </div>
+                      {(getDlcMode(game) !== "none" || game.dlcNames) && (
+                        <div title="DLCs e Expansões jogadas">
+                          <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">DLCs / Expansões</div>
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {game.dlcNames ? (
+                              splitEntities(game.dlcNames).map((dlc, dIdx) => (
+                                <span 
+                                  key={`${dlc}-${dIdx}`}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-950/50 text-amber-300 border border-amber-500/30 backdrop-blur-md"
+                                  title={`DLC: ${dlc}`}
+                                >
+                                  <Layers size={10} className="shrink-0 text-amber-400" />
+                                  <span>{dlc}</span>
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-amber-400/80 italic text-[11px] inline-flex items-center gap-1">
+                                <Layers size={10} />
+                                {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       <div title="Estúdio responsável pelo desenvolvimento do jogo">
                         <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Estúdio/Developer</div>
                         <div className="mt-1 flex flex-wrap gap-1">
@@ -1047,9 +1133,49 @@ export default function GameDetailDrawer({
                           </div>
                         </div>
                       )}
-                      <div title="Tempo total acumulado de jogatina">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Tempo de Jogo</div>
-                        <div className="mt-0.5 text-cyan-300 font-mono font-extrabold" title={`Tempo de Jogo: ${game.playtime || "00h 00m"}`}>{game.playtime || "00h 00m"}</div>
+                      {/* Compact & Discrete 3-Part Playtime Bar */}
+                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/60 rounded-xl p-2.5 border border-zinc-800/60 my-0.5" title="Divisão do Tempo Investido">
+                        <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Clock size={12} className="text-purple-400" />
+                            <span className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Tempo Investido</span>
+                            {getGameTrophies(game).length > 0 && (
+                              <div className="ml-1">
+                                <TrophiesList trophies={getGameTrophies(game)} mode="detail" />
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-1.5 font-mono text-[11px] flex-wrap">
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-purple-950/40 text-purple-300 border border-purple-500/20" title="Tempo da Jogatina (Atual / Última): tempo dedicado na sessão atual ou final">
+                              <Clock size={10} className="text-purple-400 shrink-0" />
+                              <span className="text-[10px] font-sans text-purple-400/80 mr-0.5">Jogatina:</span>
+                              <strong className="font-mono">{game.playtime || "0h"}</strong>
+                            </div>
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-cyan-950/40 text-cyan-300 border border-cyan-500/20" title="Tempo Extra (Jogatinas Passadas): tempo de outras jogatinas anteriores que foram contabilizadas ao rejogar o jogo">
+                              <Clock size={10} className="text-cyan-400 shrink-0" />
+                              <span className="text-[10px] font-sans text-cyan-400/80 mr-0.5">Passadas:</span>
+                              <strong className="font-mono">{game.additionalPlaytime || "0h"}</strong>
+                            </div>
+                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-950/50 text-emerald-200 font-bold border border-emerald-500/30" title="Tempo Total Investido: somatório total de todas as jogatinas (atual + passadas)">
+                              <Clock size={10} className="text-emerald-400 shrink-0" />
+                              <span className="text-[10px] font-sans text-emerald-400/80 mr-0.5">Total:</span>
+                              <strong className="font-mono">{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</strong>
+                            </div>
+                          </div>
+
+                          {onOpenGameEstimateModal && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenGameEstimateModal(game)}
+                              className="px-2.5 py-1 rounded-xl bg-amber-950/80 hover:bg-amber-900/80 text-amber-300 border border-amber-500/30 text-[11px] font-bold font-mono flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
+                              title="Calcular estimativa de tempo para terminar este jogo"
+                            >
+                              <Clock size={12} className="text-amber-400" />
+                              <span>Calcular Estimativa</span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div title="Data de lançamento oficial do jogo">
                         <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Lançamento</div>
@@ -1225,6 +1351,49 @@ export default function GameDetailDrawer({
                             </a>
                           </div>
                         )}
+                        
+                        {/* Pros & Cons Display Section */}
+                        <div className="mt-3 border-t border-zinc-900/80 pt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                          {/* + Prós */}
+                          <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/20 space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono">
+                              <ThumbsUp size={13} className="text-emerald-400 shrink-0" />
+                              <span>+ Prós (Pontos Positivos)</span>
+                            </div>
+                            {game.pros && splitEntities(game.pros).length > 0 ? (
+                              <ul className="space-y-1 text-xs text-emerald-200/90 font-medium pl-1">
+                                {splitEntities(game.pros).map((pro, pIdx) => (
+                                  <li key={pIdx} className="flex items-start gap-1.5">
+                                    <span className="text-emerald-400 font-bold shrink-0">+</span>
+                                    <span>{pro}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-[11px] text-zinc-500 italic">Nenhum ponto positivo cadastrado.</p>
+                            )}
+                          </div>
+
+                          {/* - Contras */}
+                          <div className="p-3 rounded-2xl bg-rose-950/20 border border-rose-500/20 space-y-1.5">
+                            <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-rose-400 font-mono">
+                              <ThumbsDown size={13} className="text-rose-400 shrink-0" />
+                              <span>- Contras (Pontos Negativos)</span>
+                            </div>
+                            {game.cons && splitEntities(game.cons).length > 0 ? (
+                              <ul className="space-y-1 text-xs text-rose-200/90 font-medium pl-1">
+                                {splitEntities(game.cons).map((con, cIdx) => (
+                                  <li key={cIdx} className="flex items-start gap-1.5">
+                                    <span className="text-rose-400 font-bold shrink-0">-</span>
+                                    <span>{con}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-[11px] text-zinc-500 italic">Nenhum ponto negativo cadastrado.</p>
+                            )}
+                          </div>
+                        </div>
                       </div>
 
                       <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-900/60 pt-3 mt-1">
@@ -1731,142 +1900,15 @@ export default function GameDetailDrawer({
       )}
       </AnimatePresence>
 
-      {/* Zoomed Image Dialog Overlay */}
-      <AnimatePresence>
-        {zoomedImage && (
-          <div 
-            key="zoomed-image-portal-wrapper"
-            className="fixed inset-0 z-[100] flex flex-col items-center justify-center p-2 sm:p-4"
-            onWheel={(e) => {
-              const factor = 0.08;
-              if (e.deltaY < 0) {
-                setZoomScale((prev) => Math.min(prev + factor, 5));
-              } else {
-                setZoomScale((prev) => Math.max(prev - factor, 0.5));
-              }
-            }}
-          >
-            <motion.div
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="absolute inset-0 bg-black/95 backdrop-blur-md cursor-zoom-out"
-              onClick={() => setZoomedImage(null)}
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 15 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 15 }}
-              transition={{ type: "spring", damping: 28, stiffness: 350 }}
-              className="relative w-full max-w-7xl h-full max-h-[92vh] z-10 flex flex-col items-center justify-center overflow-hidden"
-            >
-              <div className="w-full h-full flex items-center justify-center p-2 sm:p-4 select-none">
-                <motion.img
-                  drag
-                  dragSnapToOrigin={true}
-                  dragTransition={{ bounceStiffness: 250, bounceDamping: 25 }}
-                  animate={{ scale: zoomScale }}
-                  transition={{ type: "spring", stiffness: 300, damping: 30 }}
-                  src={zoomedImage}
-                  alt="Imagem ampliada do diário"
-                  className="max-w-full max-h-[82vh] sm:max-h-[85vh] object-contain rounded-2xl shadow-2xl cursor-grab active:cursor-grabbing border border-zinc-850 select-none animate-fade-in"
-                  referrerPolicy="no-referrer"
-                  onError={(e: any) => {
-                    (e.target as HTMLImageElement).src = "https://placehold.co/800x600/040406/ffffff?text=Falha+de+Mídia";
-                  }}
-                />
-              </div>
-
-              {/* Prev & Next Floating Navigation Buttons */}
-              {allImages.length > 1 && (
-                <>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handlePrevImage();
-                    }}
-                    className={`absolute left-4 sm:left-6 top-1/2 -translate-y-1/2 p-3 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-white transition-all cursor-pointer border border-zinc-800/80 shadow-xl z-30 flex items-center justify-center hover:scale-105 active:scale-95 duration-500 ${
-                      controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
-                    }`}
-                    aria-label="Imagem anterior"
-                    title="Imagem anterior (Seta esquerda)"
-                  >
-                    <ChevronLeft size={24} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleNextImage();
-                    }}
-                    className={`absolute right-4 sm:right-6 top-1/2 -translate-y-1/2 p-3 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-white transition-all cursor-pointer border border-zinc-800/80 shadow-xl z-30 flex items-center justify-center hover:scale-105 active:scale-95 duration-500 ${
-                      controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
-                    }`}
-                    aria-label="Próxima imagem"
-                    title="Próxima imagem (Seta direita)"
-                  >
-                    <ChevronRight size={24} />
-                  </button>
-                </>
-              )}
-
-              {/* Zoom & Pan floating controls with index counter */}
-              <div className={`absolute bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 bg-zinc-950/90 border border-zinc-800 backdrop-blur-md px-4 py-2.5 rounded-2xl shadow-2xl select-none z-20 transition-all duration-500 ${
-                controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
-              }`}>
-                <button
-                  type="button"
-                  onClick={() => setZoomScale(prev => Math.max(prev - 0.25, 0.5))}
-                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-                  title="Diminuir Zoom"
-                >
-                  <ZoomOut size={16} />
-                </button>
-                <span className="text-xs font-mono font-bold text-zinc-300 min-w-[55px] text-center">
-                  {Math.round(zoomScale * 100)}%
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setZoomScale(prev => Math.min(prev + 0.25, 5))}
-                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-                  title="Aumentar Zoom"
-                >
-                  <ZoomIn size={16} />
-                </button>
-                <div className="w-px h-5 bg-zinc-800" />
-                <button
-                  type="button"
-                  onClick={() => setZoomScale(1)}
-                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-                  title="Redefinir Zoom"
-                >
-                  <RotateCcw size={16} />
-                </button>
-                {allImages.length > 1 && (
-                  <>
-                    <div className="w-px h-5 bg-zinc-800" />
-                    <span className="text-xs font-mono font-bold text-zinc-400">
-                      {allImages.indexOf(zoomedImage) + 1} / {allImages.length}
-                    </span>
-                  </>
-                )}
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setZoomedImage(null)}
-                className={`absolute top-4 right-4 p-2.5 rounded-full bg-zinc-900 hover:bg-zinc-800 text-white transition-all cursor-pointer border border-zinc-800/80 shadow-xl z-30 flex items-center justify-center duration-500 ${
-                  controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
-                }`}
-                aria-label="Fechar zoom"
-              >
-                <X size={20} />
-              </button>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      {/* Zoomed Image Lightbox */}
+      <ImageZoomLightbox
+        isOpen={!!zoomedImage}
+        onClose={() => setZoomedImage(null)}
+        currentSrc={zoomedImage}
+        allImages={allImages}
+        onSelectImage={(src) => setZoomedImage(src)}
+        title={game?.name ? `Mídias - ${game.name}` : undefined}
+      />
     </>
   );
 }

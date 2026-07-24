@@ -4,9 +4,9 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Game } from "../types";
+import { Game, getDlcMode, getGameTrophies } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown } from "lucide-react";
 import { COVER_BANK } from "../data";
 import { uploadToImgBB } from "../utils/imgbb";
 import { formatHltbTime } from "../utils/hltbFormatter";
@@ -48,8 +48,33 @@ export default function GameFormModal({
   const [publisher, setPublisher] = useState("");
   const [studio, setStudio] = useState("");
   const [playtime, setPlaytime] = useState("");
+  const [additionalPlaytime, setAdditionalPlaytime] = useState("");
+  const [trophy, setTrophy] = useState<"none" | "silver" | "gold" | "platinum">("none");
+  const [selectedTrophies, setSelectedTrophies] = useState<string[]>([]);
+
+  const addTrophy = (type: "silver" | "gold" | "platinum") => {
+    setSelectedTrophies((prev) => [...prev, type]);
+  };
+
+  const removeTrophy = (type: "silver" | "gold" | "platinum") => {
+    setSelectedTrophies((prev) => {
+      const idx = prev.lastIndexOf(type);
+      if (idx === -1) return prev;
+      const next = [...prev];
+      next.splice(idx, 1);
+      return next;
+    });
+  };
+
+  const silverCount = selectedTrophies.filter((t) => t === "silver").length;
+  const goldCount = selectedTrophies.filter((t) => t === "gold").length;
+  const platinumCount = selectedTrophies.filter((t) => t === "platinum").length;
+  const [pros, setPros] = useState("");
+  const [cons, setCons] = useState("");
   const [replayed, setReplayed] = useState(false);
   const [replayCount, setReplayCount] = useState<number>(0);
+  const [dlcMode, setDlcMode] = useState<"none" | "dlc" | "plus_dlc">("none");
+  const [dlcNames, setDlcNames] = useState("");
   const [platform, setPlatform] = useState("");
   const [difficulty, setDifficulty] = useState("");
   const [rating, setRating] = useState(0);
@@ -385,7 +410,14 @@ export default function GameFormModal({
       setStudio(game.studio || game.developer || "");
       setReplayed(!!game.replayed);
       setReplayCount(game.replayCount || 0);
+      setDlcMode(getDlcMode(game));
+      setDlcNames(game.dlcNames || "");
       setPlaytime(game.playtime || "");
+      setAdditionalPlaytime(game.additionalPlaytime || "");
+      setTrophy(game.trophy || "none");
+      setSelectedTrophies(getGameTrophies(game));
+      setPros(game.pros || "");
+      setCons(game.cons || "");
       setPlatform(game.platform || "");
       setDifficulty(game.difficulty || "");
       setRating(game.rating || 0);
@@ -443,7 +475,14 @@ export default function GameFormModal({
       setStudio("");
       setReplayed(false);
       setReplayCount(0);
+      setDlcMode("none");
+      setDlcNames("");
       setPlaytime("");
+      setAdditionalPlaytime("");
+      setTrophy("none");
+      setSelectedTrophies([]);
+      setPros("");
+      setCons("");
       setPlatform("");
       setDifficulty("");
       setRating(0);
@@ -650,6 +689,11 @@ export default function GameFormModal({
       publisher: publisher.trim(),
       studio: studio.trim(),
       playtime: playtime.trim() || "00h 00m",
+      additionalPlaytime: additionalPlaytime.trim(),
+      trophy: selectedTrophies.length > 0 ? (selectedTrophies.includes("platinum") ? "platinum" : selectedTrophies.includes("gold") ? "gold" : "silver") : "none",
+      trophies: selectedTrophies,
+      pros: pros.trim(),
+      cons: cons.trim(),
       rating: Math.min(5, Math.max(0, rating)),
       startDate,
       endDate,
@@ -660,6 +704,9 @@ export default function GameFormModal({
       status: selectedStatus,
       replayed,
       replayCount: replayed ? Math.max(1, replayCount) : 0,
+      dlcMode,
+      dlcNames: dlcMode !== "none" ? dlcNames.trim() : "",
+      isDlc: dlcMode === "dlc" || dlcMode === "plus_dlc",
       difficulty: difficulty.trim(),
       genre: selectedGenres,
       tags: selectedTags,
@@ -690,18 +737,37 @@ export default function GameFormModal({
             initial={{ opacity: 0, scale: 0.95, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 15 }}
-            className="bg-zinc-950 rounded-2xl max-w-2xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-purple-500/30 relative z-10"
+            className="bg-zinc-950 rounded-2xl max-w-5xl lg:max-w-6xl xl:max-w-7xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-purple-500/30 relative z-10"
           >
-            <div className="p-6 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/50 sticky top-0 backdrop-blur z-30">
-              <h3 className="text-lg font-bold text-white">
+            <div className="p-4 sm:p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/95 sticky top-0 backdrop-blur-md z-30 shadow-md gap-3">
+              <h3 className="text-base sm:text-lg font-bold text-white truncate">
                 {game ? "Editar Ficha de Jogo" : "Adicionar Novo Jogo"}
               </h3>
-              <button
-                onClick={onClose}
-                className="text-zinc-400 hover:text-white transition-colors p-1.5 hover:bg-zinc-800 rounded-lg"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-semibold hover:bg-zinc-800 transition-all text-xs cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  form="game-form"
+                  className="btn-neon px-4 py-2 sm:px-5 sm:py-2 rounded-xl bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-bold text-xs sm:text-sm shadow-lg shadow-purple-600/20 cursor-pointer flex items-center gap-1.5"
+                >
+                  <Check size={15} />
+                  <span>Salvar Ficha</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="text-zinc-400 hover:text-white transition-colors p-1.5 hover:bg-zinc-800 rounded-lg ml-0.5 cursor-pointer"
+                  title="Fechar"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             {isSelectingCandidate && (
@@ -787,7 +853,7 @@ export default function GameFormModal({
               </div>
             )}
 
-            <form onSubmit={handleSubmit} className="p-6 space-y-5">
+            <form id="game-form" onSubmit={handleSubmit} className="p-6 space-y-5">
               <div>
                 <div className="flex justify-between items-center mb-1.5">
                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
@@ -892,15 +958,196 @@ export default function GameFormModal({
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                    Tempo de Jogo
+                    Tempo de Jogo (Esta Jogatina)
                   </label>
                   <input
                     type="text"
                     value={playtime}
                     onChange={(e) => setPlaytime(e.target.value)}
-                    placeholder="Ex: 42h 15m"
+                    placeholder="Ex: 42h 15m ou 1000h 00m"
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
                   />
+                  <p className="text-[10px] text-zinc-500 mt-1 font-sans">
+                    Tempo investido nesta jogatina específica.
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                    Horas Adicionais (Outras Jogatinas)
+                  </label>
+                  <input
+                    type="text"
+                    value={additionalPlaytime}
+                    onChange={(e) => setAdditionalPlaytime(e.target.value)}
+                    placeholder="Ex: 1200h 30m"
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
+                  />
+                  <p className="text-[10px] text-zinc-500 mt-1 font-sans">
+                    Tempo de outras jogatinas / re-plays acumulado ao total investido.
+                  </p>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
+                      Troféus de Conquista (Multi-Seleção & Múltiplas Cópias)
+                    </label>
+                    {selectedTrophies.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTrophies([])}
+                        className="text-[10px] text-zinc-500 hover:text-rose-400 font-bold uppercase transition-colors cursor-pointer"
+                      >
+                        Limpar troféus
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {/* Silver Card */}
+                    <div className={`p-2.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${silverCount > 0 ? "bg-slate-900/90 border-slate-500/50 shadow-[0_0_10px_rgba(203,213,225,0.2)]" : "bg-zinc-900/90 border-zinc-800"}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <Trophy size={14} fill="currentColor" className={silverCount > 0 ? "text-slate-300" : "text-zinc-600"} />
+                          <span className={`text-xs font-bold ${silverCount > 0 ? "text-slate-200" : "text-zinc-400"}`}>Prata</span>
+                        </div>
+                        {silverCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-slate-800 text-slate-200 font-mono text-[10px] font-extrabold border border-slate-600 shrink-0">
+                            x{silverCount}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 w-full">
+                        <button
+                          type="button"
+                          onClick={() => removeTrophy("silver")}
+                          disabled={silverCount === 0}
+                          className="w-7 h-7 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                          title="Remover 1 Prata"
+                        >
+                          -
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addTrophy("silver")}
+                          className="flex-1 h-7 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-100 border border-slate-500/40 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                          title="Adicionar 1 Prata"
+                        >
+                          <Plus size={12} className="shrink-0" />
+                          <span className="truncate">Prata</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Gold Card */}
+                    <div className={`p-2.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${goldCount > 0 ? "bg-amber-950/80 border-amber-500/60 shadow-[0_0_12px_rgba(251,191,36,0.25)]" : "bg-zinc-900/90 border-zinc-800"}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <Trophy size={14} fill="currentColor" className={goldCount > 0 ? "text-amber-400" : "text-zinc-600"} />
+                          <span className={`text-xs font-bold ${goldCount > 0 ? "text-amber-300" : "text-zinc-400"}`}>Ouro</span>
+                        </div>
+                        {goldCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-amber-900 text-amber-300 font-mono text-[10px] font-extrabold border border-amber-500 shrink-0">
+                            x{goldCount}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 w-full">
+                        <button
+                          type="button"
+                          onClick={() => removeTrophy("gold")}
+                          disabled={goldCount === 0}
+                          className="w-7 h-7 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                          title="Remover 1 Ouro"
+                        >
+                          -
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addTrophy("gold")}
+                          className="flex-1 h-7 rounded-xl bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-500/50 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                          title="Adicionar 1 Ouro"
+                        >
+                          <Plus size={12} className="shrink-0" />
+                          <span className="truncate">Ouro</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Platinum Card */}
+                    <div className={`p-2.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${platinumCount > 0 ? "bg-cyan-950/90 border-cyan-400/80 shadow-[0_0_14px_rgba(34,211,238,0.3)]" : "bg-zinc-900/90 border-zinc-800"}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <Trophy size={14} fill="currentColor" className={platinumCount > 0 ? "text-cyan-200 animate-pulse" : "text-zinc-600"} />
+                          <span className={`text-xs font-bold ${platinumCount > 0 ? "text-cyan-100" : "text-zinc-400"}`}>Platina</span>
+                        </div>
+                        {platinumCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-full bg-cyan-900 text-cyan-200 font-mono text-[10px] font-extrabold border border-cyan-400 shrink-0">
+                            x{platinumCount}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1.5 w-full">
+                        <button
+                          type="button"
+                          onClick={() => removeTrophy("platinum")}
+                          disabled={platinumCount === 0}
+                          className="w-7 h-7 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                          title="Remover 1 Platina"
+                        >
+                          -
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => addTrophy("platinum")}
+                          className="flex-1 h-7 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-100 border border-cyan-400/60 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                          title="Adicionar 1 Platina"
+                        >
+                          <Plus size={12} className="shrink-0" />
+                          <span className="truncate">Platina</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Display selected badges list below */}
+                  {selectedTrophies.length > 0 && (
+                    <div className="mt-2.5 p-2 bg-zinc-950 border border-zinc-800 rounded-xl flex items-center gap-1.5 flex-wrap min-h-[38px]">
+                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mr-1">
+                        Troféus ({selectedTrophies.length}):
+                      </span>
+                      {selectedTrophies.map((tr, idx) => (
+                        <span
+                          key={idx}
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-xs font-semibold ${
+                            tr === "platinum"
+                              ? "bg-cyan-950/80 border-cyan-400/60 text-cyan-200"
+                              : tr === "gold"
+                              ? "bg-amber-950/80 border-amber-500/60 text-amber-300"
+                              : "bg-slate-800/80 border-slate-500/60 text-slate-200"
+                          }`}
+                        >
+                          <Trophy size={11} fill="currentColor" />
+                          <span className="capitalize">{tr === "platinum" ? "Platina" : tr === "gold" ? "Ouro" : "Prata"}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedTrophies((prev) => {
+                                const copy = [...prev];
+                                copy.splice(idx, 1);
+                                return copy;
+                              });
+                            }}
+                            className="text-zinc-400 hover:text-rose-400 font-bold ml-1 cursor-pointer"
+                            title="Remover este troféu"
+                          >
+                            ×
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -926,6 +1173,448 @@ export default function GameFormModal({
                     onChange={(e) => setEndDate(e.target.value)}
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
                   />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                  Plataforma
+                </label>
+                <input
+                  type="text"
+                  value={platform}
+                  onChange={(e) => setPlatform(e.target.value)}
+                  placeholder="Ex: Nintendo Switch, PS5, PC"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                  Dificuldade
+                </label>
+                <input
+                  type="text"
+                  value={difficulty}
+                  onChange={(e) => setDifficulty(e.target.value)}
+                  placeholder="Ex: Normal, Hard, Marcha da Morte"
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                />
+              </div>
+
+              {/* Pros & Cons Inputs */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-emerald-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5 font-mono">
+                    <ThumbsUp size={13} className="text-emerald-400 shrink-0" />
+                    <span>+ Prós (Separados por ';')</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={pros}
+                    onChange={(e) => setPros(e.target.value)}
+                    placeholder="Ex: Gráficos espetaculares; Trilha sonora épica; Jogabilidade fluida"
+                    className="w-full bg-zinc-900 border border-emerald-900/40 rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  />
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Insira os pontos positivos do jogo separados por ponto e vírgula (;).
+                  </p>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-rose-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5 font-mono">
+                    <ThumbsDown size={13} className="text-rose-400 shrink-0" />
+                    <span>- Contras (Separados por ';')</span>
+                  </label>
+                  <textarea
+                    rows={2}
+                    value={cons}
+                    onChange={(e) => setCons(e.target.value)}
+                    placeholder="Ex: História curta; Carregamentos lentos; Quedas de taxa de quadros"
+                    className="w-full bg-zinc-900 border border-rose-900/40 rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+                  />
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Insira os pontos negativos do jogo separados por ponto e vírgula (;).
+                  </p>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">
+                  Categoria de Progresso *
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+                  {["Jogando", "Em Hiatus", "Terminado", "Backlog", "Desistido"].map((status) => (
+                    <label key={status} className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={selectedStatus.includes(status)}
+                        onChange={() => toggleStatus(status)}
+                        className="rounded border-zinc-800 bg-zinc-950 text-cyan-500 focus:ring-cyan-500 h-4 w-4 accent-cyan-500"
+                      />
+                      {status}
+                    </label>
+                  ))}
+                </div>
+                <div className="mt-3 px-1 flex flex-col sm:flex-row sm:items-center gap-4 pt-2 border-t border-zinc-800/60">
+                  <div className="flex-1">
+                    <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={replayed}
+                        onChange={(e) => {
+                          setReplayed(e.target.checked);
+                          if (e.target.checked && replayCount === 0) {
+                            setReplayCount(1);
+                          }
+                        }}
+                        className="rounded border-zinc-800 bg-zinc-950 text-purple-500 focus:ring-purple-500 h-4 w-4 accent-purple-500"
+                      />
+                      <span className="flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider text-purple-300">
+                        <RotateCcw size={12} className="stroke-[2.5]" />
+                        Replay
+                      </span>
+                    </label>
+                    {replayed && (
+                      <div className="mt-2 pl-6 flex items-center gap-2 animate-fade-in">
+                        <span className="text-xs text-zinc-400 font-medium">Quantidade:</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={replayCount || 1}
+                          onChange={(e) => setReplayCount(Math.max(1, parseInt(e.target.value) || 1))}
+                          className="w-16 px-2 py-1 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white font-mono text-center focus:outline-none focus:border-purple-500"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex-1">
+                    <span className="block font-bold text-xs uppercase tracking-wider text-amber-300 mb-1.5 flex items-center gap-1.5">
+                      <Layers size={13} className="stroke-[2.5]" />
+                      Marcador de DLC / Expansão
+                    </span>
+                    <div className="grid grid-cols-3 gap-1.5 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+                      <button
+                        type="button"
+                        onClick={() => setDlcMode("none")}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                          dlcMode === "none"
+                            ? "bg-zinc-800 text-white shadow"
+                            : "text-zinc-500 hover:text-zinc-300"
+                        }`}
+                      >
+                        Nenhum
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDlcMode("dlc")}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                          dlcMode === "dlc"
+                            ? "bg-amber-950 text-amber-300 border border-amber-500/50 shadow"
+                            : "text-zinc-500 hover:text-amber-300"
+                        }`}
+                        title="Apenas a Expansão / DLC"
+                      >
+                        <Layers size={11} />
+                        DLC
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDlcMode("plus_dlc")}
+                        className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                          dlcMode === "plus_dlc"
+                            ? "bg-amber-950 text-amber-300 border border-amber-500/50 shadow"
+                            : "text-zinc-500 hover:text-amber-300"
+                        }`}
+                        title="Jogo Base + Conteúdo DLC"
+                      >
+                        <Layers size={11} />
+                        +DLC
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-zinc-500 italic mt-1 font-sans">
+                      {dlcMode === "none" && "Jogo padrão sem marcador adicional"}
+                      {dlcMode === "dlc" && "Indica que este item é uma Expansão / DLC individual"}
+                      {dlcMode === "plus_dlc" && "Indica que a jogada conta o Jogo Base + DLC"}
+                    </p>
+
+                    {dlcMode !== "none" && (
+                      <div className="mt-3 animate-fade-in">
+                        <label className="block text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">
+                          Nome das DLCs / Expansões Jogadas
+                        </label>
+                        <input
+                          type="text"
+                          value={dlcNames}
+                          onChange={(e) => setDlcNames(e.target.value)}
+                          placeholder="Ex: Shadow of the Erdtree; Sunbreak; Blood and Wine"
+                          className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-amber-900/40 text-amber-200 placeholder-zinc-600 outline-none focus:ring-2 focus:ring-amber-500 text-xs"
+                        />
+                        <p className="text-[10px] text-zinc-500 italic mt-1">
+                          Separe múltiplos nomes de DLC por ponto e vírgula ( ; )
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
+                    Gêneros *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewGenre(!showNewGenre)}
+                    className="text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-extrabold hover:underline"
+                  >
+                    Criar Gênero
+                  </button>
+                </div>
+
+                {showNewGenre && (
+                  <div className="mb-3 flex gap-2 p-3 rounded-2xl bg-zinc-900 border border-zinc-800">
+                    <input
+                      type="text"
+                      value={newGenreVal}
+                      onChange={(e) => setNewGenreVal(e.target.value)}
+                      placeholder="Nome do gênero..."
+                      className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={submitCustomGenre}
+                      className="px-4 py-2 rounded-xl bg-cyan-600 text-white font-bold text-xs"
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-32 overflow-y-auto">
+                  {globalGenres.map((genre, idx) => {
+                    const isSelected = selectedGenres.includes(genre);
+                    const isEditing = editingGenre === genre;
+                    return isEditing ? (
+                      <div
+                        key={`genre-edit-${genre}-${idx}`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
+                      >
+                        <input
+                          type="text"
+                          value={editingGenreValue}
+                          onChange={(e) => setEditingGenreValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (onEditGlobalGenre && editingGenreValue.trim()) {
+                                onEditGlobalGenre(genre, editingGenreValue.trim());
+                              }
+                              setEditingGenre(null);
+                            } else if (e.key === "Escape") {
+                              setEditingGenre(null);
+                            }
+                          }}
+                          className="w-20 bg-transparent text-white outline-none border-b border-cyan-500 text-xs py-0.5"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onEditGlobalGenre && editingGenreValue.trim()) {
+                              onEditGlobalGenre(genre, editingGenreValue.trim());
+                            }
+                            setEditingGenre(null);
+                          }}
+                          className="text-green-400 hover:text-green-300 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingGenre(null)}
+                          className="text-zinc-400 hover:text-zinc-200 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        key={`genre-view-${genre}-${idx}`}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
+                          isSelected
+                            ? "bg-purple-600/25 text-purple-300 border-purple-500/40"
+                            : "bg-zinc-950 text-zinc-400 border-zinc-800"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleGenre(genre)}
+                          className="hover:text-white transition-colors cursor-pointer"
+                        >
+                          {genre}
+                        </button>
+                        {onEditGlobalGenre && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingGenre(genre);
+                              setEditingGenreValue(genre);
+                            }}
+                            className="text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
+                            title="Editar gênero"
+                          >
+                            ✎
+                          </button>
+                        )}
+                        {onDeleteGlobalGenre && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteGlobalGenre(genre);
+                            }}
+                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-0.5"
+                            title="Excluir gênero"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
+                    Etiquetas / Tags
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowNewTag(!showNewTag)}
+                    className="text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-extrabold hover:underline"
+                  >
+                    Criar Tag
+                  </button>
+                </div>
+
+                {showNewTag && (
+                  <div className="mb-3 flex gap-2 p-3 rounded-2xl bg-zinc-900 border border-zinc-800">
+                    <input
+                      type="text"
+                      value={newTagVal}
+                      onChange={(e) => setNewTagVal(e.target.value)}
+                      placeholder="Tag customizada..."
+                      className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={submitCustomTag}
+                      className="px-4 py-2 rounded-xl bg-cyan-600 text-white font-bold text-xs"
+                    >
+                      Confirmar
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-36 overflow-y-auto">
+                  {globalTags.map((tag, idx) => {
+                    const isSelected = selectedTags.includes(tag);
+                    const isEditing = editingTag === tag;
+                    return isEditing ? (
+                      <div
+                        key={`tag-edit-${tag}-${idx}`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
+                      >
+                        <input
+                          type="text"
+                          value={editingTagValue}
+                          onChange={(e) => setEditingTagValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              if (onEditGlobalTag && editingTagValue.trim()) {
+                                onEditGlobalTag(tag, editingTagValue.trim());
+                              }
+                              setEditingTag(null);
+                            } else if (e.key === "Escape") {
+                              setEditingTag(null);
+                            }
+                          }}
+                          className="w-20 bg-transparent text-white outline-none border-b border-cyan-500 text-xs py-0.5"
+                          autoFocus
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (onEditGlobalTag && editingTagValue.trim()) {
+                              onEditGlobalTag(tag, editingTagValue.trim());
+                            }
+                            setEditingTag(null);
+                          }}
+                          className="text-green-400 hover:text-green-300 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ✓
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingTag(null)}
+                          className="text-zinc-400 hover:text-zinc-200 text-xs font-bold px-1 cursor-pointer"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
+                      <div
+                        key={`tag-view-${tag}-${idx}`}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
+                          isSelected
+                            ? "bg-cyan-600/25 text-cyan-300 border-cyan-500/40"
+                            : "bg-zinc-950 text-zinc-400 border-zinc-800"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => toggleTag(tag)}
+                          className="hover:text-white transition-colors cursor-pointer"
+                        >
+                          {tag}
+                        </button>
+                        {onEditGlobalTag && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setEditingTag(tag);
+                              setEditingTagValue(tag);
+                            }}
+                            className="text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
+                            title="Editar tag"
+                          >
+                            ✎
+                          </button>
+                        )}
+                        {onDeleteGlobalTag && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDeleteGlobalTag(tag);
+                            }}
+                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-0.5"
+                            title="Excluir tag"
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1206,341 +1895,6 @@ export default function GameFormModal({
                     )}
                   </div>
                 )}
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                  Plataforma
-                </label>
-                <input
-                  type="text"
-                  value={platform}
-                  onChange={(e) => setPlatform(e.target.value)}
-                  placeholder="Ex: Nintendo Switch, PS5, PC"
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                  Dificuldade
-                </label>
-                <input
-                  type="text"
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value)}
-                  placeholder="Ex: Normal, Hard, Marcha da Morte"
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-2">
-                  Categoria de Progresso *
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-                  {["Jogando", "Em Hiatus", "Terminado", "Backlog", "Desistido"].map((status) => (
-                    <label key={status} className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={selectedStatus.includes(status)}
-                        onChange={() => toggleStatus(status)}
-                        className="rounded border-zinc-800 bg-zinc-950 text-cyan-500 focus:ring-cyan-500 h-4 w-4 accent-cyan-500"
-                      />
-                      {status}
-                    </label>
-                  ))}
-                </div>
-                <div className="mt-2 px-1">
-                  <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={replayed}
-                      onChange={(e) => {
-                        setReplayed(e.target.checked);
-                        if (e.target.checked && replayCount === 0) {
-                          setReplayCount(1);
-                        }
-                      }}
-                      className="rounded border-zinc-800 bg-zinc-950 text-purple-500 focus:ring-purple-500 h-4 w-4 accent-purple-500"
-                    />
-                    <span className="flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider text-purple-300">
-                      <RotateCcw size={12} className="stroke-[2.5]" />
-                      Replay
-                    </span>
-                  </label>
-                  {replayed && (
-                    <div className="mt-2 pl-6 flex items-center gap-2 animate-fade-in">
-                      <span className="text-xs text-zinc-400 font-medium">Quantidade de Replays:</span>
-                      <input
-                        type="number"
-                        min="1"
-                        value={replayCount || 1}
-                        onChange={(e) => setReplayCount(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-16 px-2 py-1 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white font-mono text-center focus:outline-none focus:border-purple-500"
-                      />
-                    </div>
-                  )}
-                  <p className="text-[10px] text-zinc-500 italic mt-1 font-sans">Marca que as estatísticas atuais correspondem a uma nova jogada (Replay)</p>
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
-                    Gêneros *
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewGenre(!showNewGenre)}
-                    className="text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-extrabold hover:underline"
-                  >
-                    Criar Gênero
-                  </button>
-                </div>
-
-                {showNewGenre && (
-                  <div className="mb-3 flex gap-2 p-3 rounded-2xl bg-zinc-900 border border-zinc-800">
-                    <input
-                      type="text"
-                      value={newGenreVal}
-                      onChange={(e) => setNewGenreVal(e.target.value)}
-                      placeholder="Nome do gênero..."
-                      className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={submitCustomGenre}
-                      className="px-4 py-2 rounded-xl bg-cyan-600 text-white font-bold text-xs"
-                    >
-                      Confirmar
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-32 overflow-y-auto">
-                  {globalGenres.map((genre, idx) => {
-                    const isSelected = selectedGenres.includes(genre);
-                    const isEditing = editingGenre === genre;
-                    return isEditing ? (
-                      <div
-                        key={`genre-edit-${genre}-${idx}`}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
-                      >
-                        <input
-                          type="text"
-                          value={editingGenreValue}
-                          onChange={(e) => setEditingGenreValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              if (onEditGlobalGenre && editingGenreValue.trim()) {
-                                onEditGlobalGenre(genre, editingGenreValue.trim());
-                              }
-                              setEditingGenre(null);
-                            } else if (e.key === "Escape") {
-                              setEditingGenre(null);
-                            }
-                          }}
-                          className="w-20 bg-transparent text-white outline-none border-b border-cyan-500 text-xs py-0.5"
-                          autoFocus
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (onEditGlobalGenre && editingGenreValue.trim()) {
-                              onEditGlobalGenre(genre, editingGenreValue.trim());
-                            }
-                            setEditingGenre(null);
-                          }}
-                          className="text-green-400 hover:text-green-300 text-xs font-bold px-1 cursor-pointer"
-                        >
-                          ✓
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingGenre(null)}
-                          className="text-zinc-400 hover:text-zinc-200 text-xs font-bold px-1 cursor-pointer"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ) : (
-                      <div
-                        key={`genre-view-${genre}-${idx}`}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
-                          isSelected
-                            ? "bg-purple-600/25 text-purple-300 border-purple-500/40"
-                            : "bg-zinc-950 text-zinc-400 border-zinc-800"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => toggleGenre(genre)}
-                          className="hover:text-white transition-colors cursor-pointer"
-                        >
-                          {genre}
-                        </button>
-                        {onEditGlobalGenre && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingGenre(genre);
-                              setEditingGenreValue(genre);
-                            }}
-                            className="text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
-                            title="Editar gênero"
-                          >
-                            ✎
-                          </button>
-                        )}
-                        {onDeleteGlobalGenre && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteGlobalGenre(genre);
-                            }}
-                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-0.5"
-                            title="Excluir gênero"
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest">
-                    Etiquetas / Tags
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => setShowNewTag(!showNewTag)}
-                    className="text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-extrabold hover:underline"
-                  >
-                    Criar Tag
-                  </button>
-                </div>
-
-                {showNewTag && (
-                  <div className="mb-3 flex gap-2 p-3 rounded-2xl bg-zinc-900 border border-zinc-800">
-                    <input
-                      type="text"
-                      value={newTagVal}
-                      onChange={(e) => setNewTagVal(e.target.value)}
-                      placeholder="Tag customizada..."
-                      className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={submitCustomTag}
-                      className="px-4 py-2 rounded-xl bg-cyan-600 text-white font-bold text-xs"
-                    >
-                      Confirmar
-                    </button>
-                  </div>
-                )}
-
-                <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900 border border-zinc-800 max-h-36 overflow-y-auto">
-                  {globalTags.map((tag, idx) => {
-                    const isSelected = selectedTags.includes(tag);
-                    const isEditing = editingTag === tag;
-                    return isEditing ? (
-                      <div
-                        key={`tag-edit-${tag}-${idx}`}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl border border-zinc-800 bg-zinc-950 text-xs font-semibold"
-                      >
-                        <input
-                          type="text"
-                          value={editingTagValue}
-                          onChange={(e) => setEditingTagValue(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              if (onEditGlobalTag && editingTagValue.trim()) {
-                                onEditGlobalTag(tag, editingTagValue.trim());
-                              }
-                              setEditingTag(null);
-                            } else if (e.key === "Escape") {
-                              setEditingTag(null);
-                            }
-                          }}
-                          className="w-20 bg-transparent text-white outline-none border-b border-cyan-500 text-xs py-0.5"
-                          autoFocus
-                        />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (onEditGlobalTag && editingTagValue.trim()) {
-                              onEditGlobalTag(tag, editingTagValue.trim());
-                            }
-                            setEditingTag(null);
-                          }}
-                          className="text-green-400 hover:text-green-300 text-xs font-bold px-1 cursor-pointer"
-                        >
-                          ✓
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setEditingTag(null)}
-                          className="text-zinc-400 hover:text-zinc-200 text-xs font-bold px-1 cursor-pointer"
-                        >
-                          ×
-                        </button>
-                      </div>
-                    ) : (
-                      <div
-                        key={`tag-view-${tag}-${idx}`}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-xl border text-xs font-semibold transition-all ${
-                          isSelected
-                            ? "bg-cyan-600/25 text-cyan-300 border-cyan-500/40"
-                            : "bg-zinc-950 text-zinc-400 border-zinc-800"
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => toggleTag(tag)}
-                          className="hover:text-white transition-colors cursor-pointer"
-                        >
-                          {tag}
-                        </button>
-                        {onEditGlobalTag && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setEditingTag(tag);
-                              setEditingTagValue(tag);
-                            }}
-                            className="text-zinc-500 hover:text-cyan-400 hover:bg-zinc-800 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-1"
-                            title="Editar tag"
-                          >
-                            ✎
-                          </button>
-                        )}
-                        {onDeleteGlobalTag && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onDeleteGlobalTag(tag);
-                            }}
-                            className="text-zinc-500 hover:text-red-400 hover:bg-zinc-850 p-0.5 rounded transition-all cursor-pointer flex items-center justify-center w-4 h-4 text-xs font-bold ml-0.5"
-                            title="Excluir tag"
-                          >
-                            ×
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
               </div>
 
               <div>

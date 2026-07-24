@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Info, AlertTriangle, Lock } from "lucide-react";
+import { Info, AlertTriangle, Lock, HardDrive } from "lucide-react";
 
 interface AlertProps {
   isOpen: boolean;
@@ -219,6 +219,79 @@ export function CustomPasswordPrompt({ isOpen, title, message, onConfirm, onCanc
           </motion.div>
         </div>
       )}
+    </AnimatePresence>
+  );
+}
+
+interface DriveConnectPromptProps {
+  isOpen: boolean;
+  onConnectAndSave: () => void;
+  onSaveWithoutDrive: () => void;
+  onCancel: () => void;
+}
+
+export function CustomDriveConnectPrompt({
+  isOpen,
+  onConnectAndSave,
+  onSaveWithoutDrive,
+  onCancel,
+}: DriveConnectPromptProps) {
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          className="absolute inset-0 bg-black/85 backdrop-blur-sm"
+          onClick={onCancel}
+        />
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95, y: 10 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.95, y: 10 }}
+          className="w-full max-w-md glass rounded-3xl p-6 space-y-5 shadow-2xl relative z-10 border border-cyan-500/30"
+        >
+          <div className="flex items-start gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-cyan-950/60 text-cyan-400 border border-cyan-500/30 flex items-center justify-center shrink-0">
+              <HardDrive size={22} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h4 className="font-bold text-white text-lg">Conectar ao Google Drive?</h4>
+              <p className="text-xs text-zinc-300 mt-1.5 leading-relaxed">
+                Você não está conectado ao Google Drive no momento. Deseja se conectar para realizar o backup completo das mídias e metadados na nuvem, ou prefere salvar apenas localmente / Firebase?
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 pt-2">
+            <button
+              type="button"
+              onClick={onConnectAndSave}
+              className="w-full px-4 py-3 rounded-2xl bg-gradient-to-r from-cyan-500 to-purple-600 hover:from-cyan-400 hover:to-purple-500 transition-all text-white font-extrabold text-sm shadow-lg shadow-cyan-500/20 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <HardDrive size={16} />
+              Conectar e Fazer Backup
+            </button>
+            <button
+              type="button"
+              onClick={onSaveWithoutDrive}
+              className="w-full px-4 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-300 hover:text-white font-bold hover:bg-zinc-800 transition-all text-xs cursor-pointer"
+            >
+              Salvar Apenas Local / Firebase
+            </button>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="w-full py-2 text-zinc-500 hover:text-zinc-400 text-xs font-semibold transition-all cursor-pointer"
+            >
+              Cancelar
+            </button>
+          </div>
+        </motion.div>
+      </div>
     </AnimatePresence>
   );
 }
