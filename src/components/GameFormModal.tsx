@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Game, getDlcMode, getGameTrophies } from "../types";
+import { Game, TrophyItem, getDlcMode, getGameTrophyItems, parseProConTopic } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown } from "lucide-react";
 import { COVER_BANK } from "../data";
@@ -50,15 +50,15 @@ export default function GameFormModal({
   const [playtime, setPlaytime] = useState("");
   const [additionalPlaytime, setAdditionalPlaytime] = useState("");
   const [trophy, setTrophy] = useState<"none" | "silver" | "gold" | "platinum">("none");
-  const [selectedTrophies, setSelectedTrophies] = useState<string[]>([]);
+  const [selectedTrophyItems, setSelectedTrophyItems] = useState<TrophyItem[]>([]);
 
   const addTrophy = (type: "silver" | "gold" | "platinum") => {
-    setSelectedTrophies((prev) => [...prev, type]);
+    setSelectedTrophyItems((prev) => [...prev, { type, note: "" }]);
   };
 
   const removeTrophy = (type: "silver" | "gold" | "platinum") => {
-    setSelectedTrophies((prev) => {
-      const idx = prev.lastIndexOf(type);
+    setSelectedTrophyItems((prev) => {
+      const idx = prev.map((t) => t.type).lastIndexOf(type);
       if (idx === -1) return prev;
       const next = [...prev];
       next.splice(idx, 1);
@@ -66,13 +66,28 @@ export default function GameFormModal({
     });
   };
 
-  const silverCount = selectedTrophies.filter((t) => t === "silver").length;
-  const goldCount = selectedTrophies.filter((t) => t === "gold").length;
-  const platinumCount = selectedTrophies.filter((t) => t === "platinum").length;
+  const updateTrophyNote = (index: number, note: string) => {
+    setSelectedTrophyItems((prev) => {
+      const next = [...prev];
+      if (next[index]) {
+        next[index] = { ...next[index], note };
+      }
+      return next;
+    });
+  };
+
+  const removeTrophyIndex = (index: number) => {
+    setSelectedTrophyItems((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const silverCount = selectedTrophyItems.filter((t) => t.type === "silver").length;
+  const goldCount = selectedTrophyItems.filter((t) => t.type === "gold").length;
+  const platinumCount = selectedTrophyItems.filter((t) => t.type === "platinum").length;
   const [pros, setPros] = useState("");
   const [cons, setCons] = useState("");
   const [replayed, setReplayed] = useState(false);
   const [replayCount, setReplayCount] = useState<number>(0);
+  const [replayNote, setReplayNote] = useState("");
   const [dlcMode, setDlcMode] = useState<"none" | "dlc" | "plus_dlc">("none");
   const [dlcNames, setDlcNames] = useState("");
   const [platform, setPlatform] = useState("");
@@ -410,12 +425,13 @@ export default function GameFormModal({
       setStudio(game.studio || game.developer || "");
       setReplayed(!!game.replayed);
       setReplayCount(game.replayCount || 0);
+      setReplayNote(game.replayNote || "");
       setDlcMode(getDlcMode(game));
       setDlcNames(game.dlcNames || "");
       setPlaytime(game.playtime || "");
       setAdditionalPlaytime(game.additionalPlaytime || "");
       setTrophy(game.trophy || "none");
-      setSelectedTrophies(getGameTrophies(game));
+      setSelectedTrophyItems(getGameTrophyItems(game));
       setPros(game.pros || "");
       setCons(game.cons || "");
       setPlatform(game.platform || "");
@@ -475,12 +491,13 @@ export default function GameFormModal({
       setStudio("");
       setReplayed(false);
       setReplayCount(0);
+      setReplayNote("");
       setDlcMode("none");
       setDlcNames("");
       setPlaytime("");
       setAdditionalPlaytime("");
       setTrophy("none");
-      setSelectedTrophies([]);
+      setSelectedTrophyItems([]);
       setPros("");
       setCons("");
       setPlatform("");
@@ -682,6 +699,25 @@ export default function GameFormModal({
     // Determine cover
     const finalCover = tempUploadedCover || coverUrl.trim() || COVER_BANK[0];
 
+    const formatAndSortList = (raw: string) => {
+      if (!raw) return "";
+      const items = raw
+        .split(/[;\n\r]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+      items.sort((a, b) => {
+        const topicA = parseProConTopic(a).topic;
+        const topicB = parseProConTopic(b).topic;
+        return topicA.localeCompare(topicB, "pt", { sensitivity: "base" });
+      });
+      return items.join("; ");
+    };
+
+    const trophyTypes = selectedTrophyItems.map((t) => t.type);
+    const highestTrophy = trophyTypes.length > 0
+      ? (trophyTypes.includes("platinum") ? "platinum" : trophyTypes.includes("gold") ? "gold" : "silver")
+      : "none";
+
     onSave({
       id: game?.id,
       name: name.trim(),
@@ -690,10 +726,10 @@ export default function GameFormModal({
       studio: studio.trim(),
       playtime: playtime.trim() || "00h 00m",
       additionalPlaytime: additionalPlaytime.trim(),
-      trophy: selectedTrophies.length > 0 ? (selectedTrophies.includes("platinum") ? "platinum" : selectedTrophies.includes("gold") ? "gold" : "silver") : "none",
-      trophies: selectedTrophies,
-      pros: pros.trim(),
-      cons: cons.trim(),
+      trophy: highestTrophy,
+      trophies: selectedTrophyItems,
+      pros: formatAndSortList(pros),
+      cons: formatAndSortList(cons),
       rating: Math.min(5, Math.max(0, rating)),
       startDate,
       endDate,
@@ -704,6 +740,7 @@ export default function GameFormModal({
       status: selectedStatus,
       replayed,
       replayCount: replayed ? Math.max(1, replayCount) : 0,
+      replayNote: replayed ? replayNote.trim() : "",
       dlcMode,
       dlcNames: dlcMode !== "none" ? dlcNames.trim() : "",
       isDlc: dlcMode === "dlc" || dlcMode === "plus_dlc",
@@ -930,7 +967,7 @@ export default function GameFormModal({
                 />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
                     Nota Pessoal (0-5)
@@ -956,6 +993,10 @@ export default function GameFormModal({
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
                   />
                 </div>
+              </div>
+
+              {/* Tempo de Jogo & Horas Adicionais em Grid Lado a Lado */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
                     Tempo de Jogo (Esta Jogatina)
@@ -964,11 +1005,11 @@ export default function GameFormModal({
                     type="text"
                     value={playtime}
                     onChange={(e) => setPlaytime(e.target.value)}
-                    placeholder="Ex: 42h 15m ou 1000h 00m"
+                    placeholder="Ex: 42h 15m [No PS5, modo 60 FPS]"
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
                   />
                   <p className="text-[10px] text-zinc-500 mt-1 font-sans">
-                    Tempo investido nesta jogatina específica.
+                    Tempo nesta jogatina. Texto entre colchetes <code className="text-cyan-400 font-mono font-bold">[ ]</code> é integrado ao tooltip de contexto!
                   </p>
                 </div>
 
@@ -980,33 +1021,45 @@ export default function GameFormModal({
                     type="text"
                     value={additionalPlaytime}
                     onChange={(e) => setAdditionalPlaytime(e.target.value)}
-                    placeholder="Ex: 1200h 30m"
+                    placeholder="Ex: 120h 30m [Zerado no Switch em 2021]"
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-purple-500 font-mono"
                   />
                   <p className="text-[10px] text-zinc-500 mt-1 font-sans">
-                    Tempo de outras jogatinas / re-plays acumulado ao total investido.
+                    Tempo extra acumulado. Texto entre colchetes <code className="text-purple-400 font-mono font-bold">[ ]</code> é integrado ao tooltip!
                   </p>
                 </div>
+              </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">
-                      Troféus de Conquista (Multi-Seleção & Múltiplas Cópias)
-                    </label>
-                    {selectedTrophies.length > 0 && (
+                {/* Seção de Troféus Organizada */}
+                <div className="bg-zinc-950/70 border border-zinc-800/80 rounded-2xl p-4 space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-zinc-800/60 pb-2.5">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Trophy size={16} className="text-amber-400 shrink-0" />
+                        <label className="text-xs font-bold text-zinc-200 uppercase tracking-wider font-mono">
+                          Troféus & Conquistas
+                        </label>
+                      </div>
+                      <p className="text-[11px] text-zinc-400 mt-0.5">
+                        Adicione as conquistas do jogo e registre anotações ou datas individuais.
+                      </p>
+                    </div>
+
+                    {selectedTrophyItems.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => setSelectedTrophies([])}
-                        className="text-[10px] text-zinc-500 hover:text-rose-400 font-bold uppercase transition-colors cursor-pointer"
+                        onClick={() => setSelectedTrophyItems([])}
+                        className="text-[10px] text-zinc-400 hover:text-rose-400 font-bold uppercase transition-colors cursor-pointer px-2 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-rose-500/40"
                       >
-                        Limpar troféus
+                        Limpar todos ({selectedTrophyItems.length})
                       </button>
                     )}
                   </div>
 
+                  {/* Seletores / Contadores Rápidos */}
                   <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     {/* Silver Card */}
-                    <div className={`p-2.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${silverCount > 0 ? "bg-slate-900/90 border-slate-500/50 shadow-[0_0_10px_rgba(203,213,225,0.2)]" : "bg-zinc-900/90 border-zinc-800"}`}>
+                    <div className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between gap-2 ${silverCount > 0 ? "bg-slate-900/90 border-slate-500/50 shadow-[0_0_10px_rgba(203,213,225,0.15)]" : "bg-zinc-900/80 border-zinc-800/80"}`}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Trophy size={14} fill="currentColor" className={silverCount > 0 ? "text-slate-300" : "text-zinc-600"} />
@@ -1023,7 +1076,7 @@ export default function GameFormModal({
                           type="button"
                           onClick={() => removeTrophy("silver")}
                           disabled={silverCount === 0}
-                          className="w-7 h-7 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                          className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
                           title="Remover 1 Prata"
                         >
                           -
@@ -1031,7 +1084,7 @@ export default function GameFormModal({
                         <button
                           type="button"
                           onClick={() => addTrophy("silver")}
-                          className="flex-1 h-7 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-100 border border-slate-500/40 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                          className="flex-1 h-7 rounded-lg bg-slate-800/90 hover:bg-slate-700 text-slate-100 border border-slate-500/40 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
                           title="Adicionar 1 Prata"
                         >
                           <Plus size={12} className="shrink-0" />
@@ -1041,7 +1094,7 @@ export default function GameFormModal({
                     </div>
 
                     {/* Gold Card */}
-                    <div className={`p-2.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${goldCount > 0 ? "bg-amber-950/80 border-amber-500/60 shadow-[0_0_12px_rgba(251,191,36,0.25)]" : "bg-zinc-900/90 border-zinc-800"}`}>
+                    <div className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between gap-2 ${goldCount > 0 ? "bg-amber-950/80 border-amber-500/60 shadow-[0_0_12px_rgba(251,191,36,0.2)]" : "bg-zinc-900/80 border-zinc-800/80"}`}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Trophy size={14} fill="currentColor" className={goldCount > 0 ? "text-amber-400" : "text-zinc-600"} />
@@ -1058,7 +1111,7 @@ export default function GameFormModal({
                           type="button"
                           onClick={() => removeTrophy("gold")}
                           disabled={goldCount === 0}
-                          className="w-7 h-7 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                          className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
                           title="Remover 1 Ouro"
                         >
                           -
@@ -1066,7 +1119,7 @@ export default function GameFormModal({
                         <button
                           type="button"
                           onClick={() => addTrophy("gold")}
-                          className="flex-1 h-7 rounded-xl bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-500/50 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                          className="flex-1 h-7 rounded-lg bg-amber-950 hover:bg-amber-900 text-amber-300 border border-amber-500/50 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
                           title="Adicionar 1 Ouro"
                         >
                           <Plus size={12} className="shrink-0" />
@@ -1076,7 +1129,7 @@ export default function GameFormModal({
                     </div>
 
                     {/* Platinum Card */}
-                    <div className={`p-2.5 rounded-2xl border transition-all flex flex-col justify-between gap-2 ${platinumCount > 0 ? "bg-cyan-950/90 border-cyan-400/80 shadow-[0_0_14px_rgba(34,211,238,0.3)]" : "bg-zinc-900/90 border-zinc-800"}`}>
+                    <div className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between gap-2 ${platinumCount > 0 ? "bg-cyan-950/90 border-cyan-400/80 shadow-[0_0_14px_rgba(34,211,238,0.25)]" : "bg-zinc-900/80 border-zinc-800/80"}`}>
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-1.5">
                           <Trophy size={14} fill="currentColor" className={platinumCount > 0 ? "text-cyan-200 animate-pulse" : "text-zinc-600"} />
@@ -1093,7 +1146,7 @@ export default function GameFormModal({
                           type="button"
                           onClick={() => removeTrophy("platinum")}
                           disabled={platinumCount === 0}
-                          className="w-7 h-7 rounded-xl bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                          className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
                           title="Remover 1 Platina"
                         >
                           -
@@ -1101,7 +1154,7 @@ export default function GameFormModal({
                         <button
                           type="button"
                           onClick={() => addTrophy("platinum")}
-                          className="flex-1 h-7 rounded-xl bg-slate-900 hover:bg-slate-800 text-cyan-100 border border-cyan-400/60 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                          className="flex-1 h-7 rounded-lg bg-slate-900 hover:bg-slate-800 text-cyan-100 border border-cyan-400/60 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
                           title="Adicionar 1 Platina"
                         >
                           <Plus size={12} className="shrink-0" />
@@ -1111,45 +1164,179 @@ export default function GameFormModal({
                     </div>
                   </div>
 
-                  {/* Display selected badges list below */}
-                  {selectedTrophies.length > 0 && (
-                    <div className="mt-2.5 p-2 bg-zinc-950 border border-zinc-800 rounded-xl flex items-center gap-1.5 flex-wrap min-h-[38px]">
-                      <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider mr-1">
-                        Troféus ({selectedTrophies.length}):
-                      </span>
-                      {selectedTrophies.map((tr, idx) => (
-                        <span
-                          key={idx}
-                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-xs font-semibold ${
-                            tr === "platinum"
-                              ? "bg-cyan-950/80 border-cyan-400/60 text-cyan-200"
-                              : tr === "gold"
-                              ? "bg-amber-950/80 border-amber-500/60 text-amber-300"
-                              : "bg-slate-800/80 border-slate-500/60 text-slate-200"
-                          }`}
-                        >
-                          <Trophy size={11} fill="currentColor" />
-                          <span className="capitalize">{tr === "platinum" ? "Platina" : tr === "gold" ? "Ouro" : "Prata"}</span>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedTrophies((prev) => {
-                                const copy = [...prev];
-                                copy.splice(idx, 1);
-                                return copy;
-                              });
-                            }}
-                            className="text-zinc-400 hover:text-rose-400 font-bold ml-1 cursor-pointer"
-                            title="Remover este troféu"
-                          >
-                            ×
-                          </button>
+                  {/* Lista de Troféus com Caixas de Texto Ampliadas para Anotação/Tooltip */}
+                  {selectedTrophyItems.length > 0 ? (
+                    <div className="space-y-2 pt-1">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-zinc-400 uppercase tracking-wider font-mono">
+                        <span>Anotações dos Troféus ({selectedTrophyItems.length})</span>
+                        <span className="text-[10px] text-zinc-500 font-normal italic">
+                          Aparece no tooltip em mouseover no card/painel
                         </span>
-                      ))}
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {selectedTrophyItems.map((item, idx) => (
+                          <div
+                            key={idx}
+                            className={`p-3 rounded-xl border flex flex-col gap-2 transition-all ${
+                              item.type === "platinum"
+                                ? "bg-cyan-950/30 border-cyan-500/40 text-cyan-100"
+                                : item.type === "gold"
+                                ? "bg-amber-950/30 border-amber-500/40 text-amber-100"
+                                : "bg-slate-900/50 border-slate-700/50 text-slate-100"
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-xs font-bold ${
+                                    item.type === "platinum"
+                                      ? "bg-cyan-950 border-cyan-400/60 text-cyan-200"
+                                      : item.type === "gold"
+                                      ? "bg-amber-950 border-amber-500/60 text-amber-300"
+                                      : "bg-slate-800 border-slate-500/60 text-slate-200"
+                                  }`}
+                                >
+                                  <Trophy size={12} fill="currentColor" />
+                                  <span>
+                                    {item.type === "platinum"
+                                      ? "Platina"
+                                      : item.type === "gold"
+                                      ? "Ouro"
+                                      : "Prata"}{" "}
+                                    #{idx + 1}
+                                  </span>
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => removeTrophyIndex(idx)}
+                                className="p-1 text-zinc-400 hover:text-rose-400 font-bold text-xs rounded-lg hover:bg-rose-950/40 transition-colors cursor-pointer"
+                                title="Remover este troféu"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+
+                            <textarea
+                              rows={2}
+                              value={item.note || ""}
+                              onChange={(e) => updateTrophyNote(idx, e.target.value)}
+                              placeholder="Escreva a anotação do troféu (ex: Platina obtida em 15/10/2023. Zerado no modo Hard sem morrer)..."
+                              className="w-full bg-zinc-950/90 border border-zinc-800 rounded-xl px-3 py-2 text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-cyan-500/70 focus:ring-1 focus:ring-cyan-500/30 font-mono leading-relaxed resize-y"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-zinc-900/40 border border-zinc-800/60 rounded-xl text-center">
+                      <p className="text-xs text-zinc-500 italic">
+                        Nenhum troféu adicionado ainda. Clique nos botões acima para incluir Prata, Ouro ou Platina.
+                      </p>
                     </div>
                   )}
                 </div>
-              </div>
+
+                {/* Seção de Replay Organizada */}
+                <div className="bg-zinc-950/70 border border-purple-900/40 rounded-2xl p-4 space-y-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-800/80 pb-3">
+                    <div className="flex items-center gap-2.5">
+                      <div className="p-2 rounded-xl bg-purple-950/80 border border-purple-500/40 text-purple-300">
+                        <RotateCcw size={16} className="stroke-[2.5]" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-purple-200 uppercase tracking-wider font-mono flex items-center gap-2">
+                          <span>Replay & Re-plays</span>
+                          {replayed && (
+                            <span className="px-2 py-0.5 rounded-full bg-purple-900/80 text-purple-200 text-[10px] font-mono border border-purple-500/50">
+                              {replayCount || 1}x
+                            </span>
+                          )}
+                        </h4>
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          Ative para indicar que jogou este jogo mais de uma vez e adicione observações.
+                        </p>
+                      </div>
+                    </div>
+
+                    <label className="flex items-center gap-2 cursor-pointer select-none bg-zinc-900 hover:bg-zinc-850 px-3.5 py-1.5 rounded-xl border border-zinc-800 transition-colors">
+                      <input
+                        type="checkbox"
+                        checked={replayed}
+                        onChange={(e) => {
+                          setReplayed(e.target.checked);
+                          if (e.target.checked && replayCount === 0) {
+                            setReplayCount(1);
+                          }
+                        }}
+                        className="rounded border-zinc-800 bg-zinc-950 text-purple-500 focus:ring-purple-500 h-4 w-4 accent-purple-500"
+                      />
+                      <span className="text-xs font-bold uppercase tracking-wider text-purple-300">
+                        Ativar Replay
+                      </span>
+                    </label>
+                  </div>
+
+                  {replayed ? (
+                    <div className="space-y-3 pt-1 animate-fade-in">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-zinc-900/70 p-3 rounded-xl border border-zinc-800/60">
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-xs text-purple-300 font-bold uppercase tracking-wider font-mono">
+                            Vezes Jogadas:
+                          </span>
+                          <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-xl p-1">
+                            <button
+                              type="button"
+                              onClick={() => setReplayCount(Math.max(1, replayCount - 1))}
+                              className="w-7 h-7 rounded-lg bg-zinc-900 text-zinc-300 hover:text-white font-bold text-sm flex items-center justify-center cursor-pointer hover:bg-zinc-800 transition-colors"
+                            >
+                              -
+                            </button>
+                            <input
+                              type="number"
+                              min="1"
+                              value={replayCount || 1}
+                              onChange={(e) => setReplayCount(Math.max(1, parseInt(e.target.value) || 1))}
+                              className="w-12 py-0.5 bg-transparent text-sm text-white font-mono font-bold text-center focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setReplayCount(replayCount + 1)}
+                              className="w-7 h-7 rounded-lg bg-zinc-900 text-zinc-300 hover:text-white font-bold text-sm flex items-center justify-center cursor-pointer hover:bg-zinc-800 transition-colors"
+                            >
+                              +
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-[11px] text-zinc-400 italic font-sans flex-1">
+                          Apenas o ícone <span className="font-mono text-purple-300 font-bold bg-purple-950/60 px-1.5 py-0.5 rounded border border-purple-500/30">[{replayCount || 1}x]</span> continuará visível nos cards, e a anotação vai para o tooltip.
+                        </p>
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-bold text-purple-300 uppercase tracking-widest mb-1.5 font-mono">
+                          Anotação do Replay (Exibida na Tooltip)
+                        </label>
+                        <textarea
+                          rows={2.5}
+                          value={replayNote}
+                          onChange={(e) => setReplayNote(e.target.value)}
+                          placeholder="Ex: 1ª Jogatina no PS4 em 2021; 2ª Jogatina no PS5 em 2026 no New Game+ (Modo Marcha da Morte sem morrer)"
+                          className="w-full bg-zinc-900/90 border border-purple-900/40 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-purple-500/60 leading-relaxed font-sans resize-y"
+                        />
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          Texto de contexto para ser exibido ao passar o mouse sobre o ícone de Replay ({replayCount || 1}x).
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3 bg-zinc-900/40 border border-zinc-800/60 rounded-xl text-center">
+                      <p className="text-xs text-zinc-500 italic">
+                        Marque a caixa acima se você jogou este jogo novamente para registrar quantas vezes jogou e suas anotações.
+                      </p>
+                    </div>
+                  )}
+                </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
@@ -1176,65 +1363,74 @@ export default function GameFormModal({
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                  Plataforma
-                </label>
-                <input
-                  type="text"
-                  value={platform}
-                  onChange={(e) => setPlatform(e.target.value)}
-                  placeholder="Ex: Nintendo Switch, PS5, PC"
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
-                  Dificuldade
-                </label>
-                <input
-                  type="text"
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value)}
-                  placeholder="Ex: Normal, Hard, Marcha da Morte"
-                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                />
-              </div>
-
-              {/* Pros & Cons Inputs */}
+              {/* Plataforma e Dificuldade Lado a Lado */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold text-emerald-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5 font-mono">
-                    <ThumbsUp size={13} className="text-emerald-400 shrink-0" />
-                    <span>+ Prós (Separados por ';')</span>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                    Plataforma
                   </label>
-                  <textarea
-                    rows={2}
-                    value={pros}
-                    onChange={(e) => setPros(e.target.value)}
-                    placeholder="Ex: Gráficos espetaculares; Trilha sonora épica; Jogabilidade fluida"
-                    className="w-full bg-zinc-900 border border-emerald-900/40 rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                  <input
+                    type="text"
+                    value={platform}
+                    onChange={(e) => setPlatform(e.target.value)}
+                    placeholder="Ex: Nintendo Switch [OLED, Docked], PS5"
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                   <p className="text-[10px] text-zinc-500 mt-1">
-                    Insira os pontos positivos do jogo separados por ponto e vírgula (;).
+                    Use colchetes <code className="text-cyan-400 font-mono font-bold">[ ]</code> para notas de contexto no tooltip!
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-rose-400 uppercase tracking-widest mb-1.5 flex items-center gap-1.5 font-mono">
-                    <ThumbsDown size={13} className="text-rose-400 shrink-0" />
-                    <span>- Contras (Separados por ';')</span>
+                  <label className="block text-xs font-bold text-zinc-400 uppercase tracking-widest mb-1.5">
+                    Dificuldade
                   </label>
-                  <textarea
-                    rows={2}
-                    value={cons}
-                    onChange={(e) => setCons(e.target.value)}
-                    placeholder="Ex: História curta; Carregamentos lentos; Quedas de taxa de quadros"
-                    className="w-full bg-zinc-900 border border-rose-900/40 rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-rose-500/50"
+                  <input
+                    type="text"
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(e.target.value)}
+                    placeholder="Ex: Hard [Sem Checklist], Marcha da Morte"
+                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                   <p className="text-[10px] text-zinc-500 mt-1">
-                    Insira os pontos negativos do jogo separados por ponto e vírgula (;).
+                    Use colchetes <code className="text-cyan-400 font-mono font-bold">[ ]</code> para contextualizar no tooltip!
+                  </p>
+                </div>
+              </div>
+
+              {/* Pros & Cons Inputs */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="bg-emerald-950/20 border border-emerald-900/30 rounded-2xl p-3.5 space-y-2 flex flex-col">
+                  <label className="block text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+                    <ThumbsUp size={14} className="text-emerald-400 shrink-0" />
+                    <span>+ Prós (Pressione Enter ou ';')</span>
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={pros}
+                    onChange={(e) => setPros(e.target.value)}
+                    placeholder="Ex: Gráficos [Rodou a 60 FPS com Ray Tracing]&#10;Trilha sonora [Música do chefe épica e marcante]&#10;Jogabilidade [Controles responsivos]"
+                    className="w-full flex-1 bg-zinc-900/90 border border-emerald-900/40 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 leading-relaxed font-sans resize-y min-h-[110px]"
+                  />
+                  <p className="text-[11px] text-zinc-400 leading-tight">
+                    Pressione <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">Enter</code> ou separe por <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">;</code>. O texto em colchetes <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">[ ]</code> vira tooltip no mouseover!
+                  </p>
+                </div>
+
+                <div className="bg-rose-950/20 border border-rose-900/30 rounded-2xl p-3.5 space-y-2 flex flex-col">
+                  <label className="block text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+                    <ThumbsDown size={14} className="text-rose-400 shrink-0" />
+                    <span>- Contras (Pressione Enter ou ';')</span>
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={cons}
+                    onChange={(e) => setCons(e.target.value)}
+                    placeholder="Ex: Bugs [Apenas no lançamento antes do patch 1.2]&#10;História curta [Zerado em apenas 8 horas de campanha]"
+                    className="w-full flex-1 bg-zinc-900/90 border border-rose-900/40 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-rose-500/60 leading-relaxed font-sans resize-y min-h-[110px]"
+                  />
+                  <p className="text-[11px] text-zinc-400 leading-tight">
+                    Pressione <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">Enter</code> ou separe por <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">;</code>. O texto em colchetes <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">[ ]</code> vira tooltip no mouseover!
                   </p>
                 </div>
               </div>
@@ -1256,40 +1452,8 @@ export default function GameFormModal({
                     </label>
                   ))}
                 </div>
-                <div className="mt-3 px-1 flex flex-col sm:flex-row sm:items-center gap-4 pt-2 border-t border-zinc-800/60">
-                  <div className="flex-1">
-                    <label className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={replayed}
-                        onChange={(e) => {
-                          setReplayed(e.target.checked);
-                          if (e.target.checked && replayCount === 0) {
-                            setReplayCount(1);
-                          }
-                        }}
-                        className="rounded border-zinc-800 bg-zinc-950 text-purple-500 focus:ring-purple-500 h-4 w-4 accent-purple-500"
-                      />
-                      <span className="flex items-center gap-1.5 font-bold text-xs uppercase tracking-wider text-purple-300">
-                        <RotateCcw size={12} className="stroke-[2.5]" />
-                        Replay
-                      </span>
-                    </label>
-                    {replayed && (
-                      <div className="mt-2 pl-6 flex items-center gap-2 animate-fade-in">
-                        <span className="text-xs text-zinc-400 font-medium">Quantidade:</span>
-                        <input
-                          type="number"
-                          min="1"
-                          value={replayCount || 1}
-                          onChange={(e) => setReplayCount(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-16 px-2 py-1 bg-zinc-950 border border-zinc-800 rounded-lg text-sm text-white font-mono text-center focus:outline-none focus:border-purple-500"
-                        />
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="flex-1">
+                <div className="mt-3 px-1 pt-2 border-t border-zinc-800/60">
+                  <div className="w-full">
                     <span className="block font-bold text-xs uppercase tracking-wider text-amber-300 mb-1.5 flex items-center gap-1.5">
                       <Layers size={13} className="stroke-[2.5]" />
                       Marcador de DLC / Expansão
@@ -1348,11 +1512,11 @@ export default function GameFormModal({
                           type="text"
                           value={dlcNames}
                           onChange={(e) => setDlcNames(e.target.value)}
-                          placeholder="Ex: Shadow of the Erdtree; Sunbreak; Blood and Wine"
+                          placeholder="Ex: Shadow of the Erdtree [100% Zerada]; Blood and Wine [Terminada no PS5]"
                           className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-amber-900/40 text-amber-200 placeholder-zinc-600 outline-none focus:ring-2 focus:ring-amber-500 text-xs"
                         />
                         <p className="text-[10px] text-zinc-500 italic mt-1">
-                          Separe múltiplos nomes de DLC por ponto e vírgula ( ; )
+                          Separe nomes por ponto e vírgula ( ; ). Use colchetes <code className="text-amber-400 font-mono font-bold">[ ]</code> para contextualizar no tooltip!
                         </p>
                       </div>
                     )}

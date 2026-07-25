@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect, useMemo } from "react";
-import { Game, DiaryEntry, MediaItem, splitEntities, getDlcMode, formatDateDisplay, getGameTrophies } from "../types";
+import { Game, DiaryEntry, MediaItem, splitEntities, getDlcMode, formatDateDisplay, getGameTrophies, getGameTrophyItems, parseProConTopic, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
 import { X, Calendar, Clock, Star, Edit, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move, Layers, Maximize2, ThumbsUp, ThumbsDown } from "lucide-react";
 import ImageZoomLightbox from "./ImageZoomLightbox";
@@ -999,83 +999,111 @@ export default function GameDetailDrawer({
                   </div>
 
                   {/* Metadata Dashboard */}
-                  <div className="glass rounded-2xl border border-zinc-800/80 p-4 sm:p-5 shadow-xl">
-                    <div className="text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-3 pb-1 border-b border-zinc-900/60">Ficha Técnica do Jogo</div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-4 gap-y-3.5 text-xs">
+                  <div className="glass rounded-2xl border border-zinc-800/80 p-5 sm:p-6 shadow-xl">
+                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-400/90 font-mono font-bold mb-4 pb-2 border-b border-zinc-800/80 flex items-center justify-between">
+                      <span>Ficha Técnica do Jogo</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-5 gap-y-4 text-xs">
                       <div title="Status de progresso atual no jogo">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Status</div>
-                        <div className="mt-0.5 flex flex-wrap gap-1 items-center">
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Status</div>
+                        <div className="flex flex-wrap gap-1.5 items-center">
                           {game.status.map((s, idx) => (
-                            <span key={`${s}-${idx}`} className={`px-2 py-0.5 rounded-lg text-[10px] font-bold ${chipClass(s)}`} title={`Status: ${s}`}>
+                            <span key={`${s}-${idx}`} className={`px-2.5 py-1 rounded-lg text-xs font-extrabold shadow-sm ${chipClass(s)}`} title={`Status: ${s}`}>
                               {s}
                             </span>
                           ))}
                           {game.replayed && (
-                            <span 
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-violet-950/80 text-purple-300 border border-purple-500/30" 
-                              title={`Status: Replay (${game.replayCount || 1}x)`}
-                            >
-                              <RotateCcw size={10} className="stroke-[2.5]" />
-                              Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
-                            </span>
+                            <div className="relative group/replay inline-flex items-center">
+                              <span 
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-violet-950/90 text-purple-200 border border-purple-500/40 cursor-pointer shadow-sm" 
+                                title={game.replayNote ? undefined : `Status: Replay (${game.replayCount || 1}x)`}
+                              >
+                                <RotateCcw size={12} className="stroke-[2.5]" />
+                                Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
+                              </span>
+                              {game.replayNote && (
+                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/replay:flex flex-col gap-1 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                  <div className="text-xs font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-1">
+                                    Anotação do Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
+                                  </div>
+                                  <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                                    {game.replayNote}
+                                  </p>
+                                </div>
+                              )}
+                            </div>
                           )}
                           {getDlcMode(game) !== "none" && (
                             <span 
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-500/40 shadow-sm" 
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-950/90 text-amber-200 border border-amber-500/40 shadow-sm" 
                               title={getDlcMode(game) === "plus_dlc" ? "Status: Jogo Base + DLC" : "Status: Expansão / DLC"}
                             >
-                              <Layers size={10} className="stroke-[2.5]" />
+                              <Layers size={12} className="stroke-[2.5]" />
                               {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC / Expansão"}
                             </span>
                           )}
                         </div>
                       </div>
                       <div title="Série, franquia ou universo do jogo">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Série / Saga</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Série / Saga</div>
+                        <div className="flex flex-wrap gap-1.5">
                           {game.series ? (
                             splitEntities(game.series).map((s, sIdx) => (
-                              <span key={`${s}-${sIdx}`} className="px-2 py-0.5 rounded-lg bg-zinc-900 text-purple-300 text-[10px] font-bold border border-purple-900/20">
+                              <span key={`${s}-${sIdx}`} className="px-2.5 py-1 rounded-lg bg-zinc-900 text-purple-200 text-xs font-bold border border-purple-900/40 shadow-sm">
                                 {s}
                               </span>
                             ))
                           ) : (
-                            <span className="text-zinc-500 italic text-[11px]">Não se aplica</span>
+                            <span className="text-zinc-500 italic text-xs">Não se aplica</span>
                           )}
                         </div>
                       </div>
                       <div title="Empresa publicadora / distribuidora do jogo">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Publicadora</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Publicadora</div>
+                        <div className="flex flex-wrap gap-1.5">
                           {game.publisher ? (
                             splitEntities(game.publisher).map((p, pIdx) => (
-                              <span key={`${p}-${pIdx}`} className="px-2 py-0.5 rounded-lg bg-zinc-900 text-zinc-300 text-[10px] font-bold border border-zinc-800">
+                              <span key={`${p}-${pIdx}`} className="px-2.5 py-1 rounded-lg bg-zinc-900 text-zinc-200 text-xs font-semibold border border-zinc-800 shadow-sm">
                                 {p}
                               </span>
                             ))
                           ) : (
-                            <span className="text-zinc-500 italic text-[11px]">Desconhecido</span>
+                            <span className="text-zinc-500 italic text-xs">Desconhecido</span>
                           )}
                         </div>
                       </div>
                       {(getDlcMode(game) !== "none" || game.dlcNames) && (
                         <div title="DLCs e Expansões jogadas">
-                          <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">DLCs / Expansões</div>
-                          <div className="mt-1 flex flex-wrap gap-1">
+                          <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">DLCs / Expansões</div>
+                          <div className="flex flex-wrap gap-1.5">
                             {game.dlcNames ? (
-                              splitEntities(game.dlcNames).map((dlc, dIdx) => (
-                                <span 
-                                  key={`${dlc}-${dIdx}`}
-                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold bg-amber-950/50 text-amber-300 border border-amber-500/30 backdrop-blur-md"
-                                  title={`DLC: ${dlc}`}
-                                >
-                                  <Layers size={10} className="shrink-0 text-amber-400" />
-                                  <span>{dlc}</span>
-                                </span>
-                              ))
+                              splitEntities(game.dlcNames).map((dlc, dIdx) => {
+                                const parsedDlc = parseContextNote(dlc);
+                                return (
+                                  <div key={`${dlc}-${dIdx}`} className="relative group/dlc inline-flex items-center">
+                                    <span 
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-950/60 text-amber-200 border border-amber-500/40 backdrop-blur-md cursor-help shadow-sm"
+                                      title={parsedDlc.note ? undefined : `DLC: ${parsedDlc.main}`}
+                                    >
+                                      <Layers size={11} className="shrink-0 text-amber-400" />
+                                      <span>{parsedDlc.main}</span>
+                                    </span>
+                                    {parsedDlc.note && (
+                                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/dlc:flex flex-col gap-1 min-w-[200px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                        <div className="text-xs font-bold uppercase tracking-wider text-amber-400 font-mono border-b border-zinc-800 pb-1">
+                                          DLC: {parsedDlc.main}
+                                        </div>
+                                        <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                                          {parsedDlc.note}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })
                             ) : (
-                              <span className="text-amber-400/80 italic text-[11px] inline-flex items-center gap-1">
-                                <Layers size={10} />
+                              <span className="text-amber-400/80 italic text-xs inline-flex items-center gap-1">
+                                <Layers size={11} />
                                 {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}
                               </span>
                             )}
@@ -1083,175 +1111,236 @@ export default function GameDetailDrawer({
                         </div>
                       )}
                       <div title="Estúdio responsável pelo desenvolvimento do jogo">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Estúdio/Developer</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Estúdio/Developer</div>
+                        <div className="flex flex-wrap gap-1.5">
                           {(() => {
                             const val = game.studio || game.developer;
                             return val ? (
                               splitEntities(val).map((std, sIdx) => (
-                                <span key={`${std}-${sIdx}`} className="px-2 py-0.5 rounded-lg bg-zinc-900 text-zinc-300 text-[10px] font-bold border border-zinc-800">
+                                <span key={`${std}-${sIdx}`} className="px-2.5 py-1 rounded-lg bg-zinc-900 text-zinc-200 text-xs font-semibold border border-zinc-800 shadow-sm">
                                   {std}
                                 </span>
                               ))
                             ) : (
-                              <span className="text-zinc-500 italic text-[11px]">Desconhecido</span>
+                              <span className="text-zinc-500 italic text-xs">Desconhecido</span>
                             );
                           })()}
                         </div>
                       </div>
                       <div title="Plataforma de jogo">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Plataforma</div>
-                        <div className="mt-1 flex flex-wrap gap-1">
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Plataforma</div>
+                        <div className="flex flex-wrap gap-1.5">
                           {splitEntities(game.platform || "PC").map((p, pIdx) => {
-                            const style = getPlatformBadgeStyle(p);
+                            const parsedP = parseContextNote(p);
+                            const style = getPlatformBadgeStyle(parsedP.main);
                             return (
-                              <span 
-                                key={`${p}-${pIdx}`}
-                                className={`inline-flex px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border backdrop-blur-md ${style.text} ${style.border} ${style.bg}`}
-                                title={`Plataforma: ${p}`}
-                              >
-                                {p}
-                              </span>
+                              <div key={`${p}-${pIdx}`} className="relative group/plat inline-flex items-center">
+                                <span 
+                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border backdrop-blur-md cursor-help shadow-sm ${style.text} ${style.border} ${style.bg}`}
+                                  title={parsedP.note ? undefined : `Plataforma: ${parsedP.main}`}
+                                >
+                                  <span>{parsedP.main}</span>
+                                </span>
+                                {parsedP.note && (
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/plat:flex flex-col gap-1 min-w-[200px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-cyan-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                    <div className="text-xs font-bold uppercase tracking-wider text-cyan-400 font-mono border-b border-zinc-800 pb-1">
+                                      Plataforma: {parsedP.main}
+                                    </div>
+                                    <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                                      {parsedP.note}
+                                    </p>
+                                  </div>
+                                )}
+                              </div>
                             );
                           })}
                         </div>
                       </div>
+
                       {game.difficulty && (
                         <div title="Dificuldade selecionada ou jogada">
-                          <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Dificuldade</div>
-                          <div className="mt-1 flex flex-wrap gap-1">
-                            {splitEntities(game.difficulty).map((d, dIdx) => (
-                              <span 
-                                key={`${d}-${dIdx}`}
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-amber-950/40 text-amber-300 border border-amber-500/20 backdrop-blur-md"
-                                title={`Dificuldade: ${d}`}
-                              >
-                                <Shield size={10} className="shrink-0 opacity-80" />
-                                <span>{d}</span>
-                              </span>
-                            ))}
+                          <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Dificuldade</div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {splitEntities(game.difficulty).map((d, dIdx) => {
+                              const parsedD = parseContextNote(d);
+                              return (
+                                <div key={`${d}-${dIdx}`} className="relative group/diff inline-flex items-center">
+                                  <span 
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider bg-amber-950/50 text-amber-200 border border-amber-500/30 backdrop-blur-md cursor-help shadow-sm"
+                                    title={parsedD.note ? undefined : `Dificuldade: ${parsedD.main}`}
+                                  >
+                                    <Shield size={11} className="shrink-0 opacity-90 text-amber-400" />
+                                    <span>{parsedD.main}</span>
+                                  </span>
+                                  {parsedD.note && (
+                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/diff:flex flex-col gap-1 min-w-[200px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                      <div className="text-xs font-bold uppercase tracking-wider text-amber-400 font-mono border-b border-zinc-800 pb-1">
+                                        Dificuldade: {parsedD.main}
+                                      </div>
+                                      <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                                        {parsedD.note}
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       )}
-                      {/* Compact & Discrete 3-Part Playtime Bar */}
-                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/60 rounded-xl p-2.5 border border-zinc-800/60 my-0.5" title="Divisão do Tempo Investido">
-                        <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4">
-                          <div className="flex items-center gap-2 shrink-0">
-                            <Clock size={12} className="text-purple-400" />
-                            <span className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Tempo Investido</span>
-                            {getGameTrophies(game).length > 0 && (
-                              <div className="ml-1">
-                                <TrophiesList trophies={getGameTrophies(game)} mode="detail" />
-                              </div>
-                            )}
-                          </div>
 
-                          <div className="flex items-center gap-1.5 font-mono text-[11px] flex-wrap">
-                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-purple-950/40 text-purple-300 border border-purple-500/20" title="Tempo da Jogatina (Atual / Última): tempo dedicado na sessão atual ou final">
-                              <Clock size={10} className="text-purple-400 shrink-0" />
-                              <span className="text-[10px] font-sans text-purple-400/80 mr-0.5">Jogatina:</span>
-                              <strong className="font-mono">{game.playtime || "0h"}</strong>
-                            </div>
-                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-cyan-950/40 text-cyan-300 border border-cyan-500/20" title="Tempo Extra (Jogatinas Passadas): tempo de outras jogatinas anteriores que foram contabilizadas ao rejogar o jogo">
-                              <Clock size={10} className="text-cyan-400 shrink-0" />
-                              <span className="text-[10px] font-sans text-cyan-400/80 mr-0.5">Passadas:</span>
-                              <strong className="font-mono">{game.additionalPlaytime || "0h"}</strong>
-                            </div>
-                            <div className="flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-950/50 text-emerald-200 font-bold border border-emerald-500/30" title="Tempo Total Investido: somatório total de todas as jogatinas (atual + passadas)">
-                              <Clock size={10} className="text-emerald-400 shrink-0" />
-                              <span className="text-[10px] font-sans text-emerald-400/80 mr-0.5">Total:</span>
-                              <strong className="font-mono">{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</strong>
-                            </div>
-                          </div>
-
-                          {onOpenGameEstimateModal && (
-                            <button
-                              type="button"
-                              onClick={() => onOpenGameEstimateModal(game)}
-                              className="px-2.5 py-1 rounded-xl bg-amber-950/80 hover:bg-amber-900/80 text-amber-300 border border-amber-500/30 text-[11px] font-bold font-mono flex items-center gap-1.5 transition-all cursor-pointer shadow-md"
-                              title="Calcular estimativa de tempo para terminar este jogo"
-                            >
-                              <Clock size={12} className="text-amber-400" />
-                              <span>Calcular Estimativa</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
                       <div title="Data de lançamento oficial do jogo">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Lançamento</div>
-                        <div className="mt-0.5 text-zinc-200 font-mono text-[11px]" title={`Data de Lançamento: ${formatDate(game.releaseDate)}`}>{formatDate(game.releaseDate)}</div>
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Lançamento</div>
+                        <div className="text-zinc-200 font-mono text-xs sm:text-sm font-semibold" title={`Data de Lançamento: ${formatDate(game.releaseDate)}`}>{formatDate(game.releaseDate)}</div>
                       </div>
                       <div title="Data em que iniciei a jogatina">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Data Início</div>
-                        <div className="mt-0.5 text-zinc-200 font-mono text-[11px]" title={`Data de Início: ${formatDate(game.startDate)}`}>{formatDate(game.startDate)}</div>
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Data Início</div>
+                        <div className="text-zinc-200 font-mono text-xs sm:text-sm font-semibold" title={`Data de Início: ${formatDate(game.startDate)}`}>{formatDate(game.startDate)}</div>
                       </div>
                       <div title="Data em que finalizei ou encerrei a jogatina">
-                        <div className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Data Término</div>
-                        <div className="mt-0.5 text-zinc-200 font-mono text-[11px] truncate" title={`Data de Término: ${game.endDate ? formatDate(game.endDate) : "Ainda em progresso"}`}>
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Data Término</div>
+                        <div className="text-zinc-200 font-mono text-xs sm:text-sm font-semibold truncate" title={`Data de Término: ${game.endDate ? formatDate(game.endDate) : "Ainda em progresso"}`}>
                           {game.endDate ? formatDate(game.endDate) : "Em aberto"}
                         </div>
                       </div>
 
+                      {/* 3-Part Playtime Bar */}
+                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4 border border-zinc-800/80 my-1 shadow-inner" title="Divisão do Tempo Investido">
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-start gap-3 flex-wrap pb-1.5 border-b border-zinc-900/80">
+                            <div className="flex items-center gap-2">
+                              <Clock size={15} className="text-purple-400 shrink-0" />
+                              <span className="text-purple-300 text-xs uppercase tracking-wider font-bold font-mono">Tempo Investido</span>
+                            </div>
+                            {getGameTrophyItems(game).length > 0 && (
+                              <div>
+                                <TrophiesList trophies={getGameTrophyItems(game)} mode="detail" />
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-2.5 font-mono flex-wrap">
+                            {(() => {
+                              const parsedPlay = parseContextNote(game.playtime || "0h");
+                              const parsedAdd = parseContextNote(game.additionalPlaytime || "0h");
+                              return (
+                                <>
+                                  <div className="relative group/play flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 text-purple-200 border border-purple-500/30 shadow-sm" title={parsedPlay.note ? undefined : "Tempo da Jogatina (Atual / Última)"}>
+                                    <Clock size={13} className="text-purple-400 shrink-0" />
+                                    <span className="text-xs font-sans text-purple-300/80 font-medium">Jogatina:</span>
+                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-purple-200">{parsedPlay.main}</strong>
+                                    {parsedPlay.note && (
+                                      <div className="absolute bottom-full left-0 mb-2 hidden group-hover/play:flex flex-col gap-1 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                        <div className="text-xs font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-1">
+                                          Contexto - Jogatina
+                                        </div>
+                                        <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                                          {parsedPlay.note}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div className="relative group/addplay flex items-center gap-2 px-3 py-1.5 rounded-xl bg-cyan-950/50 text-cyan-200 border border-cyan-500/30 shadow-sm" title={parsedAdd.note ? undefined : "Tempo Extra (Jogatinas Passadas)"}>
+                                    <Clock size={13} className="text-cyan-400 shrink-0" />
+                                    <span className="text-xs font-sans text-cyan-300/80 font-medium">Passadas:</span>
+                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-cyan-200">{parsedAdd.main}</strong>
+                                    {parsedAdd.note && (
+                                      <div className="absolute bottom-full left-0 mb-2 hidden group-hover/addplay:flex flex-col gap-1 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-cyan-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                        <div className="text-xs font-bold uppercase tracking-wider text-cyan-300 font-mono border-b border-zinc-800 pb-1">
+                                          Contexto - Jogatinas Passadas
+                                        </div>
+                                        <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                                          {parsedAdd.note}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </>
+                              );
+                            })()}
+
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/60 text-emerald-200 font-bold border border-emerald-500/40 shadow-sm" title="Tempo Total Investido: somatório total de todas as jogatinas (atual + passadas)">
+                              <Clock size={13} className="text-emerald-400 shrink-0" />
+                              <span className="text-xs font-sans text-emerald-300/80 font-medium">Total:</span>
+                              <strong className="text-sm sm:text-base font-extrabold font-mono text-emerald-300">{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</strong>
+                            </div>
+
+                            {onOpenGameEstimateModal && (
+                              <button
+                                type="button"
+                                onClick={() => onOpenGameEstimateModal(game)}
+                                className="px-3.5 py-1.5 rounded-xl bg-amber-950/80 hover:bg-amber-900/80 text-amber-300 border border-amber-500/40 text-xs font-bold font-mono flex items-center gap-1.5 transition-all cursor-pointer shadow-md hover:scale-[1.02] active:scale-95"
+                                title="Calcular estimativa de tempo para terminar este jogo"
+                              >
+                                <Clock size={13} className="text-amber-400 shrink-0" />
+                                <span>Calcular Estimativa</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
                       {(game.hltbId || game.hltbMain || game.hltbExtra || game.hltbCompletionist) && (
-                        <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-900/60 pt-3 mt-1 text-left">
-                          <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-                            <div className="flex items-center gap-1.5">
-                              <Globe size={13} className="text-purple-400" />
-                              <span className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">HowLongToBeat</span>
+                        <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-800/80 pt-3.5 mt-2 text-left">
+                          <div className="flex items-center justify-start gap-3 mb-2 flex-wrap">
+                            <div className="flex items-center gap-2">
+                              <Globe size={15} className="text-purple-400" />
+                              <span className="text-purple-300 text-xs uppercase tracking-wider font-bold font-mono">HowLongToBeat (Médias da Comunidade)</span>
                             </div>
                             {game.hltbId && (
                               <button
                                 type="button"
                                 onClick={isAdmin ? handleSyncHltb : () => triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin para atualizar e persistir os dados do HowLongToBeat.") }
                                 disabled={isSyncingHltb}
-                                className={`text-[10px] font-bold flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all cursor-pointer disabled:opacity-50 select-none ${
+                                className={`text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 select-none shadow-sm ${
                                   isAdmin 
-                                    ? "text-amber-400 bg-amber-950/20 hover:bg-amber-950/40 border border-amber-800/30" 
+                                    ? "text-amber-300 bg-amber-950/40 hover:bg-amber-900/50 border border-amber-500/40" 
                                     : "text-zinc-400 bg-zinc-900 border border-zinc-800 hover:text-white"
                                   }`}
                                 title={isAdmin ? "Sincronizar médias mais recentes diretamente do HowLongToBeat" : "Ative o Modo Admin para poder atualizar"}
                               >
                                 {isSyncingHltb ? (
-                                  <Loader2 size={10} className="animate-spin text-amber-500" />
+                                  <Loader2 size={12} className="animate-spin text-amber-400" />
                                 ) : (
-                                  <RefreshCw size={10} />
+                                  <RefreshCw size={12} />
                                 )}
-                                <span>{isAdmin ? "Atualizar" : "Sincronizar (Requer Admin)"}</span>
+                                <span>{isAdmin ? "Atualizar HLTB" : "Sincronizar (Requer Admin)"}</span>
                               </button>
                             )}
                           </div>
                           
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-1 text-zinc-300">
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold font-sans">Campanha:</span>
-                              <span className="font-bold text-purple-400 font-mono">
+                          <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5 mt-2 text-zinc-200">
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-purple-500/20 shadow-sm">
+                              <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">Campanha:</span>
+                              <span className="font-extrabold text-purple-300 font-mono text-sm sm:text-base">
                                 {formatHltbTime(game.hltbMain) || "—"}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold font-sans">História + Extras:</span>
-                              <span className="font-bold text-cyan-400 font-mono">
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-cyan-500/20 shadow-sm">
+                              <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">História + Extras:</span>
+                              <span className="font-extrabold text-cyan-300 font-mono text-sm sm:text-base">
                                 {formatHltbTime(game.hltbExtra) || "—"}
                               </span>
                             </div>
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold font-sans">Complecionista:</span>
-                              <span className="font-bold text-pink-400 font-mono">
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-pink-500/20 shadow-sm">
+                              <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">Complecionista:</span>
+                              <span className="font-extrabold text-pink-300 font-mono text-sm sm:text-base">
                                 {formatHltbTime(game.hltbCompletionist) || "—"}
                               </span>
                             </div>
                           </div>
                           
                           {game.hltbId && (
-                            <div className="mt-1 text-[9px] text-zinc-500 flex items-center gap-1.5 flex-wrap">
-                              <span>ID:</span>
-                              <code className="bg-zinc-900/60 px-1 py-0.2 rounded text-zinc-400 font-mono text-[9px]">{game.hltbId}</code>
-                              <span className="text-zinc-800">|</span>
+                            <div className="mt-2 text-xs text-zinc-400 flex items-center gap-2 flex-wrap">
+                              <span>ID HLTB:</span>
+                              <code className="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-300 font-mono text-xs">{game.hltbId}</code>
+                              <span className="text-zinc-700">|</span>
                               <a 
                                 href={`https://howlongtobeat.com/game/${game.hltbId}`} 
                                 target="_blank" 
                                 rel="noreferrer"
-                                className="text-purple-400/80 hover:text-purple-300 hover:underline inline-flex items-center gap-0.5"
+                                className="text-purple-400 hover:text-purple-300 hover:underline inline-flex items-center gap-1 font-medium"
                               >
                                 Ver no site oficial ↗
                               </a>
@@ -1260,65 +1349,65 @@ export default function GameDetailDrawer({
                         </div>
                       )}
 
-                      <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-900/60 pt-3 mt-1 text-left">
-                        <div className="flex items-center justify-between gap-2 mb-1 flex-wrap">
-                          <div className="flex items-center gap-1.5">
-                            <Globe size={13} className="text-amber-400" />
-                            <span className="text-zinc-400 text-[10px] uppercase tracking-wider font-bold">Métricas de Avaliação</span>
+                      <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-800/80 pt-3.5 mt-2 text-left">
+                        <div className="flex items-center justify-start gap-3 mb-2 flex-wrap">
+                          <div className="flex items-center gap-2">
+                            <Globe size={15} className="text-amber-400" />
+                            <span className="text-amber-300 text-xs uppercase tracking-wider font-bold font-mono">Métricas de Avaliação</span>
                           </div>
                           {game.metacriticUrl && (
                             <button
                               type="button"
                               onClick={isAdmin ? () => handleSyncMetacritic() : () => triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin para atualizar e persistir os dados do Metacritic.") }
                               disabled={isSyncingMetacritic}
-                              className={`text-[10px] font-bold flex items-center gap-1 px-2.5 py-1 rounded-lg transition-all cursor-pointer disabled:opacity-50 select-none ${
+                              className={`text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl transition-all cursor-pointer disabled:opacity-50 select-none shadow-sm ${
                                 isAdmin 
-                                  ? "text-amber-400 bg-amber-950/20 hover:bg-amber-950/40 border border-amber-800/30" 
+                                  ? "text-amber-300 bg-amber-950/40 hover:bg-amber-900/50 border border-amber-500/40" 
                                   : "text-zinc-400 bg-zinc-900 border border-zinc-800 hover:text-white"
                                 }`}
                               title={isAdmin ? "Sincronizar médias mais recentes diretamente do Metacritic" : "Ative o Modo Admin para poder atualizar"}
                             >
                               {isSyncingMetacritic ? (
-                                <Loader2 size={10} className="animate-spin text-amber-500" />
+                                <Loader2 size={12} className="animate-spin text-amber-400" />
                               ) : (
-                                <RefreshCw size={10} />
+                                <RefreshCw size={12} />
                               )}
-                              <span>{isAdmin ? "Atualizar" : "Sincronizar (Requer Admin)"}</span>
+                              <span>{isAdmin ? "Atualizar Metacritic" : "Sincronizar (Requer Admin)"}</span>
                             </button>
                           )}
                         </div>
                         
-                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 mt-1 text-zinc-300">
-                          <div className="flex items-center gap-1.5 text-xs">
-                            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold font-sans">Nota Pessoal:</span>
-                            <div className="flex items-center gap-1">
-                              <span className="font-bold text-zinc-300 font-mono">({game.rating || 0})</span>
-                              {renderStars(game.rating || 0, `${game.id}-drawer-personal`)}
+                        <div className="flex flex-wrap items-center gap-x-6 gap-y-2.5 mt-2 text-zinc-200">
+                          <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-zinc-700/50 shadow-sm">
+                            <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">Nota Pessoal:</span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-extrabold text-zinc-200 font-mono text-sm sm:text-base">({game.rating || 0})</span>
+                              {renderStars(game.rating || 0, `${game.id}-drawer-personal`, "w-4 h-4")}
                             </div>
                           </div>
                           {game.metacriticCritScore !== undefined && game.metacriticCritScore !== null && (
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="text-[10px] uppercase tracking-wider text-amber-500 font-bold font-sans">Metascore:</span>
-                              <div className="flex items-center gap-1">
-                                <span className="font-bold text-amber-400 font-mono">({game.metacriticCritScore})</span>
-                                {renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-drawer-crit`, "w-3.5 h-3.5", "", game.metacriticCritScore >= 95)}
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-amber-500/30 shadow-sm">
+                              <span className="text-xs uppercase tracking-wider text-amber-400 font-bold font-sans">Metascore:</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-amber-300 font-mono text-sm sm:text-base">({game.metacriticCritScore})</span>
+                                {renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-drawer-crit`, "w-4 h-4", "", game.metacriticCritScore >= 95)}
                               </div>
                             </div>
                           )}
                           {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null && (
-                            <div className="flex items-center gap-1.5 text-xs">
-                              <span className="text-[10px] uppercase tracking-wider text-cyan-400 font-bold font-sans">Usuários:</span>
-                              <div className="flex items-center gap-1">
-                                <span className="font-bold text-cyan-400 font-mono">({game.metacriticUserScore.toFixed(1)})</span>
-                                {renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-drawer-user`, "w-3.5 h-3.5", "", game.metacriticUserScore >= 9.5)}
+                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-cyan-500/30 shadow-sm">
+                              <span className="text-xs uppercase tracking-wider text-cyan-400 font-bold font-sans">Usuários:</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-extrabold text-cyan-300 font-mono text-sm sm:text-base">({game.metacriticUserScore.toFixed(1)})</span>
+                                {renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-drawer-user`, "w-4 h-4", "", game.metacriticUserScore >= 9.5)}
                               </div>
                             </div>
                           )}
                         </div>
 
                         {isAdmin && drawerMetacriticPlatforms.length > 0 && (
-                          <div className="mt-2.5 flex items-center gap-2">
-                            <span className="text-[10px] uppercase tracking-wider text-zinc-500 font-bold font-sans">Versão da Nota:</span>
+                          <div className="mt-3 flex items-center gap-2">
+                            <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">Versão da Nota:</span>
                             <select
                               value={selectedDrawerPlatform}
                               onChange={(e) => {
@@ -1327,7 +1416,7 @@ export default function GameDetailDrawer({
                                 handleSyncMetacritic(newPlat);
                               }}
                               disabled={isSyncingMetacritic}
-                              className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-0.5 text-[10px] text-zinc-300 focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
+                              className="bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-xs text-zinc-200 focus:outline-none focus:ring-1 focus:ring-amber-500 cursor-pointer disabled:opacity-50"
                             >
                               <option value="">Geral (Média Principal)</option>
                               {drawerMetacriticPlatforms.map((p) => (
@@ -1353,55 +1442,130 @@ export default function GameDetailDrawer({
                         )}
                         
                         {/* Pros & Cons Display Section */}
-                        <div className="mt-3 border-t border-zinc-900/80 pt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
-                          {/* + Prós */}
-                          <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/20 space-y-1.5">
-                            <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono">
-                              <ThumbsUp size={13} className="text-emerald-400 shrink-0" />
-                              <span>+ Prós (Pontos Positivos)</span>
-                            </div>
-                            {game.pros && splitEntities(game.pros).length > 0 ? (
-                              <ul className="space-y-1 text-xs text-emerald-200/90 font-medium pl-1">
-                                {splitEntities(game.pros).map((pro, pIdx) => (
-                                  <li key={pIdx} className="flex items-start gap-1.5">
-                                    <span className="text-emerald-400 font-bold shrink-0">+</span>
-                                    <span>{pro}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-[11px] text-zinc-500 italic">Nenhum ponto positivo cadastrado.</p>
-                            )}
-                          </div>
+                        {(() => {
+                          const prosList = game.pros
+                            ? splitEntities(game.pros)
+                                .filter(Boolean)
+                                .sort((a, b) => parseProConTopic(a).topic.localeCompare(parseProConTopic(b).topic, "pt", { sensitivity: "base" }))
+                            : [];
+                          const consList = game.cons
+                            ? splitEntities(game.cons)
+                                .filter(Boolean)
+                                .sort((a, b) => parseProConTopic(a).topic.localeCompare(parseProConTopic(b).topic, "pt", { sensitivity: "base" }))
+                            : [];
 
-                          {/* - Contras */}
-                          <div className="p-3 rounded-2xl bg-rose-950/20 border border-rose-500/20 space-y-1.5">
-                            <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-rose-400 font-mono">
-                              <ThumbsDown size={13} className="text-rose-400 shrink-0" />
-                              <span>- Contras (Pontos Negativos)</span>
+                          return (
+                            <div className="mt-3 border-t border-zinc-900/80 pt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                              {/* + Prós */}
+                              <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/20 space-y-1.5">
+                                <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono">
+                                  <ThumbsUp size={13} className="text-emerald-400 shrink-0" />
+                                  <span>+ Prós (Pontos Positivos)</span>
+                                  {prosList.length > 0 && (
+                                    <span className="text-[10px] text-emerald-400/60 font-mono font-normal">({prosList.length})</span>
+                                  )}
+                                </div>
+                                {prosList.length > 0 ? (
+                                  <ul className={`text-xs text-emerald-200/90 font-medium pl-1 ${
+                                    prosList.length >= 10
+                                      ? "grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5"
+                                      : "space-y-1.5"
+                                  }`}>
+                                    {prosList.map((proRaw, pIdx) => {
+                                      const { topic, note } = parseProConTopic(proRaw);
+                                      return (
+                                        <li key={pIdx} className="flex items-start gap-1.5 min-w-0">
+                                          <span className="text-emerald-400 font-bold shrink-0">+</span>
+                                          <div className="relative group/pro inline-flex items-center gap-1.5 min-w-0 flex-wrap">
+                                            <span className="break-words font-medium text-emerald-100">{topic}</span>
+                                            {note && (
+                                              <span className="px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 border border-emerald-500/40 font-mono text-[9px] uppercase tracking-wider shrink-0 cursor-help transition-all group-hover/pro:border-emerald-400">
+                                                info
+                                              </span>
+                                            )}
+
+                                            {/* Mouseover floating tooltip note */}
+                                            {note && (
+                                              <div className="absolute bottom-full left-0 mb-2 hidden group-hover/pro:flex flex-col gap-1 w-max max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-emerald-500/50 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 font-mono border-b border-zinc-800/80 pb-1 flex items-center gap-1">
+                                                  <ThumbsUp size={11} className="shrink-0" />
+                                                  <span>{topic}</span>
+                                                </div>
+                                                <p className="text-xs text-zinc-100 font-medium leading-relaxed whitespace-pre-wrap break-words">
+                                                  {note}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                ) : (
+                                  <p className="text-[11px] text-zinc-500 italic">Nenhum ponto positivo cadastrado.</p>
+                                )}
+                              </div>
+
+                              {/* - Contras */}
+                              <div className="p-3 rounded-2xl bg-rose-950/20 border border-rose-500/20 space-y-1.5">
+                                <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-rose-400 font-mono">
+                                  <ThumbsDown size={13} className="text-rose-400 shrink-0" />
+                                  <span>- Contras (Pontos Negativos)</span>
+                                  {consList.length > 0 && (
+                                    <span className="text-[10px] text-rose-400/60 font-mono font-normal">({consList.length})</span>
+                                  )}
+                                </div>
+                                {consList.length > 0 ? (
+                                  <ul className={`text-xs text-rose-200/90 font-medium pl-1 ${
+                                    consList.length >= 10
+                                      ? "grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5"
+                                      : "space-y-1.5"
+                                  }`}>
+                                    {consList.map((conRaw, cIdx) => {
+                                      const { topic, note } = parseProConTopic(conRaw);
+                                      return (
+                                        <li key={cIdx} className="flex items-start gap-1.5 min-w-0">
+                                          <span className="text-rose-400 font-bold shrink-0">-</span>
+                                          <div className="relative group/con inline-flex items-center gap-1.5 min-w-0 flex-wrap">
+                                            <span className="break-words font-medium text-rose-100">{topic}</span>
+                                            {note && (
+                                              <span className="px-1.5 py-0.2 rounded bg-rose-900/80 text-rose-300 border border-rose-500/40 font-mono text-[9px] uppercase tracking-wider shrink-0 cursor-help transition-all group-hover/con:border-rose-400">
+                                                info
+                                              </span>
+                                            )}
+
+                                            {/* Mouseover floating tooltip note */}
+                                            {note && (
+                                              <div className="absolute bottom-full left-0 mb-2 hidden group-hover/con:flex flex-col gap-1 w-max max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-rose-500/50 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                                                <div className="text-[10px] font-bold uppercase tracking-wider text-rose-400 font-mono border-b border-zinc-800/80 pb-1 flex items-center gap-1">
+                                                  <ThumbsDown size={11} className="shrink-0" />
+                                                  <span>{topic}</span>
+                                                </div>
+                                                <p className="text-xs text-zinc-100 font-medium leading-relaxed whitespace-pre-wrap break-words">
+                                                  {note}
+                                                </p>
+                                              </div>
+                                            )}
+                                          </div>
+                                        </li>
+                                      );
+                                    })}
+                                  </ul>
+                                ) : (
+                                  <p className="text-[11px] text-zinc-500 italic">Nenhum ponto negativo cadastrado.</p>
+                                )}
+                              </div>
                             </div>
-                            {game.cons && splitEntities(game.cons).length > 0 ? (
-                              <ul className="space-y-1 text-xs text-rose-200/90 font-medium pl-1">
-                                {splitEntities(game.cons).map((con, cIdx) => (
-                                  <li key={cIdx} className="flex items-start gap-1.5">
-                                    <span className="text-rose-400 font-bold shrink-0">-</span>
-                                    <span>{con}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            ) : (
-                              <p className="text-[11px] text-zinc-500 italic">Nenhum ponto negativo cadastrado.</p>
-                            )}
-                          </div>
-                        </div>
+                          );
+                        })()}
                       </div>
 
-                      <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-900/60 pt-3 mt-1">
+                      <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-800/80 pt-3.5 mt-2">
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold w-16 shrink-0">Gêneros:</span>
-                          <div className="flex flex-wrap gap-1">
+                          <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold w-20 shrink-0">Gêneros:</span>
+                          <div className="flex flex-wrap gap-1.5">
                             {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
-                              <span key={`${g}-${idx}`} className="px-2 py-0.5 rounded-lg bg-purple-950/30 text-purple-300 text-[11px] font-bold border border-purple-900/30">
+                              <span key={`${g}-${idx}`} className="px-2.5 py-1 rounded-lg bg-purple-950/40 text-purple-200 text-xs font-bold border border-purple-900/40 shadow-sm">
                                 {g}
                               </span>
                             ))}
@@ -1410,10 +1574,10 @@ export default function GameDetailDrawer({
                       </div>
                       <div className="sm:col-span-2 lg:col-span-4 pt-1">
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <span className="text-[10px] uppercase tracking-wider text-zinc-400 font-bold w-16 shrink-0">Tags:</span>
-                          <div className="flex flex-wrap gap-1">
+                          <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold w-20 shrink-0">Tags:</span>
+                          <div className="flex flex-wrap gap-1.5">
                             {[...game.tags].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
-                              <span key={`${t}-${idx}`} className="px-2 py-0.5 rounded-lg bg-zinc-900/60 text-cyan-300 text-[11px] font-bold border border-cyan-900/20">
+                              <span key={`${t}-${idx}`} className="px-2.5 py-1 rounded-lg bg-zinc-900 text-cyan-200 text-xs font-bold border border-cyan-900/40 shadow-sm">
                                 {t}
                               </span>
                             ))}

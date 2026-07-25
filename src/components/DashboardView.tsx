@@ -21,7 +21,7 @@ import {
   Zap,
   Shield,
 } from "lucide-react";
-import { Game, getDlcMode, formatDateDisplay, splitEntities, getGameHighestTrophy } from "../types";
+import { Game, getDlcMode, formatDateDisplay, splitEntities, getGameHighestTrophy, parseContextNote } from "../types";
 import TrophyBadge from "./TrophyBadge";
 
 interface DashboardViewProps {
@@ -249,21 +249,53 @@ function RecentlyFinishedGameCard({
         {!isAdjusting && (game.replayed || getDlcMode(game) !== "none") && (
           <div className="absolute top-1.5 left-1.5 z-20 flex flex-col gap-1">
             {game.replayed && (
-              <div 
-                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-violet-950/90 text-purple-300 border border-purple-500/40 text-[9px] font-bold font-mono shadow"
-                title={`Replay (${game.replayCount || 1}x)`}
-              >
-                <RotateCcw size={9} />
-                <span>{(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x</span>
+              <div className="relative group/replay flex items-center">
+                <div 
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-violet-950/90 text-purple-300 border border-purple-500/40 text-[9px] font-bold font-mono shadow cursor-pointer"
+                  title={game.replayNote ? `Replay (${game.replayCount || 1}x): ${game.replayNote}` : `Replay (${game.replayCount || 1}x)`}
+                >
+                  <RotateCcw size={9} />
+                  <span>{(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x</span>
+                </div>
+                {game.replayNote && (
+                  <div className="absolute top-full left-0 mt-1 hidden group-hover/replay:flex flex-col gap-1 min-w-[180px] max-w-xs p-2 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                    <div className="text-[9px] font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-0.5">
+                      Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
+                    </div>
+                    <p className="text-[11px] text-zinc-200 font-medium leading-tight font-sans">
+                      {game.replayNote}
+                    </p>
+                  </div>
+                )}
               </div>
             )}
             {getDlcMode(game) !== "none" && (
-              <div 
-                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-950/90 text-amber-300 border border-amber-500/40 text-[9px] font-bold font-mono shadow"
-                title={getDlcMode(game) === "plus_dlc" ? "Jogo Base + DLC" : "Expansão / DLC"}
-              >
-                <Layers size={9} />
-                <span>{getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}</span>
+              <div className="relative group/dlc flex items-center">
+                <div 
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md bg-amber-950/90 text-amber-300 border border-amber-500/40 text-[9px] font-bold font-mono shadow cursor-pointer"
+                  title={getDlcMode(game) === "plus_dlc" ? "Jogo Base + DLC" : "Expansão / DLC"}
+                >
+                  <Layers size={9} />
+                  <span>{getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}</span>
+                </div>
+                {game.dlcNames && (
+                  <div className="absolute top-full left-0 mt-1 hidden group-hover/dlc:flex flex-col gap-1 min-w-[180px] max-w-xs p-2 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                    <div className="text-[9px] font-bold uppercase tracking-wider text-amber-300 font-mono border-b border-zinc-800 pb-0.5">
+                      DLCs / Expansões
+                    </div>
+                    <div className="flex flex-col gap-0.5">
+                      {splitEntities(game.dlcNames).map((d, idx) => {
+                        const parsed = parseContextNote(d);
+                        return (
+                          <div key={idx} className="text-[11px] text-zinc-200 font-medium leading-tight">
+                            • <strong className="text-amber-200">{parsed.main}</strong>
+                            {parsed.note && <span className="text-zinc-400 block pl-2 text-[10px] italic">{parsed.note}</span>}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>

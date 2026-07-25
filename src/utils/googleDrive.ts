@@ -654,6 +654,7 @@ function areGamesEqual(g1: Game | null, g2: Game | null): boolean {
       coverZoom: g.coverZoom || 100,
       replayed: !!g.replayed,
       replayCount: g.replayCount || 0,
+      replayNote: g.replayNote || "",
       isDlc: (g.isDlc as any) === "plus_dlc" ? true : !!g.isDlc,
       dlcMode: g.dlcMode || ((g.isDlc as any) === "plus_dlc" ? "plus_dlc" : g.isDlc ? "dlc" : "none"),
       dlcNames: g.dlcNames || "",

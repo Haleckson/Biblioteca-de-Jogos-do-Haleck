@@ -4,7 +4,7 @@
  */
 
 import React, { memo } from "react";
-import { Game, splitEntities, getDlcMode, getGameTrophies } from "../types";
+import { Game, splitEntities, getDlcMode, getGameTrophies, getGameTrophyItems, parseContextNote } from "../types";
 import { motion } from "motion/react";
 import { Clock, Folder, Tag, Layers, RotateCcw, Shield, Maximize2, Settings } from "lucide-react";
 import { formatHltbTime } from "../utils/hltbFormatter";
@@ -115,7 +115,7 @@ export function renderStars(rating: number, prefix = "", size = "w-3.5 h-3.5", d
       stars.push(
         <svg 
           key={i} 
-          className={`${size} fill-current`} 
+          className={`${size} fill-current shrink-0`} 
           style={{ color: starColor, filter: actualDropShadow || undefined }}
           viewBox="0 0 24 24"
         >
@@ -127,7 +127,7 @@ export function renderStars(rating: number, prefix = "", size = "w-3.5 h-3.5", d
       stars.push(
         <svg 
           key={i} 
-          className={`${size} fill-current`} 
+          className={`${size} fill-current shrink-0`} 
           style={{ filter: actualDropShadow || undefined }}
           viewBox="0 0 24 24"
         >
@@ -142,13 +142,13 @@ export function renderStars(rating: number, prefix = "", size = "w-3.5 h-3.5", d
       );
     } else {
       stars.push(
-        <svg key={i} className={`${size} text-zinc-800 fill-current`} viewBox="0 0 24 24">
+        <svg key={i} className={`${size} text-zinc-800 fill-current shrink-0`} viewBox="0 0 24 24">
           <path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" />
         </svg>
       );
     }
   }
-  return <div className="flex items-center gap-0.5">{stars}</div>;
+  return <div className="flex items-center gap-0.5 shrink-0">{stars}</div>;
 }
 
 export function renderIcon(game: Game, className = "w-10 h-10 rounded-2xl") {
@@ -317,7 +317,7 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: 0.98 }}
       transition={{ duration: 0.25 }}
-      className={`group cursor-pointer glass rounded-3xl overflow-hidden transition-all duration-300 flex flex-col h-full relative ${getStatusBorderClass(game.status)}`}
+      className={`group cursor-pointer glass rounded-3xl transition-all duration-300 flex flex-col h-full relative z-10 hover:z-40 ${getStatusBorderClass(game.status)}`}
     >
       <div 
         ref={coverContainerRef}
@@ -325,9 +325,9 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
         onMouseMove={handleCardMouseMove}
         onMouseUp={handleCardMouseUpOrLeave}
         onMouseLeave={handleCardMouseUpOrLeave}
-        className={`relative h-56 overflow-hidden shrink-0 ${isAdjusting ? "cursor-move border-2 border-dashed border-cyan-400" : ""}`}
+        className={`relative h-56 rounded-t-3xl shrink-0 ${isAdjusting ? "cursor-move border-2 border-dashed border-cyan-400" : ""}`}
       >
-        <div className="w-full h-full overflow-hidden group-hover:scale-[1.03] transition-transform duration-500 ease-out relative">
+        <div className="w-full h-full rounded-t-3xl overflow-hidden group-hover:scale-[1.03] transition-transform duration-500 ease-out relative">
           <img
             src={coverImg}
             alt=""
@@ -344,43 +344,87 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
             }}
           />
         </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
+        <div className="absolute inset-0 rounded-t-3xl bg-gradient-to-t from-black/70 via-transparent to-transparent pointer-events-none" />
         
         {/* Status badges container */}
         <div className="absolute top-4 left-4 flex flex-col gap-1.5 z-20">
           {game.replayed && (
-            <div 
-              className="flex items-center gap-1 px-2 py-1 rounded-xl bg-violet-950/95 backdrop-blur-md text-purple-300 border border-purple-500/40 shadow-lg shadow-purple-950/50" 
-              title={`Status: Replay (${game.replayCount || 1}x)`}
-            >
-              <RotateCcw size={12} className="stroke-[2.5]" />
-              <span className="text-[10px] font-extrabold font-mono">{(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x</span>
+            <div className="relative group/replay">
+              <div 
+                className="flex items-center gap-1 px-2 py-1 rounded-xl bg-violet-950/95 backdrop-blur-md text-purple-300 border border-purple-500/40 shadow-lg shadow-purple-950/50 cursor-pointer" 
+                title={game.replayNote ? undefined : `Status: Replay (${game.replayCount || 1}x)`}
+              >
+                <RotateCcw size={12} className="stroke-[2.5]" />
+                <span className="text-[10px] font-extrabold font-mono">{(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x</span>
+              </div>
+              {game.replayNote && (
+                <div className="absolute top-full left-0 mt-1.5 hidden group-hover/replay:flex flex-col gap-1 min-w-[200px] max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-1">
+                    Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
+                  </div>
+                  <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                    {game.replayNote}
+                  </p>
+                </div>
+              )}
             </div>
           )}
           {getDlcMode(game) !== "none" && (
-            <div 
-              className="flex items-center gap-1 px-2 py-1 rounded-xl bg-amber-950/95 backdrop-blur-md text-amber-300 border border-amber-500/40 shadow-lg shadow-amber-950/50" 
-              title={getDlcMode(game) === "plus_dlc" ? "Status: Jogo Base + DLC" : "Status: Expansão / DLC"}
-            >
-              <Layers size={12} className="stroke-[2.5]" />
-              <span className="text-[10px] font-extrabold font-mono uppercase tracking-wider">
-                {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}
-              </span>
+            <div className="relative group/dlc">
+              <div 
+                className="flex items-center gap-1 px-2 py-1 rounded-xl bg-amber-950/95 backdrop-blur-md text-amber-300 border border-amber-500/40 shadow-lg shadow-amber-950/50 cursor-pointer" 
+                title={game.dlcNames ? undefined : (getDlcMode(game) === "plus_dlc" ? "Status: Jogo Base + DLC" : "Status: Expansão / DLC")}
+              >
+                <Layers size={12} className="stroke-[2.5]" />
+                <span className="text-[10px] font-extrabold font-mono uppercase tracking-wider">
+                  {getDlcMode(game) === "plus_dlc" ? "+DLC" : "DLC"}
+                </span>
+              </div>
+              {game.dlcNames && (
+                <div className="absolute top-full left-0 mt-1.5 hidden group-hover/dlc:flex flex-col gap-1.5 min-w-[200px] max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-amber-300 font-mono border-b border-zinc-800 pb-1">
+                    DLCs / Expansões
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {splitEntities(game.dlcNames).map((d, idx) => {
+                      const parsed = parseContextNote(d);
+                      return (
+                        <div key={idx} className="text-xs text-zinc-200 font-medium">
+                          • <strong className="text-amber-200">{parsed.main}</strong>
+                          {parsed.note && <span className="text-zinc-400 block pl-3 text-[11px] italic">{parsed.note}</span>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
         <div className="absolute top-4 right-4 flex flex-col items-end gap-1.5 z-25">
           <div className="flex flex-wrap gap-1 justify-end max-w-[100%]">
             {splitEntities(game.platform || "PC").map((p, pIdx) => {
-              const style = getPlatformBadgeStyle(p);
+              const parsed = parseContextNote(p);
+              const style = getPlatformBadgeStyle(parsed.main);
               return (
-                <span 
-                  key={`${p}-${pIdx}`}
-                  className={`px-2.5 py-1 rounded-xl bg-zinc-950/90 backdrop-blur-md text-[10px] font-extrabold uppercase tracking-widest border shadow-sm ${style.text} ${style.border} ${style.bg} ${style.glow}`}
-                  title={`Plataforma: ${p}`}
-                >
-                  {p}
-                </span>
+                <div key={`${p}-${pIdx}`} className="relative group/plat inline-flex items-center">
+                  <span 
+                    className={`px-2.5 py-1 rounded-xl bg-zinc-950/90 backdrop-blur-md text-[10px] font-extrabold uppercase tracking-widest border shadow-sm cursor-help ${style.text} ${style.border} ${style.bg} ${style.glow}`}
+                    title={parsed.note ? undefined : `Plataforma: ${parsed.main}`}
+                  >
+                    {parsed.main}
+                  </span>
+                  {parsed.note && (
+                    <div className="absolute top-full right-0 mt-1.5 hidden group-hover/plat:flex flex-col gap-1 min-w-[180px] max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-cyan-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-cyan-400 font-mono border-b border-zinc-800 pb-1">
+                        Plataforma: {parsed.main}
+                      </div>
+                      <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                        {parsed.note}
+                      </p>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -506,9 +550,9 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
             <div className="min-w-0 flex-1">
               <h3 className="text-base sm:text-lg font-extrabold text-white group-hover:text-cyan-300 transition-colors break-words leading-tight">
                 <span className="align-middle">{game.name}</span>
-                {getGameTrophies(game).length > 0 && (
+                {getGameTrophyItems(game).length > 0 && (
                   <span className="inline-flex align-middle ml-2 shrink-0">
-                    <TrophiesList trophies={getGameTrophies(game)} mode="card" />
+                    <TrophiesList trophies={getGameTrophyItems(game)} mode="card" />
                   </span>
                 )}
               </h3>
@@ -537,16 +581,30 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 {s}
               </span>
             ))}
-            {game.difficulty && splitEntities(game.difficulty).map((d, dIdx) => (
-              <span 
-                key={`${d}-${dIdx}`}
-                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold uppercase tracking-wider bg-amber-950/40 text-amber-300 border border-amber-500/20 shadow-sm"
-                title={`Dificuldade: ${d}`}
-              >
-                <Shield size={10} className="shrink-0 opacity-80" />
-                <span>{d}</span>
-              </span>
-            ))}
+            {game.difficulty && splitEntities(game.difficulty).map((d, dIdx) => {
+              const parsed = parseContextNote(d);
+              return (
+                <div key={`${d}-${dIdx}`} className="relative group/diff inline-flex items-center">
+                  <span 
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-xs font-bold uppercase tracking-wider bg-amber-950/40 text-amber-300 border border-amber-500/20 shadow-sm cursor-help"
+                    title={parsed.note ? undefined : `Dificuldade: ${parsed.main}`}
+                  >
+                    <Shield size={10} className="shrink-0 opacity-80" />
+                    <span>{parsed.main}</span>
+                  </span>
+                  {parsed.note && (
+                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/diff:flex flex-col gap-1 min-w-[180px] max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                      <div className="text-[10px] font-bold uppercase tracking-wider text-amber-400 font-mono border-b border-zinc-800 pb-1">
+                        Dificuldade: {parsed.main}
+                      </div>
+                      <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
+                        {parsed.note}
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
             {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
               <span 
                 key={`${g}-${idx}`} 
@@ -574,109 +632,137 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
           )}
         </div>
         <div className="mt-4 pt-4 border-t border-zinc-850">
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-stretch justify-between gap-2.5">
+            {(() => {
+              const playParsed = parseContextNote(game.playtime || "0h");
+              const addParsed = parseContextNote(game.additionalPlaytime || "0h");
+              const hasCustomNote = !!(playParsed.note || addParsed.note);
+              return (
+                <div 
+                  className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800/60 shrink-0 relative group/playtime"
+                  title={hasCustomNote ? undefined : "Tempo Pessoal: Jogatina Atual/Última, Jogatinas Passadas e Tempo Total"}
+                >
+                  <div className="flex items-center gap-1.5 text-xs text-purple-300 font-mono font-semibold cursor-help" title={playParsed.note ? undefined : `Jogatina Atual: ${playParsed.main}`}>
+                    <Clock size={12} className="text-purple-400 shrink-0" />
+                    <span>{playParsed.main}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs text-cyan-300 font-mono font-semibold cursor-help" title={addParsed.note ? undefined : `Jogatinas Passadas: ${addParsed.main}`}>
+                    <Clock size={12} className="text-cyan-400 shrink-0" />
+                    <span>{addParsed.main}</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs text-emerald-300 font-mono font-bold" title={`Tempo Total Investido: ${formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}`}>
+                    <Clock size={12} className="text-emerald-400 shrink-0" />
+                    <span>{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</span>
+                  </div>
+
+                  {hasCustomNote && (
+                    <div className="absolute bottom-full left-0 mb-2 hidden group-hover/playtime:flex flex-col gap-2 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
+                      {playParsed.note && (
+                        <div>
+                          <div className="text-xs font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-0.5 mb-1">
+                            Jogatina Atual: {playParsed.main}
+                          </div>
+                          <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">{playParsed.note}</p>
+                        </div>
+                      )}
+                      {addParsed.note && (
+                        <div>
+                          <div className="text-xs font-bold uppercase tracking-wider text-cyan-300 font-mono border-b border-zinc-800 pb-0.5 mb-1">
+                            Jogatinas Passadas: {addParsed.main}
+                          </div>
+                          <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">{addParsed.note}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             <div 
-              className="flex flex-col gap-1.5 bg-zinc-950/80 p-2 rounded-xl border border-zinc-800/60 shrink-0"
-              title="Tempo Pessoal: Jogatina Atual/Última, Jogatinas Passadas e Tempo Total"
-            >
-              <div className="flex items-center gap-1.5 text-[11px] text-purple-300 font-mono font-medium" title={`Jogatina Atual / Última: ${game.playtime || "0h"} (tempo dedicado na sessão atual ou final)`}>
-                <Clock size={11} className="text-purple-400 shrink-0" />
-                <span>{game.playtime || "0h"}</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-cyan-300 font-mono font-medium" title={`Jogatinas Passadas (Extras): ${game.additionalPlaytime || "0h"} (tempo de outras jogatinas anteriores que foram contabilizadas ao rejogar)`}>
-                <Clock size={11} className="text-cyan-400 shrink-0" />
-                <span>{game.additionalPlaytime || "0h"}</span>
-              </div>
-              <div className="flex items-center gap-1.5 text-[11px] text-emerald-300 font-mono font-bold" title={`Tempo Total Investido: ${formatHoursAndMinutes(getTotalGamePlaytimeHours(game))} (somatório de todas as jogatinas)`}>
-                <Clock size={11} className="text-emerald-400 shrink-0" />
-                <span>{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</span>
-              </div>
-            </div>
-            <div 
-              className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2 rounded-xl border border-zinc-800/60 flex-1 min-w-0"
+              className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800/60 shrink-0 ml-auto min-w-0 overflow-hidden"
               title="Avaliações e Notas do Jogo"
             >
               <div 
-                className="flex items-center justify-between gap-1.5 w-full"
+                className="flex items-center justify-start gap-2.5 w-full min-w-0"
                 title={`Avaliação Pessoal: ${game.rating || 0} de 5 estrelas`}
               >
-                <span className="text-[9px] font-bold text-zinc-300 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-1">
+                <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-bold text-zinc-300 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0"></span>
-                  Pessoal <span className="text-zinc-400 font-mono text-[8px]">({game.rating || 0})</span>
+                  <span>Pessoal</span> <span className="text-zinc-400 font-mono text-[10px]">({game.rating || 0})</span>
                 </span>
-                <div className="shrink-0 flex items-center">{renderStars(game.rating || 0, `${game.id}-top-personal`)}</div>
+                <div className="flex items-center shrink-0">{renderStars(game.rating || 0, `${game.id}-top-personal`, "w-3 h-3 sm:w-3.5 sm:h-3.5")}</div>
               </div>
 
               {game.metacriticCritScore !== undefined && game.metacriticCritScore !== null ? (
                 <div 
-                  className="flex items-center justify-between gap-1.5 w-full"
+                  className="flex items-center justify-start gap-2.5 w-full min-w-0"
                   title={`Nota da Crítica (Metacritic): ${game.metacriticCritScore} de 100`}
                 >
-                  <span className="text-[9px] font-bold text-amber-500 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-1">
+                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-bold text-amber-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
-                    Crítica <span className="font-mono text-[8px]">({game.metacriticCritScore})</span>
+                    <span>Crítica</span> <span className="font-mono text-[10px]">({game.metacriticCritScore})</span>
                   </span>
-                  <div className="shrink-0 flex items-center">{renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-top-crit`, "w-3.5 h-3.5", "", game.metacriticCritScore >= 95)}</div>
+                  <div className="flex items-center shrink-0">{renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-top-crit`, "w-3 h-3 sm:w-3.5 sm:h-3.5", "", game.metacriticCritScore >= 95)}</div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-1.5 w-full opacity-40">
-                  <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-wider font-sans flex items-center gap-1">
+                <div className="flex items-center justify-start gap-2.5 w-full min-w-0 opacity-40" title="Nota da Crítica: N/A">
+                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-medium text-zinc-500 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
-                    Crítica
+                    <span>Crítica</span> <span className="font-mono text-[10px]">(N/A)</span>
                   </span>
-                  <span className="text-[9px] font-mono text-zinc-600">N/A</span>
+                  <div className="flex items-center shrink-0 opacity-30">{renderStars(0, `${game.id}-top-crit-na`, "w-3 h-3 sm:w-3.5 sm:h-3.5")}</div>
                 </div>
               )}
 
               {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null ? (
                 <div 
-                  className="flex items-center justify-between gap-1.5 w-full"
+                  className="flex items-center justify-start gap-2.5 w-full min-w-0"
                   title={`Nota do Público (Metacritic): ${game.metacriticUserScore.toFixed(1)} de 10`}
                 >
-                  <span className="text-[9px] font-bold text-cyan-400 uppercase tracking-wider font-sans whitespace-nowrap flex items-center gap-1">
+                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-bold text-cyan-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
-                    Público <span className="font-mono text-[8px]">({game.metacriticUserScore.toFixed(1)})</span>
+                    <span>Público</span> <span className="font-mono text-[10px]">({game.metacriticUserScore.toFixed(1)})</span>
                   </span>
-                  <div className="shrink-0 flex items-center">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-3.5 h-3.5", "", game.metacriticUserScore >= 9.5)}</div>
+                  <div className="flex items-center shrink-0">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-3 h-3 sm:w-3.5 sm:h-3.5", "", game.metacriticUserScore >= 9.5)}</div>
                 </div>
               ) : (
-                <div className="flex items-center justify-between gap-1.5 w-full opacity-40">
-                  <span className="text-[9px] font-medium text-zinc-500 uppercase tracking-wider font-sans flex items-center gap-1">
+                <div className="flex items-center justify-start gap-2.5 w-full min-w-0 opacity-40" title="Nota do Público: N/A">
+                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-medium text-zinc-500 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
-                    Público
+                    <span>Público</span> <span className="font-mono text-[10px]">(N/A)</span>
                   </span>
-                  <span className="text-[9px] font-mono text-zinc-600">N/A</span>
+                  <div className="flex items-center shrink-0 opacity-30">{renderStars(0, `${game.id}-top-user-na`, "w-3 h-3 sm:w-3.5 sm:h-3.5")}</div>
                 </div>
               )}
             </div>
           </div>
 
           {(game.hltbMain || game.hltbExtra || game.hltbCompletionist) && (
-            <div className="mt-3 pt-2.5 border-t border-zinc-800/60">
-              <div className="text-[9px] uppercase tracking-wider text-zinc-400 font-extrabold text-center mb-1.5">
-                Dados do How Long to Beat
+            <div className="mt-3 pt-2.5 border-t border-zinc-800/80">
+              <div className="text-xs uppercase tracking-wider text-zinc-400 font-extrabold text-center mb-1.5 font-mono">
+                HowLongToBeat
               </div>
-              <div className="grid grid-cols-3 gap-0.5 text-center bg-zinc-950/40 rounded-xl p-1 border border-zinc-800/40 min-w-0 overflow-hidden">
+              <div className="grid grid-cols-3 gap-1 text-center bg-zinc-950/60 rounded-xl p-1.5 border border-zinc-800/60 min-w-0 overflow-hidden shadow-inner">
                 <div 
                   className="min-w-0"
                   title={`Tempo estimado para a Campanha Principal (HowLongToBeat): ${formatHltbTime(game.hltbMain) || "Não especificado"}`}
                 >
-                  <span className="block text-[8px] text-zinc-400 uppercase tracking-wider font-bold truncate">Campanha</span>
-                  <span className="text-[11px] font-black text-purple-400 font-mono leading-none truncate block">{formatHltbTime(game.hltbMain) || "-"}</span>
+                  <span className="block text-[10px] text-zinc-400 uppercase tracking-wider font-bold truncate">Campanha</span>
+                  <span className="text-xs sm:text-sm font-black text-purple-300 font-mono leading-none truncate block py-0.5">{formatHltbTime(game.hltbMain) || "-"}</span>
                 </div>
                 <div 
                   className="min-w-0"
                   title={`Tempo estimado para Campanha + Extras (HowLongToBeat): ${formatHltbTime(game.hltbExtra) || "Não especificado"}`}
                 >
-                  <span className="block text-[8px] text-zinc-400 uppercase tracking-wider font-bold truncate">História+Ext</span>
-                  <span className="text-[11px] font-black text-cyan-400 font-mono leading-none truncate block">{formatHltbTime(game.hltbExtra) || "-"}</span>
+                  <span className="block text-[10px] text-zinc-400 uppercase tracking-wider font-bold truncate">História+Ext</span>
+                  <span className="text-xs sm:text-sm font-black text-cyan-300 font-mono leading-none truncate block py-0.5">{formatHltbTime(game.hltbExtra) || "-"}</span>
                 </div>
                 <div 
                   className="min-w-0"
                   title={`Tempo estimado para 100% de conclusão (HowLongToBeat): ${formatHltbTime(game.hltbCompletionist) || "Não especificado"}`}
                 >
-                  <span className="block text-[8px] text-zinc-400 uppercase tracking-wider font-bold truncate">100%</span>
-                  <span className="text-[11px] font-black text-pink-400 font-mono leading-none truncate block">{formatHltbTime(game.hltbCompletionist) || "-"}</span>
+                  <span className="block text-[10px] text-zinc-400 uppercase tracking-wider font-bold truncate">100%</span>
+                  <span className="text-xs sm:text-sm font-black text-pink-300 font-mono leading-none truncate block py-0.5">{formatHltbTime(game.hltbCompletionist) || "-"}</span>
                 </div>
               </div>
             </div>

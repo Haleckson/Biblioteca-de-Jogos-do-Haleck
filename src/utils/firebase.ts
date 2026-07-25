@@ -103,6 +103,7 @@ export const syncFromFirebase = (
             coverZoom: typeof game.coverZoom === "number" ? game.coverZoom : 100,
             replayed: !!game.replayed,
             replayCount: typeof game.replayCount === "number" ? game.replayCount : undefined,
+            replayNote: game.replayNote || "",
             isDlc: (game.isDlc as any) === "plus_dlc" ? true : !!game.isDlc,
             dlcMode: game.dlcMode || ((game.isDlc as any) === "plus_dlc" ? "plus_dlc" : game.isDlc ? "dlc" : "none"),
             dlcNames: game.dlcNames || "",

@@ -5,12 +5,14 @@
 
 import React from "react";
 import { Trophy, Sparkles } from "lucide-react";
+import { TrophyItem } from "../types";
 
 export type TrophyType = "none" | "silver" | "gold" | "platinum" | string;
 
 export interface TrophyBadgeProps {
   key?: React.Key;
   trophy?: TrophyType;
+  note?: string;
   mode?: "card" | "detail" | "form";
   className?: string;
 }
@@ -48,65 +50,96 @@ export const TROPHY_INFO = {
   },
 };
 
-export default function TrophyBadge({ trophy, mode = "detail", className = "" }: TrophyBadgeProps) {
+export default function TrophyBadge({ trophy, note, mode = "detail", className = "" }: TrophyBadgeProps) {
   if (!trophy || trophy === "none") return null;
 
   const info = TROPHY_INFO[trophy as keyof typeof TROPHY_INFO];
   if (!info) return null;
 
   const isPlatinum = trophy === "platinum";
+  const displayNote = note && note.trim() ? note.trim() : "";
+  const tooltipTitle = displayNote
+    ? `${info.name}\n\n📝 Anotação: ${displayNote}`
+    : info.description;
 
-  if (mode === "card") {
-    return (
-      <div
-        className={`inline-flex items-center justify-center p-1.5 rounded-lg border ${info.bgClass} ${info.borderClass} ${info.glowClass} ${className} transition-all cursor-help shrink-0`}
-        title={info.description}
-      >
-        {isPlatinum ? (
-          <div className="relative flex items-center justify-center shrink-0">
-            <Trophy
-              size={13}
-              fill="currentColor"
-              className="text-cyan-100 drop-shadow-[0_0_8px_rgba(34,211,238,0.95)] animate-pulse"
-            />
-            <Sparkles size={8} className="text-cyan-300 absolute -top-1 -right-1 animate-ping opacity-90" />
-          </div>
-        ) : (
-          <Trophy size={13} fill="currentColor" className={`${info.iconColor} shrink-0`} />
-        )}
-      </div>
-    );
-  }
-
-  return (
+  const badgeContent = (
     <div
-      className={`inline-flex items-center justify-center px-2 py-1 rounded-xl border ${info.bgClass} ${info.borderClass} ${info.glowClass} ${className} transition-all cursor-help shrink-0`}
-      title={info.description}
+      className={`inline-flex items-center justify-center ${
+        mode === "card" ? "p-1.5 rounded-lg" : "px-2 py-1 rounded-xl"
+      } border ${info.bgClass} ${info.borderClass} ${info.glowClass} ${className} transition-all cursor-help shrink-0 ${
+        displayNote ? "ring-1 ring-cyan-400/50" : ""
+      }`}
+      title={displayNote ? undefined : tooltipTitle}
     >
       {isPlatinum ? (
         <div className="relative flex items-center justify-center shrink-0">
           <Trophy
-            size={16}
+            size={mode === "card" ? 13 : 16}
             fill="currentColor"
-            className="text-cyan-100 drop-shadow-[0_0_12px_rgba(34,211,238,1)] animate-pulse"
+            className="text-cyan-100 drop-shadow-[0_0_8px_rgba(34,211,238,0.95)] animate-pulse"
           />
-          <Sparkles size={10} className="text-cyan-300 absolute -top-1.5 -right-1.5 animate-spin-slow" />
+          <Sparkles
+            size={mode === "card" ? 8 : 10}
+            className={`text-cyan-300 absolute ${
+              mode === "card" ? "-top-1 -right-1" : "-top-1.5 -right-1.5"
+            } animate-spin-slow`}
+          />
         </div>
       ) : (
-        <Trophy size={15} fill="currentColor" className={`${info.iconColor} shrink-0`} />
+        <Trophy
+          size={mode === "card" ? 13 : 15}
+          fill="currentColor"
+          className={`${info.iconColor} shrink-0`}
+        />
+      )}
+    </div>
+  );
+
+  return (
+    <div className="relative group/trophy inline-flex items-center">
+      {badgeContent}
+
+      {/* Floating Rich Tooltip on Mouseover if Note Exists */}
+      {displayNote && (
+        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 hidden group-hover/trophy:flex flex-col gap-1.5 min-w-[220px] max-w-sm sm:max-w-md p-3.5 rounded-2xl bg-zinc-950/95 border border-cyan-400/70 shadow-[0_10px_30px_rgba(0,0,0,0.8)] z-[100] text-left pointer-events-none backdrop-blur-md">
+          <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-cyan-300 font-mono border-b border-zinc-800/80 pb-1.5">
+            <Trophy size={13} className={info.iconColor} />
+            <span>{info.shortName}</span>
+            <span className="ml-auto text-[10px] text-zinc-500 font-normal">Anotação</span>
+          </div>
+          <p className="text-xs sm:text-sm text-zinc-100 font-medium leading-relaxed whitespace-pre-wrap break-words font-sans">
+            {displayNote}
+          </p>
+        </div>
       )}
     </div>
   );
 }
 
-export function TrophiesList({ trophies, mode = "card", className = "" }: { trophies?: string[]; mode?: "card" | "detail" | "form"; className?: string }) {
+export function TrophiesList({
+  trophies,
+  mode = "card",
+  className = ""
+}: {
+  trophies?: (string | TrophyItem)[];
+  mode?: "card" | "detail" | "form";
+  className?: string;
+}) {
   if (!trophies || trophies.length === 0) return null;
 
   return (
     <div className={`inline-flex items-center gap-1.5 flex-wrap ${className}`}>
-      {trophies.map((tr, idx) => (
-        <TrophyBadge key={`${tr}-${idx}`} trophy={tr} mode={mode} />
-      ))}
+      {trophies.map((tr, idx) => {
+        const item: TrophyItem = typeof tr === "string" ? { type: tr as any, note: "" } : tr;
+        return (
+          <TrophyBadge
+            key={`${item.type}-${idx}`}
+            trophy={item.type}
+            note={item.note}
+            mode={mode}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -16,6 +16,11 @@ export interface DiaryEntry {
   text: string;
 }
 
+export interface TrophyItem {
+  type: "silver" | "gold" | "platinum";
+  note?: string;
+}
+
 export interface Game {
   id: string;
   name: string;
@@ -42,6 +47,7 @@ export interface Game {
   coverZoom?: number;
   replayed?: boolean;
   replayCount?: number;
+  replayNote?: string;
   isDlc?: boolean;
   dlcMode?: "none" | "dlc" | "plus_dlc";
   dlcNames?: string;
@@ -54,32 +60,88 @@ export interface Game {
   metacriticCritScore?: number;
   metacriticUserScore?: number;
   trophy?: "none" | "silver" | "gold" | "platinum";
-  trophies?: ("silver" | "gold" | "platinum")[];
+  trophies?: (("silver" | "gold" | "platinum") | TrophyItem)[];
   pros?: string;
   cons?: string;
 }
 
-export function getGameTrophies(game: Partial<Game>): ("silver" | "gold" | "platinum")[] {
+export function getGameTrophyItems(game: Partial<Game>): TrophyItem[] {
   if (Array.isArray(game.trophies) && game.trophies.length > 0) {
-    return game.trophies;
+    return game.trophies.map((item) => {
+      if (typeof item === "string") {
+        return { type: item as "silver" | "gold" | "platinum", note: "" };
+      }
+      if (item && typeof item === "object" && item.type) {
+        return { type: item.type, note: item.note || "" };
+      }
+      return { type: "silver", note: "" };
+    });
   }
   if (game.trophy && game.trophy !== "none") {
-    return [game.trophy as "silver" | "gold" | "platinum"];
+    return [{ type: game.trophy as "silver" | "gold" | "platinum", note: "" }];
   }
   return [];
 }
 
+export function getGameTrophies(game: Partial<Game>): ("silver" | "gold" | "platinum")[] {
+  return getGameTrophyItems(game).map((item) => item.type);
+}
+
 export function getGameHighestTrophy(game: Partial<Game>): "none" | "silver" | "gold" | "platinum" {
-  const trophies = getGameTrophies(game);
-  if (trophies.includes("platinum")) return "platinum";
-  if (trophies.includes("gold")) return "gold";
-  if (trophies.includes("silver")) return "silver";
+  const trophyTypes = getGameTrophies(game);
+  if (trophyTypes.includes("platinum")) return "platinum";
+  if (trophyTypes.includes("gold")) return "gold";
+  if (trophyTypes.includes("silver")) return "silver";
   return "none";
 }
 
 export function splitEntities(val: string | undefined | null): string[] {
   if (!val) return [];
-  return val.split("; ").map((s) => s.trim()).filter(Boolean);
+  return val.split(/[;\n\r]+/).map((s) => s.trim()).filter(Boolean);
+}
+
+export interface ContextParsed {
+  main: string;
+  note?: string;
+}
+
+export function parseContextNote(raw: string | undefined | null): ContextParsed {
+  if (!raw) return { main: "" };
+  const trimmed = raw.trim();
+  if (!trimmed) return { main: "" };
+
+  // Prioritize bracket match: "Topic [Note]"
+  const bracketMatch = trimmed.match(/^([^[]+)\[([^\]]+)\]$/);
+  if (bracketMatch) {
+    return {
+      main: bracketMatch[1].trim(),
+      note: bracketMatch[2].trim(),
+    };
+  }
+
+  // Fallback check for parenthesis match: "Topic (Note)"
+  const parenMatch = trimmed.match(/^([^(]+)\(([^)]+)\)$/);
+  if (parenMatch) {
+    return {
+      main: parenMatch[1].trim(),
+      note: parenMatch[2].trim(),
+    };
+  }
+
+  return { main: trimmed };
+}
+
+export interface ProConParsed {
+  topic: string;
+  note?: string;
+}
+
+export function parseProConTopic(raw: string): ProConParsed {
+  const parsed = parseContextNote(raw);
+  return {
+    topic: parsed.main,
+    note: parsed.note,
+  };
 }
 
 export function getDlcMode(game: { dlcMode?: "none" | "dlc" | "plus_dlc" | string; isDlc?: boolean | string }): "none" | "dlc" | "plus_dlc" {
