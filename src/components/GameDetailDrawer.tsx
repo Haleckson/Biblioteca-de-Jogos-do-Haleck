@@ -1013,25 +1013,15 @@ export default function GameDetailDrawer({
                             </span>
                           ))}
                           {game.replayed && (
-                            <div className="relative group/replay inline-flex items-center">
-                              <span 
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-violet-950/90 text-purple-200 border border-purple-500/40 cursor-pointer shadow-sm" 
-                                title={game.replayNote ? undefined : `Status: Replay (${game.replayCount || 1}x)`}
-                              >
-                                <RotateCcw size={12} className="stroke-[2.5]" />
-                                Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
-                              </span>
-                              {game.replayNote && (
-                                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/replay:flex flex-col gap-1 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                  <div className="text-xs font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-1">
-                                    Anotação do Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
-                                  </div>
-                                  <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
-                                    {game.replayNote}
-                                  </p>
-                                </div>
-                              )}
-                            </div>
+                            <span 
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold bg-violet-950/90 text-purple-200 border border-purple-500/40 cursor-help shadow-sm" 
+                              data-tooltip={game.replayNote || `Status: Replay (${game.replayCount || 1}x)`}
+                              data-tooltip-title={`Replay (${game.replayCount || 1}x)`}
+                              data-tooltip-theme="purple"
+                            >
+                              <RotateCcw size={12} className="stroke-[2.5]" />
+                              Replay ({(game.replayCount && game.replayCount > 0) ? game.replayCount : 1}x)
+                            </span>
                           )}
                           {getDlcMode(game) !== "none" && (
                             <span 
@@ -1080,25 +1070,16 @@ export default function GameDetailDrawer({
                               splitEntities(game.dlcNames).map((dlc, dIdx) => {
                                 const parsedDlc = parseContextNote(dlc);
                                 return (
-                                  <div key={`${dlc}-${dIdx}`} className="relative group/dlc inline-flex items-center">
-                                    <span 
-                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-950/60 text-amber-200 border border-amber-500/40 backdrop-blur-md cursor-help shadow-sm"
-                                      title={parsedDlc.note ? undefined : `DLC: ${parsedDlc.main}`}
-                                    >
-                                      <Layers size={11} className="shrink-0 text-amber-400" />
-                                      <span>{parsedDlc.main}</span>
-                                    </span>
-                                    {parsedDlc.note && (
-                                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/dlc:flex flex-col gap-1 min-w-[200px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                        <div className="text-xs font-bold uppercase tracking-wider text-amber-400 font-mono border-b border-zinc-800 pb-1">
-                                          DLC: {parsedDlc.main}
-                                        </div>
-                                        <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
-                                          {parsedDlc.note}
-                                        </p>
-                                      </div>
-                                    )}
-                                  </div>
+                                  <span 
+                                    key={`${dlc}-${dIdx}`}
+                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold bg-amber-950/60 text-amber-200 border border-amber-500/40 backdrop-blur-md cursor-help shadow-sm"
+                                    data-tooltip={parsedDlc.note || `DLC: ${parsedDlc.main}`}
+                                    data-tooltip-title={parsedDlc.note ? `DLC: ${parsedDlc.main}` : undefined}
+                                    data-tooltip-theme="amber"
+                                  >
+                                    <Layers size={11} className="shrink-0 text-amber-400" />
+                                    <span>{parsedDlc.main}</span>
+                                  </span>
                                 );
                               })
                             ) : (
@@ -1134,24 +1115,15 @@ export default function GameDetailDrawer({
                             const parsedP = parseContextNote(p);
                             const style = getPlatformBadgeStyle(parsedP.main);
                             return (
-                              <div key={`${p}-${pIdx}`} className="relative group/plat inline-flex items-center">
-                                <span 
-                                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border backdrop-blur-md cursor-help shadow-sm ${style.text} ${style.border} ${style.bg}`}
-                                  title={parsedP.note ? undefined : `Plataforma: ${parsedP.main}`}
-                                >
-                                  <span>{parsedP.main}</span>
-                                </span>
-                                {parsedP.note && (
-                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/plat:flex flex-col gap-1 min-w-[200px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-cyan-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                    <div className="text-xs font-bold uppercase tracking-wider text-cyan-400 font-mono border-b border-zinc-800 pb-1">
-                                      Plataforma: {parsedP.main}
-                                    </div>
-                                    <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
-                                      {parsedP.note}
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
+                              <span 
+                                key={`${p}-${pIdx}`}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border backdrop-blur-md cursor-help shadow-sm ${style.text} ${style.border} ${style.bg}`}
+                                data-tooltip={parsedP.note || `Plataforma: ${parsedP.main}`}
+                                data-tooltip-title={parsedP.note ? `Plataforma: ${parsedP.main}` : undefined}
+                                data-tooltip-theme="cyan"
+                              >
+                                <span>{parsedP.main}</span>
+                              </span>
                             );
                           })}
                         </div>
@@ -1164,25 +1136,16 @@ export default function GameDetailDrawer({
                             {splitEntities(game.difficulty).map((d, dIdx) => {
                               const parsedD = parseContextNote(d);
                               return (
-                                <div key={`${d}-${dIdx}`} className="relative group/diff inline-flex items-center">
-                                  <span 
-                                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider bg-amber-950/50 text-amber-200 border border-amber-500/30 backdrop-blur-md cursor-help shadow-sm"
-                                    title={parsedD.note ? undefined : `Dificuldade: ${parsedD.main}`}
-                                  >
-                                    <Shield size={11} className="shrink-0 opacity-90 text-amber-400" />
-                                    <span>{parsedD.main}</span>
-                                  </span>
-                                  {parsedD.note && (
-                                    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 hidden group-hover/diff:flex flex-col gap-1 min-w-[200px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-amber-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                      <div className="text-xs font-bold uppercase tracking-wider text-amber-400 font-mono border-b border-zinc-800 pb-1">
-                                        Dificuldade: {parsedD.main}
-                                      </div>
-                                      <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
-                                        {parsedD.note}
-                                      </p>
-                                    </div>
-                                  )}
-                                </div>
+                                <span 
+                                  key={`${d}-${dIdx}`}
+                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider bg-amber-950/50 text-amber-200 border border-amber-500/30 backdrop-blur-md cursor-help shadow-sm"
+                                  data-tooltip={parsedD.note || `Dificuldade: ${parsedD.main}`}
+                                  data-tooltip-title={parsedD.note ? `Dificuldade: ${parsedD.main}` : undefined}
+                                  data-tooltip-theme="amber"
+                                >
+                                  <Shield size={11} className="shrink-0 opacity-90 text-amber-400" />
+                                  <span>{parsedD.main}</span>
+                                </span>
                               );
                             })}
                           </div>
@@ -1225,36 +1188,26 @@ export default function GameDetailDrawer({
                               const parsedAdd = parseContextNote(game.additionalPlaytime || "0h");
                               return (
                                 <>
-                                  <div className="relative group/play flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 text-purple-200 border border-purple-500/30 shadow-sm" title={parsedPlay.note ? undefined : "Tempo da Jogatina (Atual / Última)"}>
+                                  <div 
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 text-purple-200 border border-purple-500/30 shadow-sm cursor-help" 
+                                    data-tooltip={parsedPlay.note || `Jogatina: ${parsedPlay.main}`}
+                                    data-tooltip-title={parsedPlay.note ? "Contexto - Jogatina" : undefined}
+                                    data-tooltip-theme="purple"
+                                  >
                                     <Clock size={13} className="text-purple-400 shrink-0" />
                                     <span className="text-xs font-sans text-purple-300/80 font-medium">Jogatina:</span>
                                     <strong className="text-sm sm:text-base font-extrabold font-mono text-purple-200">{parsedPlay.main}</strong>
-                                    {parsedPlay.note && (
-                                      <div className="absolute bottom-full left-0 mb-2 hidden group-hover/play:flex flex-col gap-1 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-purple-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                        <div className="text-xs font-bold uppercase tracking-wider text-purple-300 font-mono border-b border-zinc-800 pb-1">
-                                          Contexto - Jogatina
-                                        </div>
-                                        <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
-                                          {parsedPlay.note}
-                                        </p>
-                                      </div>
-                                    )}
                                   </div>
 
-                                  <div className="relative group/addplay flex items-center gap-2 px-3 py-1.5 rounded-xl bg-cyan-950/50 text-cyan-200 border border-cyan-500/30 shadow-sm" title={parsedAdd.note ? undefined : "Tempo Extra (Jogatinas Passadas)"}>
+                                  <div 
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-cyan-950/50 text-cyan-200 border border-cyan-500/30 shadow-sm cursor-help" 
+                                    data-tooltip={parsedAdd.note || `Jogatinas Passadas: ${parsedAdd.main}`}
+                                    data-tooltip-title={parsedAdd.note ? "Contexto - Jogatinas Passadas" : undefined}
+                                    data-tooltip-theme="cyan"
+                                  >
                                     <Clock size={13} className="text-cyan-400 shrink-0" />
                                     <span className="text-xs font-sans text-cyan-300/80 font-medium">Passadas:</span>
                                     <strong className="text-sm sm:text-base font-extrabold font-mono text-cyan-200">{parsedAdd.main}</strong>
-                                    {parsedAdd.note && (
-                                      <div className="absolute bottom-full left-0 mb-2 hidden group-hover/addplay:flex flex-col gap-1 min-w-[220px] max-w-xs p-3 rounded-xl bg-zinc-950/95 border border-cyan-500/60 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                        <div className="text-xs font-bold uppercase tracking-wider text-cyan-300 font-mono border-b border-zinc-800 pb-1">
-                                          Contexto - Jogatinas Passadas
-                                        </div>
-                                        <p className="text-xs text-zinc-200 font-medium leading-relaxed font-sans">
-                                          {parsedAdd.note}
-                                        </p>
-                                      </div>
-                                    )}
                                   </div>
                                 </>
                               );
@@ -1476,25 +1429,17 @@ export default function GameDetailDrawer({
                                       return (
                                         <li key={pIdx} className="flex items-start gap-1.5 min-w-0">
                                           <span className="text-emerald-400 font-bold shrink-0">+</span>
-                                          <div className="relative group/pro inline-flex items-center gap-1.5 min-w-0 flex-wrap">
+                                          <div 
+                                            className="inline-flex items-center gap-1.5 min-w-0 flex-wrap cursor-help"
+                                            data-tooltip={note || topic}
+                                            data-tooltip-title={note ? `Pró: ${topic}` : undefined}
+                                            data-tooltip-theme="emerald"
+                                          >
                                             <span className="break-words font-medium text-emerald-100">{topic}</span>
                                             {note && (
-                                              <span className="px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 border border-emerald-500/40 font-mono text-[9px] uppercase tracking-wider shrink-0 cursor-help transition-all group-hover/pro:border-emerald-400">
+                                              <span className="px-1.5 py-0.2 rounded bg-emerald-900/80 text-emerald-300 border border-emerald-500/40 font-mono text-[9px] uppercase tracking-wider shrink-0">
                                                 info
                                               </span>
-                                            )}
-
-                                            {/* Mouseover floating tooltip note */}
-                                            {note && (
-                                              <div className="absolute bottom-full left-0 mb-2 hidden group-hover/pro:flex flex-col gap-1 w-max max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-emerald-500/50 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                                <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-400 font-mono border-b border-zinc-800/80 pb-1 flex items-center gap-1">
-                                                  <ThumbsUp size={11} className="shrink-0" />
-                                                  <span>{topic}</span>
-                                                </div>
-                                                <p className="text-xs text-zinc-100 font-medium leading-relaxed whitespace-pre-wrap break-words">
-                                                  {note}
-                                                </p>
-                                              </div>
                                             )}
                                           </div>
                                         </li>
@@ -1526,25 +1471,17 @@ export default function GameDetailDrawer({
                                       return (
                                         <li key={cIdx} className="flex items-start gap-1.5 min-w-0">
                                           <span className="text-rose-400 font-bold shrink-0">-</span>
-                                          <div className="relative group/con inline-flex items-center gap-1.5 min-w-0 flex-wrap">
+                                          <div 
+                                            className="inline-flex items-center gap-1.5 min-w-0 flex-wrap cursor-help"
+                                            data-tooltip={note || topic}
+                                            data-tooltip-title={note ? `Contra: ${topic}` : undefined}
+                                            data-tooltip-theme="rose"
+                                          >
                                             <span className="break-words font-medium text-rose-100">{topic}</span>
                                             {note && (
-                                              <span className="px-1.5 py-0.2 rounded bg-rose-900/80 text-rose-300 border border-rose-500/40 font-mono text-[9px] uppercase tracking-wider shrink-0 cursor-help transition-all group-hover/con:border-rose-400">
+                                              <span className="px-1.5 py-0.2 rounded bg-rose-900/80 text-rose-300 border border-rose-500/40 font-mono text-[9px] uppercase tracking-wider shrink-0">
                                                 info
                                               </span>
-                                            )}
-
-                                            {/* Mouseover floating tooltip note */}
-                                            {note && (
-                                              <div className="absolute bottom-full left-0 mb-2 hidden group-hover/con:flex flex-col gap-1 w-max max-w-xs p-2.5 rounded-xl bg-zinc-950/95 border border-rose-500/50 shadow-2xl z-50 text-left pointer-events-none backdrop-blur-md">
-                                                <div className="text-[10px] font-bold uppercase tracking-wider text-rose-400 font-mono border-b border-zinc-800/80 pb-1 flex items-center gap-1">
-                                                  <ThumbsDown size={11} className="shrink-0" />
-                                                  <span>{topic}</span>
-                                                </div>
-                                                <p className="text-xs text-zinc-100 font-medium leading-relaxed whitespace-pre-wrap break-words">
-                                                  {note}
-                                                </p>
-                                              </div>
                                             )}
                                           </div>
                                         </li>

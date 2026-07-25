@@ -28,6 +28,7 @@ import ImgBBModal from "./components/ImgBBModal";
 import WelcomeRoleModal from "./components/WelcomeRoleModal";
 import SiteSettingsModal from "./components/SiteSettingsModal";
 import ImageZoomLightbox from "./components/ImageZoomLightbox";
+import { GlobalTooltip } from "./components/GlobalTooltip";
 
 const sortAlphabetically = (arr: string[]) => {
   return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
@@ -1725,6 +1726,9 @@ export default function App() {
         onSelectImage={(src) => setGlobalZoomImage((prev) => (prev ? { ...prev, src } : null))}
         title={globalZoomImage?.title}
       />
+
+      {/* Global Custom Tooltip Portal */}
+      <GlobalTooltip />
 
       {/* Scroll to Top Button */}
       {showScrollTop && (

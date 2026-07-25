@@ -96,22 +96,13 @@ export default function TrophyBadge({ trophy, note, mode = "detail", className =
   );
 
   return (
-    <div className="relative group/trophy inline-flex items-center">
+    <div
+      className="inline-flex items-center cursor-help"
+      data-tooltip={displayNote || info.description || info.shortName}
+      data-tooltip-title={`Troféu: ${info.shortName}`}
+      data-tooltip-theme="cyan"
+    >
       {badgeContent}
-
-      {/* Floating Rich Tooltip on Mouseover if Note Exists */}
-      {displayNote && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2.5 hidden group-hover/trophy:flex flex-col gap-1.5 min-w-[220px] max-w-sm sm:max-w-md p-3.5 rounded-2xl bg-zinc-950/95 border border-cyan-400/70 shadow-[0_10px_30px_rgba(0,0,0,0.8)] z-[100] text-left pointer-events-none backdrop-blur-md">
-          <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-cyan-300 font-mono border-b border-zinc-800/80 pb-1.5">
-            <Trophy size={13} className={info.iconColor} />
-            <span>{info.shortName}</span>
-            <span className="ml-auto text-[10px] text-zinc-500 font-normal">Anotação</span>
-          </div>
-          <p className="text-xs sm:text-sm text-zinc-100 font-medium leading-relaxed whitespace-pre-wrap break-words font-sans">
-            {displayNote}
-          </p>
-        </div>
-      )}
     </div>
   );
 }
