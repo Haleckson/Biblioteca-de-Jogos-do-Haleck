@@ -76,8 +76,8 @@ export function GlobalTooltip() {
     };
 
     const onMouseOut = (e: MouseEvent) => {
-      const related = e.relatedTarget as HTMLElement | null;
-      if (currentTarget && (!related || !currentTarget.contains(related))) {
+      const related = e.relatedTarget;
+      if (currentTarget && (!related || !(related instanceof Node) || !currentTarget.contains(related))) {
         handleClose();
       }
     };

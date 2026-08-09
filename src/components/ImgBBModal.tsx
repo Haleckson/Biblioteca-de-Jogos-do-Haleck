@@ -6,13 +6,17 @@
 import React, { useState, useEffect } from "react";
 import { Key, CheckCircle2, AlertCircle, ExternalLink, X, Loader2, Sparkles, RefreshCw } from "lucide-react";
 import { getCustomImgBBKey, setCustomImgBBKey } from "../utils/imgbb";
+import { useBodyScrollLock } from "../lib/bodyScrollLock";
 
 interface ImgBBModalProps {
   isOpen: boolean;
   onClose: () => void;
+  onRepairMedias?: () => void;
 }
 
-export default function ImgBBModal({ isOpen, onClose }: ImgBBModalProps) {
+export default function ImgBBModal({ isOpen, onClose, onRepairMedias }: ImgBBModalProps) {
+  useBodyScrollLock(isOpen);
+
   const [apiKey, setApiKey] = useState("");
   const [status, setStatus] = useState<{
     type: "idle" | "loading" | "success" | "error";
@@ -126,15 +130,18 @@ export default function ImgBBModal({ isOpen, onClose }: ImgBBModalProps) {
         {/* Informative Box */}
         <div className="p-3.5 bg-cyan-950/20 border border-cyan-500/20 rounded-xl text-xs text-cyan-200/90 leading-relaxed space-y-2">
           <p>
-            O ImgBB oferece contas e chaves de API 100% gratuitas. Para evitar limites de cota da chave compartilhada, insira sua própria chave de API.
+            O ImgBB possui um limite de requisições por hora (Rate Limit). Esse limite é renovado automaticamente em uma janela móvel de 1 hora.
+          </p>
+          <p className="text-zinc-300">
+            Sua chave atual dedicada (<code className="text-cyan-400 font-mono font-bold">eb752d15c...</code>) é utilizada exclusivamente por você. Para uploads simultâneos, o sistema utiliza uma fila sequencial inteligente para evitar picos de cota.
           </p>
           <a
             href="https://api.imgbb.com/"
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1.5 text-cyan-400 font-bold hover:underline"
+            className="inline-flex items-center gap-1.5 text-cyan-400 font-bold hover:underline pt-1"
           >
-            Obter chave gratuita em api.imgbb.com
+            Gerenciar ou criar novas chaves em api.imgbb.com
             <ExternalLink size={12} />
           </a>
         </div>
@@ -177,6 +184,26 @@ export default function ImgBBModal({ isOpen, onClose }: ImgBBModalProps) {
           <div className="flex items-start gap-2.5 p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-xs text-rose-300">
             <AlertCircle size={16} className="text-rose-400 shrink-0 mt-0.5" />
             <span className="whitespace-pre-line">{status.message}</span>
+          </div>
+        )}
+
+        {/* Repair & Normalize Links Section */}
+        {onRepairMedias && (
+          <div className="p-3 bg-zinc-900/60 border border-zinc-800 rounded-xl flex items-center justify-between gap-3 text-xs">
+            <div>
+              <span className="font-semibold text-zinc-200 block">Corrigir Links de Mídias</span>
+              <span className="text-[11px] text-zinc-400">Normaliza páginas do ImgBB (ibb.co) e links quebrados para URLs diretas de imagem.</span>
+            </div>
+            <button
+              onClick={() => {
+                onRepairMedias();
+                onClose();
+              }}
+              className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 hover:border-zinc-600 text-cyan-400 font-bold rounded-lg transition-all shrink-0 flex items-center gap-1.5 cursor-pointer"
+            >
+              <RefreshCw size={12} />
+              <span>Corrigir Agora</span>
+            </button>
           </div>
         )}
 

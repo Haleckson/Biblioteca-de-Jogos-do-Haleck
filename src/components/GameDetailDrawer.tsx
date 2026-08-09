@@ -6,18 +6,32 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { Game, DiaryEntry, MediaItem, splitEntities, getDlcMode, formatDateDisplay, getGameTrophies, getGameTrophyItems, parseProConTopic, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Calendar, Clock, Star, Edit, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move, Layers, Maximize2, ThumbsUp, ThumbsDown } from "lucide-react";
+import { X, Calendar, Clock, Star, Edit, FileText, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move, Layers, Maximize2, ThumbsUp, ThumbsDown, Download, Play, Infinity, CheckSquare, Square, HardDrive, GripVertical, Gamepad2, Trophy, Search, Unlink, Sparkles, PartyPopper, DollarSign, Tag, Info, MoreHorizontal, Calculator } from "lucide-react";
 import ImageZoomLightbox from "./ImageZoomLightbox";
 import { chipClass, renderStars, renderIcon, getPlatformBadgeStyle } from "./GameCard";
-import { uploadToImgBB } from "../utils/imgbb";
+import { uploadToImgBB, getAllCachedImgBBUrls } from "../utils/imgbb";
+import { parseMassImgBBUrls, recoverAndReindexImgBBMedias } from "../utils/mediaRepair";
 import { getYoutubeEmbedUrl, isYoutubeUrl, uploadVideoToYoutube } from "../utils/youtube";
-import { isDriveAuthenticated } from "../utils/googleDrive";
+import { YouTubeThumbnail } from "./YouTubeThumbnail";
+import { isDriveAuthenticated, signInWithGoogleDrive } from "../utils/googleDrive";
 import RichTextEditor from "./RichTextEditor";
 import { DiaryMediaGrid } from "./DiaryMediaGrid";
 import { formatHltbTime } from "../utils/hltbFormatter";
 import { cleanHTMLText } from "../utils/htmlSanitizer";
 import TrophyBadge, { TrophiesList } from "./TrophyBadge";
-import { formatHoursAndMinutes, getTotalGamePlaytimeHours } from "./DashboardView";
+import { formatHoursAndMinutes, getTotalGamePlaytimeHours, getGameTimeBreakdown } from "../utils/playtime";
+import { startLiveSessionForGame } from "./LiveSessionWidget";
+import GameDictionaryModal from "./GameDictionaryModal";
+import { getDictionaryWordCount, applyDictionaryToHtml } from "../utils/dictionaryUtils";
+import { mediaUploadQueueManager } from "../utils/mediaUploadManager";
+import { isVideoFile, isImageFile } from "../utils/mediaUtils";
+import { useBodyScrollLock } from "../lib/bodyScrollLock";
+import { fetchSteamAchievements, fetchSteamOwnedGames, formatSteamPlaytime, isPcPlatform, SteamAchievementsResult } from "../utils/steamApi";
+import { showToast } from "../utils/toast";
+import { moveToTrash } from "../utils/trashService";
+import { exportGameDiaryToMarkdown, exportGameDiaryToPrintPDF } from "../utils/exportService";
+import { addTrashItem } from "../utils/trashService";
+import { playRetroSound } from "../utils/audioEffects";
 
 const parsePeriodStartDate = (period: string): number => {
   try {
@@ -47,13 +61,281 @@ interface GameDetailDrawerProps {
   onDeleteGame: (gameId: string) => void;
   onSaveDiaryEntry: (gameId: string, entry: DiaryEntry) => void;
   onDeleteDiaryEntry: (gameId: string, entryId: string) => void;
+  onDeleteMultipleDiaryEntries?: (gameId: string, entryIds: string[]) => void;
   triggerAlert: (title: string, message: string) => void;
   triggerConfirm: (title: string, message: string, callback: () => void) => void;
   isAdmin: boolean;
   onUpdateGame?: (updatedGame: Game) => void;
   onSendEmailClick?: (game: Game) => void;
   onOpenGameEstimateModal?: (game: Game) => void;
+  onDeepBackupDrive?: (game: Game) => void;
+  onOpenStorytelling?: (game: Game) => void;
+  onOpenSocialCard?: (game: Game) => void;
+  onRestoreGame?: (game: Game) => void;
+  initialSelectedDiaryId?: string | null;
+  initialOpenDictionary?: boolean;
 }
+
+interface ReadingModeResizableRowProps {
+  entry: DiaryEntry;
+  expandedMediaEntries: Record<string, boolean>;
+  setExpandedMediaEntries: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  handleOpenZoom: (url: string) => void;
+  readingTextWidthPercent: number;
+  setReadingTextWidthPercent: React.Dispatch<React.SetStateAction<number>>;
+}
+
+const ReadingModeResizableRow: React.FC<ReadingModeResizableRowProps> = ({
+  entry,
+  expandedMediaEntries,
+  setExpandedMediaEntries,
+  handleOpenZoom,
+  readingTextWidthPercent,
+  setReadingTextWidthPercent,
+}) => {
+  const containerRef = React.useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isLgScreen, setIsLgScreen] = useState(false);
+
+  // Carrega a largura customizada para esta entrada específica no localStorage
+  const getSavedWidth = (entryId: string): number => {
+    try {
+      if (entryId) {
+        const saved = localStorage.getItem(`reading_width_entry_${entryId}`);
+        if (saved) {
+          const parsed = parseInt(saved, 10);
+          if (!isNaN(parsed) && parsed >= 20 && parsed <= 80) {
+            return parsed;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("Erro ao ler largura da entrada no localStorage:", e);
+    }
+    return readingTextWidthPercent || 58;
+  };
+
+  const [rowWidthPercent, setRowWidthPercent] = useState<number>(() => getSavedWidth(entry.id));
+
+  useEffect(() => {
+    setRowWidthPercent(getSavedWidth(entry.id));
+  }, [entry.id]);
+
+  const updateWidth = (newPct: number) => {
+    const rounded = Math.round(newPct);
+    setRowWidthPercent(rounded);
+    if (setReadingTextWidthPercent) {
+      setReadingTextWidthPercent(rounded);
+    }
+    if (entry.id) {
+      try {
+        localStorage.setItem(`reading_width_entry_${entry.id}`, String(rounded));
+      } catch (e) {
+        console.warn("Erro ao salvar largura da entrada no localStorage:", e);
+      }
+    }
+  };
+
+  useEffect(() => {
+    const checkLg = () => setIsLgScreen(window.innerWidth >= 1024);
+    checkLg();
+    window.addEventListener("resize", checkLg);
+    return () => window.removeEventListener("resize", checkLg);
+  }, []);
+
+  const startDragging = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    setIsDragging(true);
+
+    const handleMove = (clientX: number) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      const offsetX = clientX - rect.left;
+      const pct = (offsetX / rect.width) * 100;
+      const clampedPct = Math.min(Math.max(pct, 25), 75);
+      updateWidth(clampedPct);
+    };
+
+    const onMouseMove = (ev: MouseEvent) => {
+      handleMove(ev.clientX);
+    };
+
+    const onTouchMove = (ev: TouchEvent) => {
+      if (ev.touches[0]) {
+        handleMove(ev.touches[0].clientX);
+      }
+    };
+
+    const stopDragging = () => {
+      setIsDragging(false);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", stopDragging);
+      window.removeEventListener("touchmove", onTouchMove);
+      window.removeEventListener("touchend", stopDragging);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", stopDragging);
+    window.addEventListener("touchmove", onTouchMove);
+    window.addEventListener("touchend", stopDragging);
+  };
+
+  const isExpanded = expandedMediaEntries[entry.id];
+  const hasMedias = entry.medias && entry.medias.length > 0;
+
+  if (!hasMedias) {
+    return (
+      <div className="mt-3 bg-zinc-900/50 p-5 border border-amber-500/20 rounded-2xl">
+        <div
+          className="text-sm sm:text-base text-zinc-100 leading-relaxed prose prose-invert prose-sm max-w-none break-words"
+          dangerouslySetInnerHTML={{ __html: cleanHTMLText(entry.text) }}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className={`mt-4 flex flex-col lg:flex-row items-stretch gap-0 relative ${
+        isDragging ? "select-none cursor-col-resize" : ""
+      }`}
+    >
+      {/* Coluna da Esquerda: Texto da Jornada */}
+      <div
+        style={{
+          flexBasis: isLgScreen ? `calc(${rowWidthPercent}% - 12px)` : "100%",
+          width: isLgScreen ? `calc(${rowWidthPercent}% - 12px)` : "100%",
+          flexShrink: 0,
+        }}
+        className={`bg-zinc-900/60 p-5 border border-amber-500/30 rounded-2xl shadow-lg backdrop-blur-md transition-all ${
+          isExpanded ? "lg:sticky lg:top-4 max-h-[75vh] overflow-y-auto custom-scrollbar" : ""
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2 pb-2.5 mb-3 border-b border-zinc-800/80">
+          <span className="text-[11px] font-mono font-extrabold uppercase tracking-widest text-amber-400 flex items-center gap-1.5">
+            <BookOpen size={13} /> Texto da Jornada
+          </span>
+          <span className="text-[10px] font-mono text-zinc-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+            {isExpanded ? "Leitura Fixa" : "Jornada"}
+          </span>
+        </div>
+        <div
+          className="text-sm sm:text-base text-zinc-100 leading-relaxed prose prose-invert prose-sm max-w-none break-words"
+          dangerouslySetInnerHTML={{ __html: cleanHTMLText(entry.text) }}
+        />
+      </div>
+
+      {/* Divisória com Efeito Neon & Arraste Realtime */}
+      <div
+        onMouseDown={startDragging}
+        onTouchStart={startDragging}
+        onDoubleClick={() => updateWidth(58)}
+        title="Clique e arraste para redimensionar colunas | Duplo clique para resetar (58/42)"
+        className={`hidden lg:flex flex-col items-center justify-center w-6 cursor-col-resize group shrink-0 relative z-20 mx-0.5 select-none transition-all ${
+          isDragging ? "opacity-100" : "opacity-75 hover:opacity-100"
+        }`}
+      >
+        {/* Linha Divisória com Efeito Neon Amber */}
+        <div
+          className={`w-1 h-full rounded-full transition-all duration-150 ${
+            isDragging
+              ? "bg-amber-400 shadow-[0_0_14px_rgba(245,158,11,0.9)] scale-x-125"
+              : "bg-zinc-800 group-hover:bg-amber-500/80 group-hover:shadow-[0_0_10px_rgba(245,158,11,0.5)]"
+          }`}
+        />
+
+        {/* Botão de Pegada / Grip */}
+        <div
+          className={`absolute top-1/2 -translate-y-1/2 p-1 rounded-md border transition-all ${
+            isDragging
+              ? "bg-amber-500 text-zinc-950 border-amber-300 shadow-xl scale-125"
+              : "bg-zinc-900 text-zinc-400 group-hover:text-amber-300 border-zinc-700 group-hover:border-amber-500/60 shadow-md"
+          }`}
+        >
+          <GripVertical size={13} />
+        </div>
+
+        {/* Indicador Flutuante de Proporção ao Arrastar */}
+        {isDragging && (
+          <div className="absolute top-2 left-1/2 -translate-x-1/2 bg-amber-500 text-zinc-950 text-[10px] font-mono font-extrabold px-2 py-0.5 rounded-full shadow-lg whitespace-nowrap z-30">
+            {rowWidthPercent}% / {100 - rowWidthPercent}%
+          </div>
+        )}
+      </div>
+
+      {/* Coluna da Direita: Mídias (Sempre à direita) */}
+      <div
+        style={{
+          flexBasis: isLgScreen ? `calc(${100 - rowWidthPercent}% - 12px)` : "100%",
+          width: isLgScreen ? `calc(${100 - rowWidthPercent}% - 12px)` : "100%",
+          flexShrink: 0,
+        }}
+        className="mt-4 lg:mt-0 border border-amber-500/30 bg-zinc-950/90 rounded-2xl overflow-hidden shadow-xl p-4 self-start transition-all"
+      >
+        <div className="px-1 mb-3 flex items-center justify-between">
+          <span className="text-xs font-bold font-mono text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+            Mídias ({entry.medias.length})
+          </span>
+          {isExpanded ? (
+            <button
+              onClick={() => setExpandedMediaEntries((prev) => ({ ...prev, [entry.id]: false }))}
+              className="text-[11px] font-mono font-bold text-amber-300 hover:text-amber-200 bg-amber-950/80 hover:bg-amber-900/90 px-2.5 py-1 rounded-lg border border-amber-500/50 transition-all flex items-center gap-1 cursor-pointer shadow-sm"
+              title="Recolher galeria de mídias"
+            >
+              <ChevronUp size={13} /> Ocultar
+            </button>
+          ) : (
+            <span className="text-[10px] font-mono text-amber-500/80 uppercase tracking-wider font-bold">
+              Colapsado
+            </span>
+          )}
+        </div>
+
+        {isExpanded ? (
+          <div className="bg-zinc-900/30 border border-zinc-900 rounded-xl p-2 max-h-[75vh] overflow-y-auto custom-scrollbar">
+            <DiaryMediaGrid
+              medias={entry.medias}
+              handleOpenZoom={handleOpenZoom}
+              readOnly={true}
+            />
+          </div>
+        ) : (
+          <div className="bg-zinc-900/40 p-4 rounded-xl border border-zinc-850/80 flex flex-col items-center justify-center text-center gap-3">
+            <div className="flex items-center justify-center -space-x-2 my-1">
+              {entry.medias.slice(0, 4).map((m, mIdx) => (
+                <div
+                  key={`mini-prev-${mIdx}`}
+                  className="w-10 h-10 rounded-lg overflow-hidden border-2 border-zinc-900 bg-zinc-950 shadow-md shrink-0"
+                >
+                  <img src={m.src} alt="" className="w-full h-full object-cover opacity-75 hover:opacity-100 transition-opacity" />
+                </div>
+              ))}
+              {entry.medias.length > 4 && (
+                <div className="w-10 h-10 rounded-lg border-2 border-zinc-900 bg-zinc-900 flex items-center justify-center text-[10px] font-mono font-bold text-cyan-400 shadow-md">
+                  +{entry.medias.length - 4}
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-zinc-400 font-mono">
+              {entry.medias.length} {entry.medias.length === 1 ? "mídia anexada" : "mídias anexadas"} nesta entrada.
+            </p>
+            <button
+              onClick={() => setExpandedMediaEntries((prev) => ({ ...prev, [entry.id]: true }))}
+              className="w-full py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-amber-950/90 to-orange-950/90 hover:from-amber-900 hover:to-orange-900 border border-amber-500/50 hover:border-amber-400 text-amber-300 hover:text-amber-200 text-xs font-mono font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md hover:scale-102 active:scale-98"
+            >
+              <ImageIcon size={14} className="text-amber-400" />
+              <span>Exibir Mídias da Entrada</span>
+              <ChevronDown size={14} />
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
 
 export default function GameDetailDrawer({
   game: propGame,
@@ -63,12 +345,19 @@ export default function GameDetailDrawer({
   onDeleteGame,
   onSaveDiaryEntry,
   onDeleteDiaryEntry,
+  onDeleteMultipleDiaryEntries,
   triggerAlert,
   triggerConfirm,
   isAdmin,
   onUpdateGame,
   onSendEmailClick,
-  onOpenGameEstimateModal
+  onOpenGameEstimateModal,
+  onDeepBackupDrive,
+  onOpenStorytelling,
+  onOpenSocialCard,
+  onRestoreGame,
+  initialSelectedDiaryId,
+  initialOpenDictionary
 }: GameDetailDrawerProps) {
   const [lastGame, setLastGame] = useState<Game | null>(null);
 
@@ -80,23 +369,99 @@ export default function GameDetailDrawer({
 
   const game = propGame || lastGame;
 
+  useBodyScrollLock(isOpen);
+
   const [showAddDiary, setShowAddDiary] = useState(false);
   const [diaryStart, setDiaryStart] = useState("");
   const [diaryEnd, setDiaryEnd] = useState("");
   const [diaryText, setDiaryText] = useState("");
+  const [diaryKeyMoments, setDiaryKeyMoments] = useState<string[]>([]);
   const [diaryScreenshotUrl, setDiaryScreenshotUrl] = useState("");
   const [tempDiaryMedias, setTempDiaryMedias] = useState<MediaItem[]>([]);
+  const [isFormSelectionMode, setIsFormSelectionMode] = useState(false);
+  const [selectedTempIndices, setSelectedTempIndices] = useState<Set<number>>(new Set());
+  const [isEntrySelectionMode, setIsEntrySelectionMode] = useState(false);
+  const [selectedEntryIds, setSelectedEntryIds] = useState<Set<string>>(new Set<string>());
   const [editingDiaryId, setEditingDiaryId] = useState<string | null>(null);
+  const currentFormEntryId = React.useRef<string | null>(null);
+  const [editDiaryMode, setEditDiaryMode] = useState<"text" | "full">("full");
   const [draggedMediaIndex, setDraggedMediaIndex] = useState<number | null>(null);
   const [dragOverMediaIndex, setDragOverMediaIndex] = useState<number | null>(null);
   const [isUploadingMedia, setIsUploadingMedia] = useState(false);
   const [isDragOverDiaryMedia, setIsDragOverDiaryMedia] = useState(false);
   const [uploadProgressText, setUploadProgressText] = useState("");
+  const [uploadStats, setUploadStats] = useState<{ current: number; total: number; fileName: string; percent: number } | null>(null);
   const [zoomedImage, setZoomedImage] = useState<string | null>(null);
   const [zoomScale, setZoomScale] = useState(1);
   const [isIndexOpen, setIsIndexOpen] = useState(false);
   const [collapsedEntries, setCollapsedEntries] = useState<Record<string, boolean>>({});
   const [expandedMediaEntries, setExpandedMediaEntries] = useState<Record<string, boolean>>({});
+  const [isDictionaryModalOpen, setIsDictionaryModalOpen] = useState(false);
+  const [isReadingMode, setIsReadingMode] = useState(true);
+  const [readingTextWidthPercent, setReadingTextWidthPercent] = useState<number>(58);
+  const [isMoreMenuOpen, setIsMoreMenuOpen] = useState(false);
+
+  const [isEditingPrice, setIsEditingPrice] = useState(false);
+  const [priceInput, setPriceInput] = useState("");
+
+  useEffect(() => {
+    if (game) {
+      setPriceInput(game.pricePaid !== undefined && game.pricePaid !== null ? String(game.pricePaid) : "");
+    }
+  }, [game?.id, game?.pricePaid]);
+
+  const handleSavePriceInDrawer = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para alterar o valor pago.");
+      return;
+    }
+    if (!game || !onUpdateGame) return;
+    const cleaned = priceInput.replace(",", ".").replace(/[^0-9.]/g, "");
+    const newPrice = cleaned !== "" ? parseFloat(cleaned) : undefined;
+    onUpdateGame({
+      ...game,
+      pricePaid: newPrice,
+    });
+    setIsEditingPrice(false);
+    showToast({ title: "Valor Pago Atualizado", message: "Valor pago atualizado com sucesso!", type: "success" });
+  };
+
+  // Auto expand and scroll to target diary entry or open dictionary if requested
+  useEffect(() => {
+    if (isOpen) {
+      setIsReadingMode(true);
+      setExpandedMediaEntries({});
+      setIsAchievementsGalleryOpen(false);
+      if (initialSelectedDiaryId) {
+        setCollapsedEntries((prev) => ({ ...prev, [initialSelectedDiaryId]: false }));
+        setTimeout(() => {
+          const el = document.getElementById(`diary-entry-${initialSelectedDiaryId}`);
+          if (el) {
+            el.scrollIntoView({ behavior: "smooth", block: "center" });
+          }
+        }, 200);
+      }
+      if (initialOpenDictionary) {
+        setIsDictionaryModalOpen(true);
+      }
+    } else {
+      setIsReadingMode(false);
+    }
+  }, [isOpen, initialSelectedDiaryId, initialOpenDictionary]);
+
+  useEffect(() => {
+    const unsubscribe = mediaUploadQueueManager.onItemCompleted((_entryId, tempMediaId, finalUrl, deleteUrl) => {
+      setTempDiaryMedias((prev) =>
+        prev.map((m) => {
+          if (m.id === tempMediaId || m.src === tempMediaId) {
+            return { ...m, src: finalUrl, deleteUrl: deleteUrl || m.deleteUrl };
+          }
+          return m;
+        })
+      );
+    });
+    return unsubscribe;
+  }, []);
 
   const sortedDiary = useMemo(() => {
     if (!game || !game.diary) return [];
@@ -160,7 +525,7 @@ export default function GameDetailDrawer({
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         setControlsVisible(false);
-      }, 3000);
+      }, 6000);
     };
 
     resetTimer();
@@ -245,6 +610,20 @@ export default function GameDetailDrawer({
 
   useEffect(() => {
     setIsRepositioningCover(false);
+    setShowAddDiary(false);
+    setDiaryStart("");
+    setDiaryEnd("");
+    setDiaryText("");
+    setDiaryScreenshotUrl("");
+    setTempDiaryMedias([]);
+    setEditingDiaryId(null);
+    currentFormEntryId.current = null;
+    setSelectedTempIndices(new Set());
+    setIsFormSelectionMode(false);
+    setSelectedEntryIds(new Set());
+    setIsEntrySelectionMode(false);
+    setCelebrationData(null);
+    setIsAchievementsGalleryOpen(false);
   }, [propGame?.id]);
 
   useEffect(() => {
@@ -280,12 +659,323 @@ export default function GameDetailDrawer({
   const [drawerMetacriticPlatforms, setDrawerMetacriticPlatforms] = useState<{ code: string; name: string }[]>([]);
   const [selectedDrawerPlatform, setSelectedDrawerPlatform] = useState<string>("");
 
+  const [steamAchieveData, setSteamAchieveData] = useState<SteamAchievementsResult | null>(null);
+  const [celebrationData, setCelebrationData] = useState<{ diff: number; unlockedCount: number; totalCount: number; gameName: string } | null>(null);
+  const [isSyncingSteamDrawer, setIsSyncingSteamDrawer] = useState(false);
+  const [showSteamLinkPanel, setShowSteamLinkPanel] = useState(false);
+  const [steamDrawerSearchInput, setSteamDrawerSearchInput] = useState("");
+  const [drawerSteamOwnedGames, setDrawerSteamOwnedGames] = useState<any[]>([]);
+  const [isFetchingDrawerOwnedGames, setIsFetchingDrawerOwnedGames] = useState(false);
+  const [isLinkingSteamDrawer, setIsLinkingSteamDrawer] = useState(false);
+
+  // Steam Achievements Gallery State
+  const [achievementsFilter, setAchievementsFilter] = useState<"all" | "unlocked" | "locked" | "rare">("all");
+  const [achievementsSort, setAchievementsSort] = useState<"unlocked_first" | "rare_first" | "recent">("unlocked_first");
+  const [achievementsSearch, setAchievementsSearch] = useState("");
+  const [isAchievementsGalleryOpen, setIsAchievementsGalleryOpen] = useState(false);
+
+  // Process and filter Steam Achievements
+  const processedAchievements = useMemo(() => {
+    if (!steamAchieveData?.achievements) return [];
+
+    let list = [...steamAchieveData.achievements];
+
+    // Filter by search query
+    if (achievementsSearch.trim()) {
+      const q = achievementsSearch.toLowerCase().trim();
+      list = list.filter(
+        (a) => (a.name && a.name.toLowerCase().includes(q)) || (a.description && a.description.toLowerCase().includes(q))
+      );
+    }
+
+    // Filter by tab
+    if (achievementsFilter === "unlocked") {
+      list = list.filter((a) => a.achieved === 1);
+    } else if (achievementsFilter === "locked") {
+      list = list.filter((a) => a.achieved === 0);
+    } else if (achievementsFilter === "rare") {
+      list = list.filter((a) => a.isUltraRare || (a.globalPercent !== undefined && a.globalPercent <= 10));
+    }
+
+    // Sort
+    list.sort((a, b) => {
+      if (achievementsSort === "unlocked_first") {
+        if (a.achieved !== b.achieved) return b.achieved - a.achieved;
+        return (b.unlocktime || 0) - (a.unlocktime || 0);
+      }
+      if (achievementsSort === "rare_first") {
+        const percA = a.globalPercent !== undefined ? a.globalPercent : 100;
+        const percB = b.globalPercent !== undefined ? b.globalPercent : 100;
+        return percA - percB;
+      }
+      if (achievementsSort === "recent") {
+        return (b.unlocktime || 0) - (a.unlocktime || 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [steamAchieveData, achievementsSearch, achievementsFilter, achievementsSort]);
+
+  const handleFetchDrawerOwnedGames = async () => {
+    if (drawerSteamOwnedGames.length > 0) return;
+    setIsFetchingDrawerOwnedGames(true);
+    try {
+      const owned = await fetchSteamOwnedGames();
+      setDrawerSteamOwnedGames(owned || []);
+    } catch (e) {
+      console.warn("Erro ao buscar jogos do usuário:", e);
+    } finally {
+      setIsFetchingDrawerOwnedGames(false);
+    }
+  };
+
+  const handleLinkSteamAppIdInDrawer = async (appidInput: number | string) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para vincular o jogo à Steam.");
+      return;
+    }
+    if (!game || !onUpdateGame) return;
+    setIsLinkingSteamDrawer(true);
+    try {
+      let numAppId = typeof appidInput === "number" ? appidInput : parseInt(String(appidInput).trim(), 10);
+
+      if (isNaN(numAppId) || numAppId <= 0) {
+        const match = String(appidInput).match(/app\/(\d+)/) || String(appidInput).match(/run\/(\d+)/) || String(appidInput).match(/^(\d+)$/);
+        if (match) {
+          numAppId = parseInt(match[1], 10);
+        } else {
+          // If searching by title in owned games list
+          let list = drawerSteamOwnedGames;
+          if (list.length === 0) {
+            list = await fetchSteamOwnedGames();
+            setDrawerSteamOwnedGames(list || []);
+          }
+          const matched = list.find((g) => g.name && g.name.toLowerCase().includes(String(appidInput).trim().toLowerCase()));
+          if (matched) {
+            numAppId = matched.appid;
+          } else {
+            throw new Error("Não foi possível identificar o App ID da Steam. Digite o número do App ID (ex: 39140) ou link da loja.");
+          }
+        }
+      }
+
+      let playtime: number | undefined = undefined;
+      let lastPlayed: number | undefined = undefined;
+
+      let list = drawerSteamOwnedGames;
+      if (list.length === 0) {
+        list = await fetchSteamOwnedGames();
+        setDrawerSteamOwnedGames(list || []);
+      }
+      const match = list.find((g) => g.appid === numAppId || String(g.appid) === String(numAppId));
+      if (match) {
+        playtime = match.playtime_forever;
+        lastPlayed = match.rtime_last_played;
+      }
+
+      let achCount: number | undefined = undefined;
+      let achTotal: number | undefined = undefined;
+      try {
+        const ach = await fetchSteamAchievements(numAppId);
+        setSteamAchieveData(ach);
+        if (ach) {
+          achCount = ach.unlockedCount;
+          achTotal = ach.totalCount;
+        }
+      } catch (e) {
+        console.warn("Erro ao buscar conquistas:", e);
+      }
+
+      const updatedGame: Game = {
+        ...game,
+        steamAppId: numAppId,
+        steamPlaytimeMinutes: playtime !== undefined ? playtime : game.steamPlaytimeMinutes,
+        steamLastPlayedTimestamp: lastPlayed !== undefined ? lastPlayed : game.steamLastPlayedTimestamp,
+        steamAchievementsCount: achCount !== undefined ? achCount : game.steamAchievementsCount,
+        steamAchievementsTotal: achTotal !== undefined ? achTotal : game.steamAchievementsTotal,
+      };
+
+      onUpdateGame(updatedGame);
+      setShowSteamLinkPanel(false);
+      setSteamDrawerSearchInput("");
+      triggerAlert(
+        "Vínculo Steam Salvo!",
+        `"${game.name}" foi vinculado com sucesso ao Steam App ID ${numAppId}! ${playtime ? `(${formatSteamPlaytime(playtime)} gravadas)` : ""}`
+      );
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao Vincular", err.message || "Erro ao vincular jogo à Steam.");
+    } finally {
+      setIsLinkingSteamDrawer(false);
+    }
+  };
+
+  const handleUnlinkSteamInDrawer = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para desvincular o jogo da Steam.");
+      return;
+    }
+    if (!game || !onUpdateGame) return;
+    triggerConfirm(
+      "Desvincular Steam",
+      `Deseja remover o vínculo com a Steam do jogo "${game.name}"?`,
+      () => {
+        const updatedGame: Game = {
+          ...game,
+          steamAppId: undefined,
+          steamPlaytimeMinutes: undefined,
+          steamLastPlayedTimestamp: undefined,
+          steamAchievementsCount: undefined,
+          steamAchievementsTotal: undefined,
+        };
+        onUpdateGame(updatedGame);
+        setSteamAchieveData(null);
+        setShowSteamLinkPanel(false);
+        triggerAlert("Vínculo Removido", `O jogo "${game.name}" foi desvinculado da Steam.`);
+      }
+    );
+  };
+
+  const handleSyncSteamInDrawer = async () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para sincronizar dados da Steam.");
+      return;
+    }
+    if (!game || !game.steamAppId) return;
+    setIsSyncingSteamDrawer(true);
+    try {
+      const ownedList = await fetchSteamOwnedGames();
+      const match = ownedList.find((g) => g.appid === game.steamAppId || String(g.appid) === String(game.steamAppId));
+      let updatedGame = { ...game };
+      if (match) {
+        updatedGame.steamPlaytimeMinutes = match.playtime_forever;
+        if (match.rtime_last_played) {
+          updatedGame.steamLastPlayedTimestamp = match.rtime_last_played;
+        }
+      }
+      const ach = await fetchSteamAchievements(game.steamAppId);
+      setSteamAchieveData(ach);
+      if (ach) {
+        const prevCount = game.steamAchievementsCount;
+        const currentCount = ach.unlockedCount;
+        const totalCount = ach.totalCount;
+
+        if (prevCount !== undefined && currentCount > prevCount) {
+          const diff = currentCount - prevCount;
+          showToast({
+            title: "🏆 Novas Conquistas Desbloqueadas!",
+            message: `Você conquistou +${diff} nova(s) conquista(s) em "${game.name}"!\nTotal: ${currentCount} / ${totalCount}`,
+            type: "achievement",
+            duration: 8000,
+          });
+          setCelebrationData({
+            diff,
+            unlockedCount: currentCount,
+            totalCount,
+            gameName: game.name,
+          });
+        }
+
+        updatedGame.steamAchievementsCount = currentCount;
+        updatedGame.steamAchievementsTotal = totalCount;
+      }
+      if (onUpdateGame) {
+        onUpdateGame(updatedGame);
+      }
+      triggerAlert("Sincronização Steam Concluída", "Estatísticas, horas e conquistas da Steam atualizadas com sucesso!");
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao Sincronizar", "Não foi possível atualizar os dados da Steam.");
+    } finally {
+      setIsSyncingSteamDrawer(false);
+    }
+  };
+
+  const handleCopySteamPlaytimeToPersonal = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para copiar as horas da Steam para o seu Tempo Investido Pessoal.");
+      return;
+    }
+    if (!game || !game.steamPlaytimeMinutes || !onUpdateGame) return;
+    const formatted = formatSteamPlaytime(game.steamPlaytimeMinutes);
+    const updatedGame = {
+      ...game,
+      playtime: formatted,
+    };
+    onUpdateGame(updatedGame);
+    triggerAlert("Tempo Atualizado", `O seu Tempo Investido pessoal foi definido para "${formatted}" (Horas da Steam).`);
+  };
+
+  const formatLastPlayedDate = (timestamp?: number) => {
+    if (!timestamp || timestamp <= 0) return null;
+    const date = new Date(timestamp * 1000);
+    return date.toLocaleDateString("pt-BR", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
+  useEffect(() => {
+    if (game?.steamAppId && isOpen) {
+      fetchSteamAchievements(game.steamAppId)
+        .then((data) => {
+          setSteamAchieveData(data);
+          if (data && data.unlockedCount !== undefined) {
+            const prevCount = game.steamAchievementsCount;
+            const currentCount = data.unlockedCount;
+            const totalCount = data.totalCount;
+
+            if (prevCount !== undefined && currentCount > prevCount) {
+              const diff = currentCount - prevCount;
+              showToast({
+                title: "🏆 Novas Conquistas Desbloqueadas!",
+                message: `Você conquistou +${diff} nova(s) conquista(s) em "${game.name}" desde a última sincronização!\nTotal: ${currentCount} / ${totalCount} (${data.percentage}%)`,
+                type: "achievement",
+                duration: 8000,
+              });
+              setCelebrationData({
+                diff,
+                unlockedCount: currentCount,
+                totalCount,
+                gameName: game.name,
+              });
+              if (onUpdateGame) {
+                onUpdateGame({
+                  ...game,
+                  steamAchievementsCount: currentCount,
+                  steamAchievementsTotal: totalCount,
+                });
+              }
+            } else if (prevCount === undefined) {
+              if (onUpdateGame) {
+                onUpdateGame({
+                  ...game,
+                  steamAchievementsCount: currentCount,
+                  steamAchievementsTotal: totalCount,
+                });
+              }
+            }
+          }
+        })
+        .catch((err) => console.warn("Erro ao carregar conquistas Steam:", err));
+    } else {
+      setSteamAchieveData(null);
+    }
+  }, [game?.steamAppId, isOpen]);
+
   useEffect(() => {
     if (game && game.metacriticUrl && isOpen) {
       fetch(`/api/metacritic?url=${encodeURIComponent(game.metacriticUrl)}`)
-        .then((res) => res.json())
+        .then((res) => {
+          if (!res.ok) return null;
+          return res.json();
+        })
         .then((data) => {
-          if (data.platforms) {
+          if (data && data.platforms) {
             setDrawerMetacriticPlatforms(data.platforms);
             
             // Try matching game's selected platform
@@ -305,7 +995,9 @@ export default function GameDetailDrawer({
             setSelectedDrawerPlatform(matchedPlatformCode || "");
           }
         })
-        .catch((err) => console.error("Erro ao carregar plataformas no drawer:", err));
+        .catch((err) => {
+          console.warn("Não foi possível obter plataformas no drawer:", err?.message || err);
+        });
     } else {
       setDrawerMetacriticPlatforms([]);
       setSelectedDrawerPlatform("");
@@ -313,11 +1005,15 @@ export default function GameDetailDrawer({
   }, [game?.metacriticUrl, isOpen, game?.platform]);
 
   const handleSyncHltb = async () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para atualizar os dados do HowLongToBeat.");
+      return;
+    }
     if (!game || !game.hltbId) {
       triggerAlert("ID ausente", "Não há um ID do HowLongToBeat associado a este jogo para atualizar.");
       return;
     }
-    
+
     setIsSyncingHltb(true);
     try {
       const response = await fetch(`/api/hltb?url=${encodeURIComponent(game.hltbId)}`);
@@ -346,6 +1042,10 @@ export default function GameDetailDrawer({
   };
 
   const handleSyncMetacritic = async (customPlatformCode?: string) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para atualizar as notas do Metacritic.");
+      return;
+    }
     if (!game || !game.metacriticUrl) {
       triggerAlert("Link ausente", "Não há um link do Metacritic associado a este jogo para atualizar.");
       return;
@@ -448,9 +1148,15 @@ export default function GameDetailDrawer({
     return parts.length === 3 ? `${parts[2]}/${parts[1]}/${parts[0]}` : dateStr;
   };
 
-  const handleEditDiaryClick = (entry: DiaryEntry) => {
+  const handleEditDiaryClick = (entry: DiaryEntry, mode: "text" | "full" = "full") => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para editar entradas do diário.");
+      return;
+    }
     setEditingDiaryId(entry.id);
+    setEditDiaryMode(mode);
     setDiaryText(entry.text);
+    setDiaryKeyMoments(entry.keyMoments || []);
     
     if (entry.period) {
       const parts = entry.period.split(" ~ ");
@@ -468,12 +1174,61 @@ export default function GameDetailDrawer({
     }
     
     if (entry.medias && entry.medias.length > 0) {
-      setTempDiaryMedias(entry.medias);
+      const seen = new Set<string>();
+      const cleanMedias = entry.medias.filter((m) => {
+        if (!m || !m.src) return false;
+        const clean = m.src.trim();
+        if (seen.has(clean)) return false;
+        seen.add(clean);
+        return true;
+      });
+      setTempDiaryMedias(cleanMedias);
     } else {
       setTempDiaryMedias([]);
     }
     
+    // Automatically expand entry if it was collapsed
+    setCollapsedEntries((prev) => ({ ...prev, [entry.id]: false }));
     setShowAddDiary(true);
+
+    // Scroll directly to the inline editor form right under this entry
+    setTimeout(() => {
+      const el = document.getElementById(`diary-editor-panel-${entry.id}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else {
+        const fallbackEl = document.getElementById(`diary-entry-${entry.id}`);
+        if (fallbackEl) {
+          fallbackEl.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }
+    }, 150);
+  };
+
+  const handleAddNewDiaryClick = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para adicionar entradas ao diário.");
+      return;
+    }
+    if (showAddDiary && editingDiaryId === null) {
+      handleCancelDiary();
+    } else {
+      setEditingDiaryId(null);
+      setEditDiaryMode("full");
+      setDiaryStart("");
+      setDiaryEnd("");
+      setDiaryText("");
+      setDiaryScreenshotUrl("");
+      setTempDiaryMedias([]);
+      setShowAddDiary(true);
+
+      setTimeout(() => {
+        const el = document.getElementById("diary-editor-panel-new");
+        if (el) {
+          el.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 150);
+    }
   };
 
   const handleCancelDiary = () => {
@@ -484,56 +1239,84 @@ export default function GameDetailDrawer({
     setTempDiaryMedias([]);
     setShowAddDiary(false);
     setEditingDiaryId(null);
+    setEditDiaryMode("full");
+    currentFormEntryId.current = null;
   };
 
   const uploadDiaryMediaFiles = async (files: File[]) => {
-    if (files.length === 0) return;
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para fazer upload de mídias.");
+      return;
+    }
+    const activeGame = propGame || game;
+    if (files.length === 0 || !activeGame) return;
 
-    setIsUploadingMedia(true);
-    setUploadProgressText("Preparando envio...");
-    try {
-      let currentIndex = tempDiaryMedias.length;
-      for (const file of files) {
-        const isVideo = file.type.startsWith("video/");
-        if (isVideo) {
-          if (!isDriveAuthenticated()) {
-            triggerAlert(
-              "Conexão do Google Necessária",
-              "Para fazer upload de vídeos diretamente do seu site para o YouTube, você precisa conectar sua conta Google no topo da página (clique em 'Conectar Google Drive'). Isso permite criar uma playlist do jogo no seu YouTube e salvar o vídeo automaticamente lá de forma privada/unlisted!"
-            );
-            continue;
-          }
-
-          // Automated YouTube upload and playlist link flow
-          const ytUrl = await uploadVideoToYoutube(file, game.name, (statusText) => {
-            setUploadProgressText(statusText);
-          });
-
-          setTempDiaryMedias((prev) => [
-            ...prev,
-            { src: ytUrl, isVideo: true }
-          ]);
-        } else {
-          currentIndex++;
-          const fileNameParam = `${game.name}_diario_${currentIndex}`;
-          setUploadProgressText(`Enviando imagem ${file.name} para o ImgBB...`);
-          // Upload to ImgBB automatically
-          const res = await uploadToImgBB(file, fileNameParam);
-          setTempDiaryMedias((prev) => [
-            ...prev,
-            { src: res.url, isVideo: false, deleteUrl: res.deleteUrl }
-          ]);
-        }
+    const hasVideo = files.some((f) => isVideoFile(f));
+    if (hasVideo && !isDriveAuthenticated()) {
+      try {
+        await signInWithGoogleDrive();
+      } catch (authErr: any) {
+        triggerAlert(
+          "Login no YouTube Necessário",
+          "Para salvar seus vídeos no YouTube e organizá-los em playlists por jogo, é necessário conectar sua conta do Google."
+        );
+        return;
       }
-    } catch (error: any) {
-      console.error(error);
-      triggerAlert(
-        "Erro de Envio",
-        `Ocorreu um erro ao processar as mídias: ${error.message || error}`
-      );
-    } finally {
-      setIsUploadingMedia(false);
-      setUploadProgressText("");
+    }
+
+    const entryId = editingDiaryId || currentFormEntryId.current || `diary_${Date.now()}`;
+    currentFormEntryId.current = entryId;
+
+    const entryTitle =
+      diaryStart && diaryEnd
+        ? `${diaryStart} até ${diaryEnd}`
+        : diaryStart
+        ? diaryStart
+        : `Entrada do Diário (${new Date().toLocaleDateString("pt-BR")})`;
+
+    const currentMediaCount = tempDiaryMedias.length;
+    const batchFiles: Array<{ file: File; tempMediaId: string; isVideo: boolean; gridPosition: number }> = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const isVideo = isVideoFile(file);
+      const gridPosition = currentMediaCount + i + 1;
+
+      const tempMediaId = `temp_media_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`;
+      const blobUrl = URL.createObjectURL(file);
+
+      // Instantly show local preview thumbnail in UI
+      setTempDiaryMedias((prev) => [
+        ...prev,
+        { id: tempMediaId, src: blobUrl, isVideo }
+      ]);
+
+      // Read image as Base64 data URL so it's persistent across page reloads if saved before ImgBB completes
+      if (!isVideo) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64 = reader.result as string;
+          if (base64) {
+            setTempDiaryMedias((prev) =>
+              prev.map((m) => (m.id === tempMediaId && m.src.startsWith("blob:") ? { ...m, src: base64 } : m))
+            );
+          }
+        };
+        reader.readAsDataURL(file);
+      }
+
+      batchFiles.push({ file, tempMediaId, isVideo, gridPosition });
+    }
+
+    if (batchFiles.length > 0) {
+      // Enqueue to global queue so user can navigate freely across games
+      mediaUploadQueueManager.enqueueBatch({
+        gameId: activeGame.id,
+        gameName: activeGame.name,
+        entryId,
+        entryTitle,
+        files: batchFiles,
+      });
     }
   };
 
@@ -558,7 +1341,7 @@ export default function GameDetailDrawer({
     e.preventDefault();
     setIsDragOverDiaryMedia(false);
     const files = Array.from(e.dataTransfer.files || []) as File[];
-    const validFiles = files.filter(f => f.type.startsWith("image/") || f.type.startsWith("video/"));
+    const validFiles = files.filter(f => isImageFile(f) || isVideoFile(f));
     if (validFiles.length > 0) {
       uploadDiaryMediaFiles(validFiles);
     } else if (files.length > 0) {
@@ -569,21 +1352,82 @@ export default function GameDetailDrawer({
   const handleAddLink = () => {
     if (!diaryScreenshotUrl.trim()) return;
 
-    const urls = diaryScreenshotUrl
-      .split(",")
-      .map((u) => u.trim())
-      .filter(Boolean);
+    const massItems = parseMassImgBBUrls(diaryScreenshotUrl);
+    if (massItems.length > 0) {
+      const existingSrcs = new Set(tempDiaryMedias.map((m) => m.src));
+      const newUnique = massItems.filter((item) => !existingSrcs.has(item.src));
 
-    urls.forEach((url) => {
-      const isYt = isYoutubeUrl(url);
-      const isVideo = isYt || /\.(mp4|webm|mov)$/i.test(url) || url.includes("video");
-      setTempDiaryMedias((prev) => [
-        ...prev,
-        { src: url, isVideo }
-      ]);
-    });
+      setTempDiaryMedias((prev) => [...prev, ...newUnique]);
+      triggerAlert(
+        "Mídias Adicionadas em Lote",
+        `${newUnique.length} link(s) de imagem foram extraídos e contabilizados nesta entrada de diário!`
+      );
+    } else {
+      const urls = diaryScreenshotUrl
+        .split(/[\s,;\n]+/)
+        .map((u) => u.trim())
+        .filter(Boolean);
+
+      const existingSrcs = new Set(tempDiaryMedias.map((m) => m.src));
+      let added = 0;
+
+      urls.forEach((url) => {
+        if (!existingSrcs.has(url)) {
+          existingSrcs.add(url);
+          const isYt = isYoutubeUrl(url);
+          const isVideo = isYt || /\.(mp4|webm|mov)$/i.test(url) || url.includes("video");
+          setTempDiaryMedias((prev) => [
+            ...prev,
+            { src: url, isVideo }
+          ]);
+          added++;
+        }
+      });
+
+      if (added > 0) {
+        triggerAlert("Mídias Adicionadas", `${added} link(s) adicionados com sucesso.`);
+      }
+    }
 
     setDiaryScreenshotUrl("");
+  };
+
+  const handleReindexCacheMedias = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para reindexar mídias.");
+      return;
+    }
+    const cachedUrls = getAllCachedImgBBUrls();
+    if (cachedUrls.length === 0) {
+      triggerAlert(
+        "Nenhuma Mídia em Cache",
+        "Não foram encontradas mídias pendentes de reindexação no cache local."
+      );
+      return;
+    }
+
+    const existingSrcs = new Set(tempDiaryMedias.map((m) => m.src));
+    let addedCount = 0;
+
+    cachedUrls.forEach((url) => {
+      if (!existingSrcs.has(url)) {
+        existingSrcs.add(url);
+        setTempDiaryMedias((prev) => [...prev, { src: url, isVideo: false }]);
+        addedCount++;
+      }
+    });
+
+    if (addedCount > 0) {
+      triggerAlert(
+        "Mídias Recuperadas",
+        `${addedCount} imagens enviadas ao ImgBB foram reindexadas e vinculadas com sucesso a esta entrada!`
+      );
+    } else {
+      triggerAlert(
+        "Mídias Já Indexadas",
+        "Todas as mídias salvas no ImgBB já estão contabilizadas nesta entrada."
+      );
+    }
   };
 
   const moveMedia = (index: number, direction: "left" | "right") => {
@@ -622,6 +1466,10 @@ export default function GameDetailDrawer({
   };
 
   const handleAddDiarySubmit = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para salvar entradas no diário.");
+      return;
+    }
     if (!diaryStart || !diaryEnd || !diaryText.trim()) {
       triggerAlert("Campos Obrigatórios", "Por favor, preencha as datas do período e o texto da entrada.");
       return;
@@ -643,41 +1491,692 @@ export default function GameDetailDrawer({
     }
 
     const newEntry: DiaryEntry = {
-      id: editingDiaryId || "diary-" + Date.now(),
+      id: editingDiaryId || currentFormEntryId.current || ("diary-" + Date.now()),
       period,
       medias,
-      text: diaryText.trim()
+      text: diaryText.trim(),
+      keyMoments: diaryKeyMoments,
     };
 
+    playRetroSound("save");
     onSaveDiaryEntry(game.id, newEntry);
 
     // reset state
     setDiaryStart("");
     setDiaryEnd("");
     setDiaryText("");
+    setDiaryKeyMoments([]);
     setDiaryScreenshotUrl("");
     setTempDiaryMedias([]);
     setShowAddDiary(false);
     setEditingDiaryId(null);
+    setEditDiaryMode("full");
+    currentFormEntryId.current = null;
+    setIsFormSelectionMode(false);
+    setSelectedTempIndices(new Set());
+  };
+
+  const handleDeleteEntryMedias = (entryId: string, mediasToDelete: MediaItem[]) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para excluir mídias.");
+      return;
+    }
+    if (!game) return;
+    const targetEntry = (game.diary || []).find((e) => e.id === entryId);
+    if (!targetEntry) return;
+
+    const removeSrcs = new Set(mediasToDelete.map((m) => m.src));
+
+    mediasToDelete.forEach((m) => {
+      moveToTrash({
+        type: "media",
+        title: m.isVideo ? "Vídeo da Jornada" : "Imagem da Jornada",
+        data: m,
+        gameId: game.id,
+        diaryEntryId: entryId,
+        gameTitle: game.name,
+      });
+    });
+
+    const remainingMedias = (targetEntry.medias || []).filter((m) => !removeSrcs.has(m.src));
+    const updatedEntry: DiaryEntry = {
+      ...targetEntry,
+      medias: remainingMedias,
+    };
+
+    onSaveDiaryEntry(game.id, updatedEntry);
+    showToast({
+      title: "Mídia Movidada para Lixeira 🗑️",
+      message: `${mediasToDelete.length} mídia(s) enviada(s) para a Lixeira.`,
+      type: "info",
+    });
+  };
+
+  const handleDeleteAllEntryMedias = (entryId: string) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para excluir mídias.");
+      return;
+    }
+    if (!game) return;
+    const targetEntry = (game.diary || []).find((e) => e.id === entryId);
+    if (!targetEntry) return;
+
+    if (targetEntry.medias) {
+      targetEntry.medias.forEach((m) => {
+        moveToTrash({
+          type: "media",
+          title: m.isVideo ? "Vídeo da Jornada" : "Imagem da Jornada",
+          data: m,
+          gameId: game.id,
+          diaryEntryId: entryId,
+          gameTitle: game.name,
+        });
+      });
+    }
+
+    const updatedEntry: DiaryEntry = {
+      ...targetEntry,
+      medias: [],
+    };
+
+    onSaveDiaryEntry(game.id, updatedEntry);
+    showToast({
+      title: "Mídias Movidas para Lixeira 🗑️",
+      message: "Todas as mídias da entrada foram enviadas para a Lixeira.",
+      type: "info",
+    });
+  };
+
+  const renderDiaryForm = (targetEntryId: string | null) => {
+    const isEditing = targetEntryId !== null;
+    const isTextOnly = isEditing && editDiaryMode === "text";
+
+    return (
+      <motion.div
+        key={`add-diary-form-panel-${targetEntryId || "new"}`}
+        id={targetEntryId ? `diary-editor-panel-${targetEntryId}` : "diary-editor-panel-new"}
+        initial={{ opacity: 0, height: 0 }}
+        animate={{ opacity: 1, height: "auto" }}
+        exit={{ opacity: 0, height: 0 }}
+        className="glass rounded-3xl border border-cyan-500/40 p-5 space-y-4 overflow-hidden shadow-2xl my-3 bg-zinc-950/95 relative"
+      >
+        {/* Sticky Top Header with Always Visible Save & Cancel Actions */}
+        <div className="sticky -top-5 z-30 bg-zinc-950/95 backdrop-blur-md pt-3 pb-3 -mx-5 px-5 -mt-5 border-b border-cyan-500/30 shadow-lg flex flex-col gap-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className="text-[10px] uppercase tracking-[0.2em] text-cyan-300 font-bold flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+              {isEditing
+                ? isTextOnly
+                  ? "EDITANDO APENAS O TEXTO DO REGISTRO"
+                  : "EDITANDO ENTRADA COMPLETA (TEXTO E MÍDIAS)"
+                : "NOVO REGISTRO DE DIÁRIO"}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleCancelDiary}
+                className="px-3.5 py-1.5 rounded-xl bg-zinc-900 border border-zinc-700 text-zinc-200 font-bold hover:bg-zinc-800 text-xs cursor-pointer transition-all active:scale-95 shadow-sm"
+                title="Cancelar e descartar alterações"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleAddDiarySubmit}
+                className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-extrabold text-xs cursor-pointer active:scale-95 transition-all shadow-md shadow-cyan-950/60 flex items-center gap-1.5"
+                title="Salvar alterações no diário da jogatina"
+              >
+                <Check size={14} className="stroke-[3]" />
+                {isEditing ? (isTextOnly ? "Salvar Texto" : "Atualizar Entrada") : "Salvar Entrada"}
+              </button>
+            </div>
+          </div>
+
+          {/* Sticky Media Upload Progress Indicator */}
+          {isUploadingMedia && uploadStats && (
+            <div className="w-full bg-cyan-950/80 border border-cyan-500/40 rounded-xl px-3 py-2 flex items-center justify-between gap-3 text-xs font-mono shadow-inner animate-fadeIn">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping shrink-0" />
+                <span className="text-cyan-200 font-bold truncate">
+                  Upload: <strong className="text-white font-black">{uploadStats.current} de {uploadStats.total} imagens</strong>
+                </span>
+              </div>
+              <div className="flex items-center gap-2.5 shrink-0">
+                <div className="w-20 sm:w-32 h-2 rounded-full bg-zinc-900 border border-zinc-700 overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-cyan-400 via-purple-400 to-emerald-400 transition-all duration-300 rounded-full"
+                    style={{ width: `${uploadStats.percent}%` }}
+                  />
+                </div>
+                <span className="text-cyan-400 font-extrabold text-[11px]">{uploadStats.percent}%</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-1">
+            Período de Aventura *
+          </label>
+          <div className="flex items-center gap-2 font-mono text-sm max-w-md">
+            <input
+              type="date"
+              value={diaryStart}
+              onChange={(e) => setDiaryStart(e.target.value)}
+              className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
+            />
+            <span className="text-zinc-400">~</span>
+            <input
+              type="date"
+              value={diaryEnd}
+              onChange={(e) => setDiaryEnd(e.target.value)}
+              className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
+            />
+          </div>
+        </div>
+
+        {/* Key Moments Tag Picker */}
+        <div>
+          <label className="block text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-bold mb-1.5 flex items-center gap-1">
+            <Tag size={12} />
+            Momentos Chave / Destaques da Entrada
+          </label>
+          <div className="flex flex-wrap gap-1.5">
+            {["Boss Fight ⚔️", "Platina 🏆", "Plot Twist 🎭", "Review Final ⭐", "Momento Épico ⚡", "Segredo 🔑", "SPOILER ⚠️"].map((tag) => {
+              const selected = diaryKeyMoments.includes(tag);
+              return (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => {
+                    if (selected) {
+                      setDiaryKeyMoments(diaryKeyMoments.filter((t) => t !== tag));
+                    } else {
+                      setDiaryKeyMoments([...diaryKeyMoments, tag]);
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                    selected
+                      ? "bg-cyan-500 text-zinc-950 border-cyan-400 shadow-md shadow-cyan-500/20"
+                      : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-700 hover:text-zinc-300"
+                  }`}
+                >
+                  {tag}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div>
+          <label className="block text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-1">
+            {isEditing ? (isTextOnly ? "Texto do Diário (Apenas Texto) *" : "Texto da Entrada *") : "Entrada de Diário *"}
+          </label>
+          <RichTextEditor
+            value={diaryText}
+            onChange={setDiaryText}
+            gameName={game?.name}
+            game={game}
+            onUpdateGame={onUpdateGame}
+            onOpenDictionaryModal={() => setIsDictionaryModalOpen(true)}
+            placeholder="Relate conquistas, batalhas difíceis, sentimentos, chefes derrotados..."
+          />
+        </div>
+
+        {!isTextOnly && (
+          <div className="pt-2 border-t border-zinc-850">
+            <label className="block text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-1.5">
+              Anexar Screenshot ou Vídeo (ImgBB & YouTube)
+            </label>
+            
+            <div className="space-y-3">
+              {/* Drag and drop zone */}
+              <div
+                onDragOver={handleDiaryDragOver}
+                onDragLeave={handleDiaryDragLeave}
+                onDrop={handleDiaryDrop}
+                className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
+                  isDragOverDiaryMedia
+                    ? "border-cyan-500 bg-cyan-950/10 scale-[1.01]"
+                    : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
+                }`}
+                onClick={() => {
+                  const diaryInput = document.getElementById("diary-media-input");
+                  if (diaryInput) diaryInput.click();
+                }}
+              >
+                <input
+                  id="diary-media-input"
+                  type="file"
+                  multiple
+                  disabled={isUploadingMedia}
+                  accept="image/*,video/*"
+                  onChange={handleDiaryMediaUpload}
+                  className="hidden"
+                />
+                {isUploadingMedia ? (
+                  <div className="flex flex-col items-center gap-3 py-2 text-center w-full max-w-md px-2">
+                    <div className="flex items-center gap-3 w-full justify-between text-xs font-bold text-cyan-300">
+                      <span className="flex items-center gap-1.5 font-mono">
+                        <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping" />
+                        {uploadStats ? `${uploadStats.current} de ${uploadStats.total} imagens em progresso` : "Enviando mídias..."}
+                      </span>
+                      {uploadStats && (
+                        <span className="text-cyan-400 font-extrabold font-mono bg-cyan-950/80 px-2.5 py-0.5 rounded-md border border-cyan-500/30 text-xs">
+                          {uploadStats.percent}%
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Integrated Progress Bar */}
+                    <div className="w-full h-3 rounded-full bg-zinc-900 overflow-hidden border border-zinc-800 p-0.5 relative">
+                      <div 
+                        className="h-full bg-gradient-to-r from-cyan-500 via-purple-500 to-emerald-400 rounded-full transition-all duration-300 shadow-md shadow-cyan-500/30"
+                        style={{ width: `${uploadStats?.percent || 0}%` }}
+                      />
+                    </div>
+
+                    {uploadStats && (
+                      <p className="text-[11px] text-zinc-400 font-mono truncate max-w-full">
+                        Arquivo atual: <span className="text-zinc-200 font-medium">{uploadStats.fileName}</span>
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center gap-1.5 text-center">
+                    <Upload size={20} className="text-cyan-400" />
+                    <p className="text-xs font-semibold text-zinc-300">
+                      Arraste screenshots ou vídeos aqui ou <span className="text-cyan-400 underline decoration-dashed underline-offset-4">escolha ficheiros</span>
+                    </p>
+                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">
+                      Múltiplos arquivos suportados
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Manual Link or Batch URLs input fallback */}
+              <div className="flex w-full gap-2 items-center flex-wrap sm:flex-nowrap">
+                <input
+                  type="text"
+                  value={diaryScreenshotUrl}
+                  onChange={(e) => setDiaryScreenshotUrl(e.target.value)}
+                  placeholder="Cole link direto ou lista de URLs (ImgBB, YouTube, etc)..."
+                  className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      handleAddLink();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleAddLink}
+                  className="px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-cyan-400 transition-all flex items-center justify-center gap-1.5 text-xs font-mono font-semibold cursor-pointer shrink-0"
+                  title="Adicionar Link ou Lote de URLs"
+                >
+                  <Link2 size={14} />
+                  <span>Adicionar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleReindexCacheMedias}
+                  className="px-3 py-2 rounded-xl bg-amber-950/70 border border-amber-500/40 hover:bg-amber-900/90 text-amber-300 transition-all flex items-center justify-center gap-1.5 text-xs font-mono font-semibold cursor-pointer shrink-0"
+                  title="Recuperar e reindexar mídias do ImgBB do cache do navegador"
+                >
+                  <RefreshCw size={13} />
+                  <span>Reindexar Cache</span>
+                </button>
+              </div>
+            </div>
+
+            {tempDiaryMedias.length > 0 && (
+              <div className="space-y-2 mt-3">
+                {/* Batch selection and action toolbar */}
+                <div className="p-2.5 rounded-xl bg-zinc-950 border border-zinc-800 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+                  <p className="text-[10px] text-zinc-400 flex items-center gap-1.5 text-left">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                    Arraste e solte para reordenar ou selecione para excluir em lote
+                  </p>
+
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsFormSelectionMode(!isFormSelectionMode);
+                        setSelectedTempIndices(new Set());
+                      }}
+                      className={`px-2.5 py-1 rounded-lg border flex items-center gap-1 font-bold transition-all cursor-pointer text-[11px] ${
+                        isFormSelectionMode
+                          ? "bg-cyan-950 border-cyan-500/60 text-cyan-300"
+                          : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700"
+                      }`}
+                    >
+                      {isFormSelectionMode ? <CheckSquare size={12} /> : <Square size={12} />}
+                      <span>{isFormSelectionMode ? "Sair da Seleção" : "Seleção em Lote"}</span>
+                    </button>
+
+                    {isFormSelectionMode && selectedTempIndices.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          triggerConfirm(
+                            "Excluir Mídias Selecionadas",
+                            `Excluir ${selectedTempIndices.size} mídias selecionadas?`,
+                            () => {
+                              Array.from(selectedTempIndices).forEach((i) => {
+                                const item = tempDiaryMedias[i];
+                                if (item?.deleteUrl) {
+                                  fetch("/api/delete-imgbb", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ deleteUrl: item.deleteUrl }),
+                                  }).catch((err) => console.error("Erro ImgBB delete:", err));
+                                }
+                              });
+                              setTempDiaryMedias((prev) => prev.filter((_, i) => !selectedTempIndices.has(i)));
+                              setSelectedTempIndices(new Set());
+                              setIsFormSelectionMode(false);
+                            }
+                          );
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-red-950 border border-red-500/60 text-red-300 hover:bg-red-900 hover:text-white font-bold transition-all cursor-pointer flex items-center gap-1 text-[11px] animate-pulse"
+                      >
+                        <Trash2 size={12} />
+                        <span>Excluir Selecionadas ({selectedTempIndices.size})</span>
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        triggerConfirm(
+                          "Deletar Todas as Mídias",
+                          "Tem certeza que deseja apagar TODAS as mídias anexadas neste diário?",
+                          () => {
+                            tempDiaryMedias.forEach((item) => {
+                              if (item.deleteUrl) {
+                                fetch("/api/delete-imgbb", {
+                                  method: "POST",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ deleteUrl: item.deleteUrl }),
+                                }).catch((err) => console.error("Erro ImgBB delete:", err));
+                              }
+                            });
+                            setTempDiaryMedias([]);
+                            setSelectedTempIndices(new Set());
+                            setIsFormSelectionMode(false);
+                          }
+                        );
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-red-950 hover:border-red-500/50 text-zinc-400 hover:text-red-300 transition-all cursor-pointer flex items-center gap-1 text-[11px]"
+                      title="Apagar todas as mídias da lista"
+                    >
+                      <Trash2 size={12} />
+                      <span>Deletar Todas ({tempDiaryMedias.length})</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-3 rounded-2xl bg-zinc-950 border border-zinc-800">
+                  {tempDiaryMedias.map((m, idx) => {
+                    const isYt = isYoutubeUrl(m.src);
+                    const isDragged = draggedMediaIndex === idx;
+                    const isSelected = selectedTempIndices.has(idx);
+
+                    const toggleSelectThis = () => {
+                      setSelectedTempIndices((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(idx)) next.delete(idx);
+                        else next.add(idx);
+                        return next;
+                      });
+                    };
+
+                    return (
+                      <motion.div
+                        layout
+                        transition={{ type: "spring", stiffness: 300, damping: 25 }}
+                        key={m.src || idx}
+                        draggable={!isFormSelectionMode}
+                        onDragStart={(e) => handleMediaDragStart(e, idx)}
+                        onDragOver={(e) => handleMediaDragOver(e, idx)}
+                        onDragLeave={() => {
+                          if (dragOverMediaIndex === idx) setDragOverMediaIndex(null);
+                        }}
+                        onDrop={() => handleMediaDrop(idx)}
+                        onDragEnd={() => {
+                          setDraggedMediaIndex(null);
+                          setDragOverMediaIndex(null);
+                        }}
+                        onClick={() => {
+                          if (isFormSelectionMode) toggleSelectThis();
+                        }}
+                        className={`flex flex-col rounded-xl overflow-hidden border bg-zinc-900 relative transition-all duration-300 select-none ${
+                          isSelected
+                            ? "border-cyan-400 ring-2 ring-cyan-500/50 scale-[0.98]"
+                            : isDragged
+                            ? "opacity-35 border-cyan-500 scale-95 shadow-inner bg-zinc-950 border-dashed"
+                            : "border-zinc-800 hover:border-zinc-700 hover:scale-[1.01]"
+                        } ${isFormSelectionMode ? "cursor-pointer" : "cursor-grab active:cursor-grabbing"}`}
+                      >
+                        {/* Checkbox overlay when selection mode is ON */}
+                        {isFormSelectionMode && (
+                          <div
+                            className={`absolute top-1.5 left-1.5 z-20 w-5 h-5 rounded-md flex items-center justify-center transition-all ${
+                              isSelected
+                                ? "bg-cyan-500 text-black font-extrabold shadow"
+                                : "bg-black/70 border border-zinc-600 text-transparent"
+                            }`}
+                          >
+                            <Check size={12} className={isSelected ? "stroke-[3]" : "opacity-0"} />
+                          </div>
+                        )}
+
+                        <div className="h-20 w-full relative bg-black flex items-center justify-center overflow-hidden pointer-events-none">
+                          {isYt ? (
+                            <YouTubeThumbnail url={m.src} className="w-full h-full object-cover" />
+                          ) : m.isVideo ? (
+                            <video src={m.src} className="w-full h-full object-cover" muted preload="metadata" />
+                          ) : (
+                            <img src={m.src} className="w-full h-full object-cover" alt="prev" referrerPolicy="no-referrer" />
+                          )}
+
+                          {/* Loading overlay when uploading media */}
+                          {(m.isUploading || (m.src && (m.src.startsWith("blob:") || m.src.startsWith("data:")))) && (
+                            <div className="absolute inset-0 bg-black/80 backdrop-blur-[2px] flex flex-col items-center justify-center p-1 text-center z-10 space-y-1">
+                              <RefreshCw size={16} className="animate-spin text-cyan-400" />
+                              <span className="text-[9px] font-extrabold text-cyan-300 uppercase tracking-tight">
+                                {m.isVideo || isYt ? "Enviando Vídeo..." : "Enviando ImgBB..."}
+                              </span>
+                              <span className="text-[8px] text-zinc-400 font-mono">Processando</span>
+                            </div>
+                          )}
+
+                          <div className="absolute bottom-1 right-1 bg-black/80 px-1 py-0.5 rounded text-[8px] text-zinc-300 flex items-center gap-0.5 z-20">
+                            {isYt ? (
+                              <>
+                                <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                                <span>YouTube</span>
+                              </>
+                            ) : m.isVideo ? (
+                              <>
+                                <Film size={8} className="text-cyan-400" />
+                                <span>Vídeo</span>
+                              </>
+                            ) : (
+                              <>
+                                <ImageIcon size={8} className="text-purple-400" />
+                                <span>Imagem</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="h-8 bg-zinc-950 border-t border-zinc-800/80 flex items-center justify-between px-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveMedia(idx, "left");
+                            }}
+                            disabled={idx === 0 || isFormSelectionMode}
+                            className="p-1 rounded text-zinc-400 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-zinc-400 transition-all cursor-pointer"
+                            title="Mover para esquerda"
+                          >
+                            <ArrowLeft size={12} />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              triggerConfirm(
+                                "Excluir Mídia",
+                                "Tem certeza que deseja apagar esta mídia da entrada do diário?",
+                                () => {
+                                  const itemToRemove = tempDiaryMedias[idx];
+                                  if (itemToRemove && itemToRemove.deleteUrl) {
+                                    fetch("/api/delete-imgbb", {
+                                      method: "POST",
+                                      headers: { "Content-Type": "application/json" },
+                                      body: JSON.stringify({ deleteUrl: itemToRemove.deleteUrl })
+                                    }).catch((err) => console.error("Erro ao deletar do ImgBB no backend:", err));
+                                  }
+                                  setTempDiaryMedias((prev) => prev.filter((_, i) => i !== idx));
+                                  setSelectedTempIndices((prev) => {
+                                    const next = new Set(prev);
+                                    next.delete(idx);
+                                    return next;
+                                  });
+                                }
+                              );
+                            }}
+                            className="p-1 rounded text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+                            title="Remover mídia"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              moveMedia(idx, "right");
+                            }}
+                            disabled={idx === tempDiaryMedias.length - 1 || isFormSelectionMode}
+                            className="p-1 rounded text-zinc-400 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-zinc-400 transition-all cursor-pointer"
+                            title="Mover para direita"
+                          >
+                            <ArrowRight size={12} />
+                          </button>
+                        </div>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Sticky Bottom Action Bar so Save & Cancel are always immediately accessible */}
+        <div className="sticky -bottom-5 z-30 bg-zinc-950/95 backdrop-blur-md py-3 -mx-5 px-5 -mb-5 border-t border-cyan-500/30 shadow-2xl flex items-center justify-between flex-wrap gap-2 mt-4">
+          <div className="text-[10px] text-zinc-400 font-mono flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+            <span>{isEditing ? (isTextOnly ? "Modo: Apenas Texto" : "Modo: Entrada Completa") : "Novo Registro de Diário"}</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleCancelDiary}
+              className="px-3.5 py-1.5 rounded-xl bg-zinc-900 border border-zinc-700 text-zinc-200 font-bold hover:bg-zinc-800 text-xs cursor-pointer transition-all active:scale-95 shadow-sm"
+              title="Cancelar e descartar alterações"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleAddDiarySubmit}
+              className="px-4 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-cyan-500 hover:from-purple-500 hover:to-cyan-400 text-white font-extrabold text-xs cursor-pointer active:scale-95 transition-all shadow-md shadow-cyan-950/60 flex items-center gap-1.5"
+              title="Salvar alterações no diário da jogatina"
+            >
+              <Check size={14} className="stroke-[3]" />
+              {isEditing ? (isTextOnly ? "Salvar Texto" : "Atualizar Entrada") : "Salvar Entrada"}
+            </button>
+          </div>
+        </div>
+      </motion.div>
+    );
   };
 
   const handleDeleteClick = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para remover um jogo.");
+      return;
+    }
     triggerConfirm(
       "Remover Jogo",
-      `Tens a certeza que queres remover permanentemente "${game.name}" e todos os diários de bordo associados?`,
+      `Queres mover "${game.name}" para a Lixeira? Poderás restaurá-lo a qualquer momento.`,
       () => {
+        addTrashItem({
+          type: "game",
+          title: game.name,
+          data: game,
+        });
         onDeleteGame(game.id);
+        playRetroSound("delete");
+        showToast({
+          title: "Jogo enviado para a Lixeira 🗑️",
+          message: `"${game.name}" foi movido para a lixeira.`,
+          type: "info",
+          duration: 8000,
+          action: {
+            label: "Desfazer",
+            onClick: () => {
+              if (onRestoreGame) onRestoreGame(game);
+            },
+          },
+        });
         onClose();
       }
     );
   };
 
   const handleDeleteDiaryClick = (entryId: string) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para apagar uma entrada do diário.");
+      return;
+    }
+    const targetEntry = (game.diary || []).find((e) => e.id === entryId);
+    if (!targetEntry) return;
+
     triggerConfirm(
       "Eliminar Entrada de Diário",
-      "Queres apagar permanentemente esta entrada de diário?",
+      "Queres mover esta entrada de diário para a Lixeira?",
       () => {
+        addTrashItem({
+          type: "diary_entry",
+          title: `Registro (${targetEntry.period || "Diário"})`,
+          gameId: game.id,
+          gameTitle: game.name,
+          data: targetEntry,
+        });
         onDeleteDiaryEntry(game.id, entryId);
+        playRetroSound("delete");
+        showToast({
+          title: "Entrada na Lixeira 🗑️",
+          message: `Entrada do diário (${targetEntry.period}) foi para a lixeira.`,
+          type: "info",
+          duration: 8000,
+          action: {
+            label: "Desfazer",
+            onClick: () => {
+              onSaveDiaryEntry(game.id, targetEntry);
+            },
+          },
+        });
       }
     );
   };
@@ -774,55 +2273,283 @@ export default function GameDetailDrawer({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 bg-black/80 backdrop-blur-md"
+            className="absolute inset-0 bg-black/80 backdrop-blur-md cursor-pointer"
             onClick={onClose}
           />
 
           {/* Sliding Panel */}
-          <div className="absolute inset-y-0 right-0 max-w-full flex pl-10">
+          <div className="absolute inset-y-0 right-0 max-w-full flex pl-2 sm:pl-[5vw] pointer-events-none">
             <motion.div
               initial={{ x: "100%" }}
               animate={{ x: 0 }}
               exit={{ x: "100%" }}
               transition={{ type: "spring", damping: 30, stiffness: 300 }}
-              className="w-screen max-w-full lg:max-w-[90vw] bg-[#080a10] border-l border-purple-500/20 shadow-2xl flex flex-col h-full relative"
+              className={`pointer-events-auto w-screen max-w-full lg:max-w-[95vw] bg-[#080a10] shadow-2xl flex flex-col h-full relative transition-all duration-300 ${
+                isReadingMode
+                  ? "border-l-4 border-amber-500 shadow-amber-500/10 ring-1 ring-amber-500/30"
+                  : "border-l border-purple-500/20"
+              }`}
             >
               {/* Sticky Header */}
-              <div className="p-4 sm:p-5 border-b border-zinc-800 bg-zinc-950/95 backdrop-blur-md flex items-center justify-between gap-3 shrink-0 z-20">
-                <div>
-                  <div className="text-[10px] uppercase tracking-[0.35em] text-zinc-500 font-bold">Perfil detalhado</div>
-                  <h3 className="text-sm font-extrabold text-zinc-400">Biblioteca / Diário da Jogatina</h3>
+              <div className={`p-3.5 sm:p-5 border-b backdrop-blur-md flex items-center justify-between gap-2 sm:gap-3 shrink-0 z-20 transition-colors ${
+                isReadingMode ? "border-amber-500/40 bg-amber-950/20" : "border-zinc-800 bg-zinc-950/95"
+              }`}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <div className="text-[10px] uppercase tracking-[0.25em] sm:tracking-[0.35em] text-zinc-500 font-bold truncate">Perfil detalhado</div>
+                    {isReadingMode && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-mono font-extrabold uppercase tracking-wider bg-gradient-to-r from-amber-500/20 to-orange-500/20 text-amber-400 border border-amber-500/50 shadow-sm animate-pulse">
+                        <BookOpen size={11} className="text-amber-400 shrink-0" />
+                        Modo Leitura Ativo
+                      </span>
+                    )}
+                  </div>
+                  <h3 className="text-xs sm:text-sm font-extrabold text-zinc-400 truncate">Biblioteca / Diário da Jogatina</h3>
                 </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={downloadAllGameMedia}
-                    className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-cyan-950/50 hover:bg-cyan-900/50 border border-cyan-800/30 text-cyan-300 text-xs font-bold transition-all cursor-pointer"
-                  >
-                    Baixar Mídias
-                  </button>
-                  {onSendEmailClick && game && (
+                <div className="flex items-center gap-1.5 sm:gap-2 shrink-0 relative">
+                  {/* Sessão ao Vivo */}
+                  {game && (
                     <button
-                      onClick={() => onSendEmailClick(game)}
-                      className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/40 border border-cyan-500/30 hover:border-cyan-400/50 text-cyan-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-lg"
-                      title="Compartilhar diário de jogatina por e-mail"
+                      onClick={() => startLiveSessionForGame(game.id)}
+                      className="h-10 px-2.5 sm:px-3 rounded-xl bg-gradient-to-r from-rose-950/90 to-red-950/90 hover:from-rose-900 hover:to-red-900 border border-rose-500/50 hover:border-rose-400 text-rose-200 transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg hover:shadow-rose-500/20 active:scale-95 shrink-0"
+                      title="Iniciar Cronômetro de Sessão ao Vivo"
                     >
-                      <Mail size={12} /> <span className="hidden sm:inline">Enviar Gmail</span>
+                      <Play size={16} className="fill-rose-400 text-rose-400 shrink-0" />
+                      <span className="hidden sm:inline text-xs font-bold">Sessão ao Vivo</span>
                     </button>
                   )}
+
+                  {/* Modo de Leitura / Revisão */}
                   <button
                     onClick={() => {
-                      onEditClick(game);
+                      const nextMode = !isReadingMode;
+                      setIsReadingMode(nextMode);
+                      if (nextMode) {
+                        setShowAddDiary(false);
+                        setIsEntrySelectionMode(false);
+                        setSelectedEntryIds(new Set());
+                        setExpandedMediaEntries({});
+                        if (game?.diary) {
+                          const expandedCollapsedMap: Record<string, boolean> = {};
+                          game.diary.forEach((e) => {
+                            expandedCollapsedMap[e.id] = false;
+                          });
+                          setCollapsedEntries(expandedCollapsedMap);
+                        }
+                      }
                     }}
-                    className="px-3 py-1.5 sm:px-4 sm:py-2 rounded-xl bg-purple-950/50 hover:bg-purple-900/50 border border-purple-800/30 text-purple-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                    className={`h-10 px-2.5 sm:px-3 rounded-xl border transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg active:scale-95 shrink-0 ${
+                      isReadingMode
+                        ? "bg-gradient-to-r from-amber-500 to-orange-500 border-amber-300 text-zinc-950 shadow-amber-500/30 ring-2 ring-amber-400/50"
+                        : "bg-zinc-900/90 hover:bg-zinc-800 border-zinc-700 text-zinc-300"
+                    }`}
+                    title={isReadingMode ? "Sair do Modo Leitura" : "Ativar Modo Leitura"}
                   >
-                    <Edit size={12} /> <span className="hidden sm:inline">Editar</span>
+                    <BookOpen size={16} className={isReadingMode ? "text-zinc-950 shrink-0" : "text-amber-400 shrink-0"} />
+                    <span className="hidden sm:inline text-xs font-bold">
+                      {isReadingMode ? "Leitura" : "Modo Leitura"}
+                    </span>
                   </button>
+
+                  {/* Editar Ficha */}
+                  {!isReadingMode && game && (
+                    <button
+                      onClick={() => onEditClick(game)}
+                      className="h-10 w-10 rounded-xl bg-gradient-to-r from-purple-950/90 to-pink-950/90 hover:from-purple-900 hover:to-pink-900 border border-purple-500/50 hover:border-purple-400 text-purple-200 transition-all flex items-center justify-center cursor-pointer shadow-lg active:scale-95 shrink-0"
+                      title="Editar Ficha Completa do Jogo"
+                    >
+                      <Edit size={16} className="text-purple-300 shrink-0" />
+                    </button>
+                  )}
+
+                  {/* Botão Overflow Menu "..." */}
+                  {game && (
+                    <div className="relative">
+                      <button
+                        onClick={() => {
+                          playRetroSound("click");
+                          setIsMoreMenuOpen(!isMoreMenuOpen);
+                        }}
+                        className={`h-10 px-3 rounded-xl border transition-all flex items-center justify-center gap-1 cursor-pointer shadow-md active:scale-95 shrink-0 ${
+                          isMoreMenuOpen
+                            ? "bg-cyan-500 text-zinc-950 border-cyan-400 font-extrabold"
+                            : "bg-zinc-900 hover:bg-zinc-800 border-zinc-700 text-zinc-300 hover:text-white"
+                        }`}
+                        title="Mais opções e ferramentas"
+                      >
+                        <MoreHorizontal size={20} />
+                      </button>
+
+                      {/* Dropdown Menu Popup */}
+                      <AnimatePresence>
+                        {isMoreMenuOpen && (
+                          <>
+                            {/* Backdrop overlay to dismiss menu */}
+                            <div
+                              className="fixed inset-0 z-30"
+                              onClick={() => setIsMoreMenuOpen(false)}
+                            />
+
+                            <motion.div
+                              initial={{ opacity: 0, scale: 0.95, y: -8 }}
+                              animate={{ opacity: 1, scale: 1, y: 0 }}
+                              exit={{ opacity: 0, scale: 0.95, y: -8 }}
+                              transition={{ duration: 0.15 }}
+                              className="absolute right-0 top-12 z-40 w-72 bg-zinc-950 border border-zinc-800 rounded-2xl shadow-2xl p-2 text-zinc-200 space-y-1 backdrop-blur-xl"
+                            >
+                              <div className="px-3 py-1.5 text-[10px] font-mono font-bold uppercase tracking-wider text-cyan-400 border-b border-zinc-800/80 mb-1 flex items-center justify-between">
+                                <span>Mais Opções & Ferramentas</span>
+                                <Sparkles size={12} />
+                              </div>
+
+                              {/* Storytelling Slides */}
+                              {onOpenStorytelling && (
+                                <button
+                                  onClick={() => {
+                                    setIsMoreMenuOpen(false);
+                                    onOpenStorytelling(game);
+                                  }}
+                                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-purple-950/60 hover:text-purple-200 transition-colors cursor-pointer text-zinc-300"
+                                >
+                                  <Film size={16} className="text-purple-400 shrink-0" />
+                                  <span>Slides / Storytelling 🎬</span>
+                                </button>
+                              )}
+
+                              {/* Card Social */}
+                              {onOpenSocialCard && (
+                                <button
+                                  onClick={() => {
+                                    setIsMoreMenuOpen(false);
+                                    onOpenSocialCard(game);
+                                  }}
+                                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-pink-950/60 hover:text-pink-200 transition-colors cursor-pointer text-zinc-300"
+                                >
+                                  <Sparkles size={16} className="text-pink-400 shrink-0" />
+                                  <span>Card Social 📸</span>
+                                </button>
+                              )}
+
+                              {/* Export Markdown */}
+                              <button
+                                onClick={() => {
+                                  setIsMoreMenuOpen(false);
+                                  exportGameDiaryToMarkdown(game);
+                                }}
+                                className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-cyan-950/60 hover:text-cyan-200 transition-colors cursor-pointer text-zinc-300"
+                              >
+                                <FileText size={16} className="text-cyan-400 shrink-0" />
+                                <span>Exportar Diário (.MD) 📝</span>
+                              </button>
+
+                              {/* Export PDF */}
+                              <button
+                                onClick={() => {
+                                  setIsMoreMenuOpen(false);
+                                  exportGameDiaryToPrintPDF(game);
+                                }}
+                                className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-emerald-950/60 hover:text-emerald-200 transition-colors cursor-pointer text-zinc-300"
+                              >
+                                <Download size={16} className="text-emerald-400 shrink-0" />
+                                <span>Imprimir / Exportar PDF 🖨️</span>
+                              </button>
+
+                              {/* Download All Media */}
+                              <button
+                                onClick={() => {
+                                  setIsMoreMenuOpen(false);
+                                  downloadAllGameMedia();
+                                }}
+                                className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-blue-950/60 hover:text-blue-200 transition-colors cursor-pointer text-zinc-300"
+                              >
+                                <Download size={16} className="text-blue-400 shrink-0" />
+                                <span>Baixar Mídias (Imagens/Vídeos) 📥</span>
+                              </button>
+
+                              {/* Send Email */}
+                              {onSendEmailClick && (
+                                <button
+                                  onClick={() => {
+                                    setIsMoreMenuOpen(false);
+                                    onSendEmailClick(game);
+                                  }}
+                                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-amber-950/60 hover:text-amber-200 transition-colors cursor-pointer text-zinc-300"
+                                >
+                                  <Mail size={16} className="text-amber-400 shrink-0" />
+                                  <span>Enviar por E-mail (Gmail) ✉️</span>
+                                </button>
+                              )}
+
+                              {/* Deep Backup Drive */}
+                              {onDeepBackupDrive && (
+                                <button
+                                  onClick={() => {
+                                    setIsMoreMenuOpen(false);
+                                    onDeepBackupDrive(game);
+                                  }}
+                                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-teal-950/60 hover:text-teal-200 transition-colors cursor-pointer text-zinc-300"
+                                >
+                                  <HardDrive size={16} className="text-teal-400 shrink-0" />
+                                  <span>Backup Profundo Google Drive ☁️</span>
+                                </button>
+                              )}
+
+                              {/* Dicionário Gamer */}
+                              <button
+                                onClick={() => {
+                                  setIsMoreMenuOpen(false);
+                                  setIsDictionaryModalOpen(true);
+                                }}
+                                className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-indigo-950/60 hover:text-indigo-200 transition-colors cursor-pointer text-zinc-300"
+                              >
+                                <BookOpen size={16} className="text-indigo-400 shrink-0" />
+                                <span>Dicionário Gamer ({getDictionaryWordCount(game.dictionary)}) 📖</span>
+                              </button>
+
+                              {/* Estimate Playtime */}
+                              {onOpenGameEstimateModal && (
+                                <button
+                                  onClick={() => {
+                                    setIsMoreMenuOpen(false);
+                                    onOpenGameEstimateModal(game);
+                                  }}
+                                  className="w-full text-left px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-2.5 hover:bg-rose-950/60 hover:text-rose-200 transition-colors cursor-pointer text-zinc-300"
+                                >
+                                  <Calculator size={16} className="text-rose-400 shrink-0" />
+                                  <span>Estimar Horas com IA (HLTB) ⏱️</span>
+                                </button>
+                              )}
+
+                              <div className="border-t border-zinc-800/80 my-1 pt-1">
+                                <button
+                                  onClick={() => {
+                                    setIsMoreMenuOpen(false);
+                                    triggerAlert(
+                                      "Provedor Descentralizado (BYOB) 🚀",
+                                      "O sistema BYOB (Bring Your Own Backend) permite conectar suas próprias chaves do Firebase Firestore, ImgBB e Google Drive. Suas credenciais permanecem salvas localmente e isoladas!"
+                                    );
+                                  }}
+                                  className="w-full text-left px-3 py-2 rounded-xl text-[11px] font-bold flex items-center gap-2.5 bg-zinc-900 hover:bg-zinc-800 text-cyan-300 transition-colors cursor-pointer"
+                                >
+                                  <Info size={14} className="text-cyan-400 shrink-0" />
+                                  <span>Funções Futuras & BYOB 🚀</span>
+                                </button>
+                              </div>
+                            </motion.div>
+                          </>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  )}
+
+                  {/* Botão Fechar - Fixo e Acessível */}
                   <button
                     onClick={onClose}
-                    className="h-10 px-4 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white flex items-center gap-1.5 transition-all shadow-md cursor-pointer font-bold text-xs uppercase tracking-wider shrink-0"
-                    title="Fechar Janela"
+                    className="h-10 px-3 rounded-xl bg-zinc-900 hover:bg-rose-950/70 border border-zinc-800 hover:border-rose-500/50 text-zinc-300 hover:text-rose-300 flex items-center justify-center gap-1.5 transition-all shadow-md cursor-pointer font-bold text-xs shrink-0 active:scale-95"
+                    title="Fechar Painel Detalhado (Esc)"
                   >
-                    <X size={14} /> <span>Fechar</span>
+                    <X size={18} className="shrink-0" />
+                    <span className="hidden md:inline uppercase text-[11px] tracking-wider">Fechar</span>
                   </button>
                 </div>
               </div>
@@ -830,7 +2557,7 @@ export default function GameDetailDrawer({
               {/* Scrollable Content wrapper */}
               <div className="flex-1 flex overflow-hidden">
                 {/* Scrollable Content */}
-                <div className="flex-1 overflow-y-auto pb-12 drawer-scrollable-container">
+                <div className="flex-1 overflow-y-auto pb-12 drawer-scrollable-container overscroll-contain">
                  {/* Hero Banner */}
                 <div
                   ref={coverContainerRef}
@@ -984,11 +2711,21 @@ export default function GameDetailDrawer({
                       </div>
                     </div>
                     <div className="pb-1 min-w-0">
-                      <h2 className="text-3xl sm:text-4xl font-black text-white leading-tight break-words [text-shadow:_0_2px_10px_rgb(0_0_0_/_90%),_0_1px_3px_rgb(0_0_0_/_100%)] drop-shadow-[0_4px_12px_rgba(0,0,0,0.9)]">
+                      <h2 className="text-3xl sm:text-4xl font-black text-white leading-tight break-words [text-shadow:_0_2px_10px_rgb(0_0_0_/_90%),_0_1px_3px_rgb(0_0_0_/_100%)] drop-shadow-[0_4px_12px_rgba(0,0,0,0.9)] flex items-center flex-wrap gap-2">
                         <span className="align-middle">{game.name}</span>
                         {game.trophy && game.trophy !== "none" && (
-                          <span className="inline-flex align-middle ml-2.5 shrink-0">
+                          <span className="inline-flex align-middle shrink-0">
                             <TrophyBadge trophy={game.trophy} mode="detail" />
+                          </span>
+                        )}
+                        {((steamAchieveData && steamAchieveData.percentage === 100) ||
+                          (game.steamAchievementsCount !== undefined &&
+                            game.steamAchievementsTotal !== undefined &&
+                            game.steamAchievementsTotal > 0 &&
+                            game.steamAchievementsCount === game.steamAchievementsTotal)) && (
+                          <span className="inline-flex items-center gap-1.5 align-middle shrink-0 px-3 py-1 rounded-full bg-gradient-to-r from-amber-500/30 via-yellow-400/30 to-amber-500/30 border border-amber-400/80 text-amber-300 text-xs font-extrabold font-mono shadow-xl shadow-amber-500/20 animate-pulse">
+                            <Sparkles size={14} className="text-yellow-300 shrink-0" />
+                            <span>👑 100% Achiev.</span>
                           </span>
                         )}
                       </h2>
@@ -998,16 +2735,19 @@ export default function GameDetailDrawer({
                     </div>
                   </div>
 
-                  {/* Metadata Dashboard */}
-                  <div className="glass rounded-2xl border border-zinc-800/80 p-5 sm:p-6 shadow-xl">
-                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-400/90 font-mono font-bold mb-4 pb-2 border-b border-zinc-800/80 flex items-center justify-between">
-                      <span>Ficha Técnica do Jogo</span>
+                  {/* Metadata Dashboard / Ficha Técnica */}
+                  <div className="bg-zinc-950/80 rounded-2xl border-2 border-cyan-500/50 hover:border-cyan-500/80 shadow-md shadow-cyan-500/10 p-5 sm:p-6 space-y-4 transition-all">
+                    <div className="text-xs uppercase tracking-[0.2em] text-cyan-300 font-mono font-bold pb-2 border-b border-cyan-500/30 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Info size={16} className="text-cyan-400 shrink-0" />
+                        <span>Ficha Técnica do Jogo</span>
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-x-5 gap-y-4 text-xs">
                       <div title="Status de progresso atual no jogo">
                         <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Status</div>
                         <div className="flex flex-wrap gap-1.5 items-center">
-                          {game.status.map((s, idx) => (
+                          {(Array.isArray(game.status) ? game.status : typeof game.status === "string" ? [game.status] : []).map((s, idx) => (
                             <span key={`${s}-${idx}`} className={`px-2.5 py-1 rounded-lg text-xs font-extrabold shadow-sm ${chipClass(s)}`} title={`Status: ${s}`}>
                               {s}
                             </span>
@@ -1126,6 +2866,20 @@ export default function GameDetailDrawer({
                               </span>
                             );
                           })}
+
+                          {(game.integrationPlatform === "steam" || (!game.integrationPlatform && game.steamAppId)) && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-extrabold uppercase tracking-wider bg-blue-950/90 text-blue-300 border border-blue-500/50 shadow-sm shadow-blue-500/20" title={`Integrado via Steam (App ID: ${game.steamAppId || 'Vinc.'})`}>
+                              <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+                              <span>Steam Sync</span>
+                            </span>
+                          )}
+
+                          {(game.integrationPlatform === "gog" || (!game.integrationPlatform && game.gogGameId)) && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-extrabold uppercase tracking-wider bg-purple-950/90 text-purple-300 border border-purple-500/50 shadow-sm shadow-purple-500/20" title={`Integrado via GOG Galaxy (Game ID: ${game.gogGameId || 'Vinc.'})`}>
+                              <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+                              <span>GOG Sync</span>
+                            </span>
+                          )}
                         </div>
                       </div>
 
@@ -1167,14 +2921,116 @@ export default function GameDetailDrawer({
                         </div>
                       </div>
 
-                      {/* 3-Part Playtime Bar */}
-                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4 border border-zinc-800/80 my-1 shadow-inner" title="Divisão do Tempo Investido">
-                        <div className="space-y-2.5">
-                          <div className="flex items-center justify-start gap-3 flex-wrap pb-1.5 border-b border-zinc-900/80">
-                            <div className="flex items-center gap-2">
-                              <Clock size={15} className="text-purple-400 shrink-0" />
-                              <span className="text-purple-300 text-xs uppercase tracking-wider font-bold font-mono">Tempo Investido</span>
+                      {/* Valor Pago & Custo por Hora */}
+                      <div title="Valor pago pelo jogo e custo por hora de jogo" className="col-span-2 sm:col-span-2 md:col-span-2 bg-emerald-950/20 rounded-xl p-3 border border-emerald-500/30 my-1 shadow-sm max-w-sm">
+                        <div className="flex items-center justify-between gap-2 mb-1.5">
+                          <div className="text-emerald-400 text-xs uppercase tracking-wider font-bold font-mono flex items-center gap-1.5">
+                            <DollarSign size={13} className="text-emerald-400 shrink-0" />
+                            <span>Valor Pago & Custo</span>
+                          </div>
+                          {onUpdateGame && (
+                            !isEditingPrice ? (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPriceInput(game.pricePaid !== undefined && game.pricePaid !== null ? String(game.pricePaid) : "");
+                                  setIsEditingPrice(true);
+                                }}
+                                className="text-[11px] text-emerald-400 hover:text-emerald-300 hover:underline font-bold transition-all cursor-pointer flex items-center gap-1"
+                              >
+                                <Edit size={10} />
+                                <span>Ajustar</span>
+                              </button>
+                            ) : (
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={handleSavePriceInDrawer}
+                                  className="text-xs text-emerald-950 bg-emerald-400 hover:bg-emerald-300 px-2 py-0.5 rounded-md font-extrabold shadow-sm cursor-pointer transition-all"
+                                >
+                                  Salvar
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setIsEditingPrice(false)}
+                                  className="text-xs text-zinc-400 hover:text-white px-1 py-0.5 cursor-pointer"
+                                >
+                                  Cancelar
+                                </button>
+                              </div>
+                            )
+                          )}
+                        </div>
+
+                        {isEditingPrice ? (
+                          <div className="flex items-center gap-2 mt-1">
+                            <div className="relative flex-1">
+                              <span className="absolute left-2.5 top-1.5 text-xs font-bold font-mono text-emerald-400">R$</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                min="0"
+                                value={priceInput}
+                                onChange={(e) => setPriceInput(e.target.value)}
+                                placeholder="149.90"
+                                className="w-full bg-zinc-900 border border-emerald-500/60 rounded-lg pl-8 pr-2.5 py-1 text-xs text-emerald-200 font-mono font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/50"
+                                autoFocus
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") handleSavePriceInDrawer();
+                                  if (e.key === "Escape") setIsEditingPrice(false);
+                                }}
+                              />
                             </div>
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between flex-wrap gap-2 font-mono text-xs">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs sm:text-sm font-black text-emerald-300">
+                                {game.pricePaid !== undefined && game.pricePaid !== null && game.pricePaid > 0
+                                  ? `R$ ${game.pricePaid.toFixed(2).replace(".", ",")}`
+                                  : game.pricePaid === 0
+                                  ? "Gratuito (R$ 0,00)"
+                                  : "Não informado"}
+                              </span>
+                            </div>
+
+                            {(() => {
+                              const hours = getTotalGamePlaytimeHours(game);
+                              const price = typeof game.pricePaid === "number" ? game.pricePaid : 0;
+                              if (price > 0 && hours > 0) {
+                                const costPerHour = price / hours;
+                                return (
+                                  <div className="flex items-center gap-1 text-cyan-300 font-bold bg-cyan-950/60 px-2 py-0.5 rounded-lg border border-cyan-500/30">
+                                    <span className="text-[9px] text-cyan-400/80 uppercase font-sans">Custo/h:</span>
+                                    <span className="text-xs font-black">R$ {costPerHour.toFixed(2).replace(".", ",")}</span>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bloco: Tempo Investido */}
+                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-teal-500/50 hover:border-teal-500/80 my-1 shadow-md shadow-teal-500/10 transition-all" title="Divisão do Tempo Investido">
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-start gap-3 flex-wrap pb-2 border-b border-teal-500/30">
+                            <div className="flex items-center gap-2">
+                              <Clock size={16} className="text-teal-400 shrink-0" />
+                              <span className="text-teal-300 text-xs uppercase tracking-wider font-extrabold font-mono">Tempo Investido</span>
+                            </div>
+                            {game.isGaaS && (
+                              <div 
+                                className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-xl bg-gradient-to-r from-violet-950 via-fuchsia-950 to-pink-950 text-pink-300 border border-pink-500/50 shadow-md cursor-help"
+                                data-tooltip="Jogo como Serviço (GaaS) - Atividade e jogatina contínuas sem término estrito"
+                                data-tooltip-title="Game as a Service ♾️"
+                                data-tooltip-theme="pink"
+                              >
+                                <Infinity size={14} className="stroke-[2.5] text-pink-400 animate-pulse shrink-0" />
+                                <span className="text-[10px] font-black uppercase tracking-wider font-mono">GaaS</span>
+                              </div>
+                            )}
                             {getGameTrophyItems(game).length > 0 && (
                               <div>
                                 <TrophiesList trophies={getGameTrophyItems(game)} mode="detail" />
@@ -1184,40 +3040,49 @@ export default function GameDetailDrawer({
 
                           <div className="flex items-center gap-2.5 font-mono flex-wrap">
                             {(() => {
-                              const parsedPlay = parseContextNote(game.playtime || "0h");
-                              const parsedAdd = parseContextNote(game.additionalPlaytime || "0h");
+                              const breakdown = getGameTimeBreakdown(game);
+                              const parsedPlay = parseContextNote(breakdown.playtimeRaw);
+                              const parsedAdd = parseContextNote(breakdown.additionalPlaytimeRaw);
+
                               return (
                                 <>
                                   <div 
                                     className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-purple-950/50 text-purple-200 border border-purple-500/30 shadow-sm cursor-help" 
-                                    data-tooltip={parsedPlay.note || `Jogatina: ${parsedPlay.main}`}
-                                    data-tooltip-title={parsedPlay.note ? "Contexto - Jogatina" : undefined}
+                                    data-tooltip={parsedPlay.note || `${breakdown.currentLabel}: ${breakdown.isGaaS || breakdown.isCurrentlyPlaying ? breakdown.currentTimeFormatted : breakdown.finalTimeFormatted}`}
+                                    data-tooltip-title={parsedPlay.note ? `Contexto - ${breakdown.currentLabel}` : undefined}
                                     data-tooltip-theme="purple"
                                   >
                                     <Clock size={13} className="text-purple-400 shrink-0" />
-                                    <span className="text-xs font-sans text-purple-300/80 font-medium">Jogatina:</span>
-                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-purple-200">{parsedPlay.main}</strong>
+                                    <span className="text-xs font-sans text-purple-300/80 font-medium">{breakdown.currentLabel}:</span>
+                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-purple-200">
+                                      {breakdown.isGaaS || breakdown.isCurrentlyPlaying
+                                        ? breakdown.currentTimeFormatted
+                                        : breakdown.finalTimeFormatted}
+                                    </strong>
                                   </div>
 
                                   <div 
                                     className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-cyan-950/50 text-cyan-200 border border-cyan-500/30 shadow-sm cursor-help" 
-                                    data-tooltip={parsedAdd.note || `Jogatinas Passadas: ${parsedAdd.main}`}
-                                    data-tooltip-title={parsedAdd.note ? "Contexto - Jogatinas Passadas" : undefined}
+                                    data-tooltip={parsedAdd.note || `${breakdown.extraLabel}: ${breakdown.extraTimeFormatted}`}
+                                    data-tooltip-title={parsedAdd.note ? `Contexto - ${breakdown.extraLabel}` : undefined}
                                     data-tooltip-theme="cyan"
                                   >
                                     <Clock size={13} className="text-cyan-400 shrink-0" />
-                                    <span className="text-xs font-sans text-cyan-300/80 font-medium">Passadas:</span>
-                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-cyan-200">{parsedAdd.main}</strong>
+                                    <span className="text-xs font-sans text-cyan-300/80 font-medium">{breakdown.extraLabel}:</span>
+                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-cyan-200">{breakdown.extraTimeFormatted}</strong>
+                                  </div>
+
+                                  <div 
+                                    className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/60 text-emerald-200 font-bold border border-emerald-500/40 shadow-sm cursor-help" 
+                                    title={`${breakdown.totalLabel}: Somatório do ${breakdown.currentLabel} + ${breakdown.extraLabel}`}
+                                  >
+                                    <Clock size={13} className="text-emerald-400 shrink-0" />
+                                    <span className="text-xs font-sans text-emerald-300/80 font-medium">Total:</span>
+                                    <strong className="text-sm sm:text-base font-extrabold font-mono text-emerald-300">{breakdown.totalTimeFormatted}</strong>
                                   </div>
                                 </>
                               );
                             })()}
-
-                            <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-emerald-950/60 text-emerald-200 font-bold border border-emerald-500/40 shadow-sm" title="Tempo Total Investido: somatório total de todas as jogatinas (atual + passadas)">
-                              <Clock size={13} className="text-emerald-400 shrink-0" />
-                              <span className="text-xs font-sans text-emerald-300/80 font-medium">Total:</span>
-                              <strong className="text-sm sm:text-base font-extrabold font-mono text-emerald-300">{formatHoursAndMinutes(getTotalGamePlaytimeHours(game))}</strong>
-                            </div>
 
                             {onOpenGameEstimateModal && (
                               <button
@@ -1234,12 +3099,457 @@ export default function GameDetailDrawer({
                         </div>
                       </div>
 
+                      {/* Steam Web API Block - Only rendered for PC Platform games with a linked Steam App ID */}
+                      {isPcPlatform(game.platform) && game.steamAppId && (
+                        <div className="col-span-2 sm:col-span-3 md:col-span-4 mt-1 text-left">
+                          <div className="bg-zinc-950/80 border-2 border-blue-500/50 hover:border-blue-500/80 rounded-2xl p-4.5 shadow-md shadow-blue-500/10 space-y-3 transition-all">
+                            <div className="flex items-center justify-between gap-3 flex-wrap border-b border-blue-500/30 pb-2.5">
+                              <div className="flex items-center gap-2">
+                                <Gamepad2 size={16} className="text-blue-400 shrink-0" />
+                                <span className="text-blue-300 text-xs uppercase tracking-wider font-extrabold font-mono">
+                                  Integracao Steam Web API
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={handleSyncSteamInDrawer}
+                                  disabled={isSyncingSteamDrawer}
+                                  className="text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-blue-950/60 hover:bg-blue-900/80 border border-blue-500/40 text-blue-200 transition-all cursor-pointer disabled:opacity-50 shadow-sm"
+                                  title="Atualizar horas, conquistas e ultima sessao direto da Steam"
+                                >
+                                  {isSyncingSteamDrawer ? (
+                                    <Loader2 size={12} className="animate-spin text-blue-400" />
+                                  ) : (
+                                    <RefreshCw size={12} />
+                                  )}
+                                  <span>Sincronizar</span>
+                                </button>
+
+                                <a
+                                  href={`steam://run/${game.steamAppId}`}
+                                  className="text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-950/60 hover:bg-cyan-900/80 border border-cyan-500/40 text-cyan-200 transition-all cursor-pointer shadow-sm"
+                                  title="Iniciar o jogo no aplicativo da Steam"
+                                >
+                                  <Play size={12} className="fill-current text-cyan-400" />
+                                  <span>Abrir na Steam</span>
+                                </a>
+                              </div>
+                            </div>
+
+                            {/* CELEBRATION BANNER FOR UNLOCKED ACHIEVEMENTS */}
+                            <AnimatePresence>
+                              {celebrationData && (
+                                <motion.div
+                                  initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                                  exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                                  className="relative overflow-hidden p-4 rounded-2xl bg-gradient-to-r from-amber-950/90 via-yellow-950/80 to-zinc-950/90 border-2 border-amber-400/70 text-amber-100 shadow-2xl shadow-amber-500/20"
+                                >
+                                  <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                                    <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-amber-400 via-yellow-200 to-amber-500 animate-pulse" />
+                                    <motion.div
+                                      animate={{ scale: [0.8, 1.2, 0.8], opacity: [0.3, 0.8, 0.3] }}
+                                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                                      className="absolute -top-10 -right-10 w-32 h-32 bg-amber-400/20 rounded-full blur-2xl"
+                                    />
+                                  </div>
+
+                                  <div className="relative z-10 flex items-start justify-between gap-3">
+                                    <div className="flex items-start gap-3 min-w-0">
+                                      <div className="p-2.5 rounded-2xl bg-amber-500/20 border border-amber-400/40 text-amber-300 shrink-0">
+                                        <Trophy size={22} className="animate-bounce text-amber-300" />
+                                      </div>
+                                      <div className="space-y-1.5 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <h4 className="font-extrabold text-xs sm:text-sm text-white tracking-wide flex items-center gap-1.5">
+                                            <span>🎉 Novas Conquistas Desbloqueadas!</span>
+                                          </h4>
+                                          <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-amber-400/20 text-yellow-300 border border-amber-400/40 uppercase">
+                                            +{celebrationData.diff} Conquista{celebrationData.diff > 1 ? "s" : ""}
+                                          </span>
+                                        </div>
+                                        <p className="text-xs text-amber-200/90 leading-relaxed">
+                                          Parabéns pelo seu progresso em <strong className="text-white font-semibold">{celebrationData.gameName}</strong>! Você conquistou <strong className="text-yellow-300 font-bold font-mono">+{celebrationData.diff}</strong> conquista(s) desde o último sync!
+                                        </p>
+
+                                        <div className="pt-1 flex items-center gap-3">
+                                          <div className="flex-1 bg-zinc-950/80 rounded-full h-2.5 overflow-hidden border border-amber-500/30">
+                                            <motion.div
+                                              initial={{ width: 0 }}
+                                              animate={{ width: `${Math.round((celebrationData.unlockedCount / celebrationData.totalCount) * 100)}%` }}
+                                              transition={{ duration: 1, ease: "easeOut" }}
+                                              className="h-full bg-gradient-to-r from-amber-500 via-yellow-400 to-amber-300"
+                                            />
+                                          </div>
+                                          <span className="text-xs font-mono font-bold text-amber-300 shrink-0">
+                                            {celebrationData.unlockedCount} / {celebrationData.totalCount} ({Math.round((celebrationData.unlockedCount / celebrationData.totalCount) * 100)}%)
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setCelebrationData(null)}
+                                      className="p-1.5 text-amber-300/70 hover:text-white rounded-lg hover:bg-amber-400/20 transition-colors cursor-pointer shrink-0"
+                                      title="Fechar celebração"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+
+                            {/* DISPLAY LINKED STEAM DATA */}
+                            <div className="space-y-3">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                                {/* Steam Playtime Card */}
+                                <div className="p-3 rounded-xl bg-zinc-900/90 border border-blue-500/20 flex flex-col justify-between gap-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <Clock size={14} className="text-blue-400" />
+                                      <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                        Tempo na Steam:
+                                      </span>
+                                    </div>
+                                    <span className="font-extrabold text-blue-300 font-mono text-sm sm:text-base">
+                                      {game.steamPlaytimeMinutes ? formatSteamPlaytime(game.steamPlaytimeMinutes) : "0h 0m"}
+                                    </span>
+                                  </div>
+
+                                  {game.steamPlaytimeMinutes && game.steamPlaytimeMinutes > 0 && onUpdateGame && (
+                                    <button
+                                      type="button"
+                                      onClick={handleCopySteamPlaytimeToPersonal}
+                                      className="w-full mt-1 px-2.5 py-1.5 bg-blue-950/60 hover:bg-blue-900 border border-blue-500/40 text-blue-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                                      title="Importar as horas registradas na Steam para o seu atributo de Tempo Investido Pessoal"
+                                    >
+                                      <ArrowRight size={12} className="text-blue-400" />
+                                      <span>Copiar para Tempo Pessoal</span>
+                                    </button>
+                                  )}
+                                </div>
+
+                                {/* Last Session / Achievements */}
+                                <div className="p-3 rounded-xl bg-zinc-900/90 border border-amber-500/20 space-y-2">
+                                  <div className="flex items-center justify-between gap-2 text-xs">
+                                    <span className="uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                      Ultima Sessao:
+                                    </span>
+                                    <span className="font-mono font-semibold text-zinc-200">
+                                      {formatLastPlayedDate(game.steamLastPlayedTimestamp) || "Desconhecido / Antigo"}
+                                    </span>
+                                  </div>
+
+                                  {steamAchieveData && steamAchieveData.totalCount > 0 ? (
+                                    <div className="pt-1.5 border-t border-zinc-800/80 space-y-1">
+                                      <div className="flex items-center justify-between gap-2 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                          <Trophy size={13} className="text-amber-400 shrink-0" />
+                                          <span className="uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                            Conquistas:
+                                          </span>
+                                        </div>
+                                        <span className="font-extrabold text-amber-300 font-mono">
+                                          {steamAchieveData.unlockedCount} / {steamAchieveData.totalCount} ({steamAchieveData.percentage}%)
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                                        <div
+                                          className="h-full bg-gradient-to-r from-amber-500 to-yellow-400 transition-all duration-500"
+                                          style={{ width: `${steamAchieveData.percentage}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  ) : game.steamAchievementsTotal && game.steamAchievementsTotal > 0 ? (
+                                    <div className="pt-1.5 border-t border-zinc-800/80 space-y-1">
+                                      <div className="flex items-center justify-between gap-2 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                          <Trophy size={13} className="text-amber-400 shrink-0" />
+                                          <span className="uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                            Conquistas:
+                                          </span>
+                                        </div>
+                                        <span className="font-extrabold text-amber-300 font-mono">
+                                          {game.steamAchievementsCount || 0} / {game.steamAchievementsTotal} ({Math.round(((game.steamAchievementsCount || 0) / game.steamAchievementsTotal) * 100)}%)
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                                        <div
+                                          className="h-full bg-gradient-to-r from-amber-500 to-yellow-400 transition-all duration-500"
+                                          style={{ width: `${Math.round(((game.steamAchievementsCount || 0) / game.steamAchievementsTotal) * 100)}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="pt-1 text-[11px] text-zinc-500 italic">
+                                      Conquistas nao encontradas ou perfil Steam privado.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="pt-1 text-xs text-zinc-400 flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                  <span>App ID:</span>
+                                  <code className="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-300 font-mono text-xs">
+                                    {game.steamAppId}
+                                  </code>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <a
+                                    href={`https://store.steampowered.com/app/${game.steamAppId}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-blue-400 hover:text-blue-300 hover:underline inline-flex items-center gap-1 text-[11px] font-medium"
+                                  >
+                                    Página da Loja ↗
+                                  </a>
+                                  <a
+                                    href={`https://steamcommunity.com/stats/${game.steamAppId}/achievements`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-amber-400 hover:text-amber-300 hover:underline inline-flex items-center gap-1 text-[11px] font-medium"
+                                  >
+                                    Comunidade & Conquistas ↗
+                                  </a>
+                                </div>
+                              </div>
+
+                              {/* STEAM ACHIEVEMENTS GALLERY & TIMELINE */}
+                              {steamAchieveData && steamAchieveData.achievements && steamAchieveData.achievements.length > 0 && (
+                                <div className="mt-4 border-t border-zinc-800/80 pt-4 space-y-3">
+                                  {/* Section Title & Collapsible Header */}
+                                  <div
+                                    onClick={() => setIsAchievementsGalleryOpen((prev) => !prev)}
+                                    className="flex items-center justify-between gap-2 p-3 rounded-xl bg-zinc-950/90 border border-zinc-800 hover:border-amber-500/40 cursor-pointer transition-all select-none group"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <Trophy size={16} className="text-amber-400 shrink-0 group-hover:scale-110 transition-transform" />
+                                      <h4 className="font-extrabold text-sm text-white tracking-wide uppercase font-mono flex items-center gap-2 truncate">
+                                        <span>Galeria de Conquistas Steam</span>
+                                        <span className="text-xs font-normal text-zinc-400 normal-case font-sans">
+                                          ({steamAchieveData.unlockedCount}/{steamAchieveData.totalCount})
+                                        </span>
+                                      </h4>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {/* 100% Perfect Game / Platinum Badge */}
+                                      {steamAchieveData.percentage === 100 && (
+                                        <div className="px-2.5 py-0.5 bg-gradient-to-r from-amber-500/20 via-yellow-400/20 to-amber-500/20 border border-amber-400/50 rounded-full text-amber-300 text-[10px] sm:text-xs font-extrabold font-mono flex items-center gap-1.5 shadow-lg shadow-amber-500/10 animate-pulse">
+                                          <Sparkles size={12} className="text-yellow-300" />
+                                          <span>👑 100% Achiev.</span>
+                                        </div>
+                                      )}
+                                      <div className="p-1 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-300 group-hover:text-amber-400 transition-colors">
+                                        {isAchievementsGalleryOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Collapsible Content */}
+                                  {isAchievementsGalleryOpen && (
+                                    <div className="space-y-3 pt-1 animate-fade-in">
+                                      {/* Filter Controls Bar */}
+                                      <div className="flex items-center justify-between gap-2 flex-wrap bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800">
+                                        {/* Tabs */}
+                                        <div className="flex items-center gap-1 overflow-x-auto text-xs font-semibold">
+                                          <button
+                                            type="button"
+                                            onClick={() => setAchievementsFilter("all")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                              achievementsFilter === "all"
+                                                ? "bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            Todas ({steamAchieveData.achievements.length})
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setAchievementsFilter("unlocked")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                              achievementsFilter === "unlocked"
+                                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            Desbloqueadas ({steamAchieveData.unlockedCount})
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setAchievementsFilter("locked")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                              achievementsFilter === "locked"
+                                                ? "bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            Bloqueadas ({steamAchieveData.totalCount - steamAchieveData.unlockedCount})
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setAchievementsFilter("rare")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                                              achievementsFilter === "rare"
+                                                ? "bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            <Sparkles size={12} className="text-purple-400" />
+                                            <span>Ultra Raras</span>
+                                          </button>
+                                        </div>
+
+                                        {/* Search & Sort */}
+                                        <div className="flex items-center gap-2 text-xs w-full sm:w-auto">
+                                          <input
+                                            type="text"
+                                            placeholder="Buscar conquista..."
+                                            value={achievementsSearch}
+                                            onChange={(e) => setAchievementsSearch(e.target.value)}
+                                            className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-amber-500/50 w-full sm:w-36"
+                                          />
+                                          <select
+                                            value={achievementsSort}
+                                            onChange={(e) => setAchievementsSort(e.target.value as any)}
+                                            className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-amber-500/50 cursor-pointer"
+                                          >
+                                            <option value="unlocked_first">Desbloqueadas 1º</option>
+                                            <option value="rare_first">Mais Raras 1º (%)</option>
+                                            <option value="recent">Recentes 1º</option>
+                                          </select>
+                                        </div>
+                                      </div>
+
+                                      {/* Achievements List Grid */}
+                                      {processedAchievements.length > 0 ? (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-96 overflow-y-auto pr-1 custom-scrollbar">
+                                          {processedAchievements.map((ach) => {
+                                            const isUnlocked = ach.achieved === 1;
+                                            const iconSrc = isUnlocked
+                                              ? ach.icon || ach.icongray
+                                              : ach.icongray || ach.icon;
+
+                                            return (
+                                              <div
+                                                key={ach.apiname}
+                                                className={`p-2.5 rounded-xl border transition-all flex items-start gap-3 relative overflow-hidden group ${
+                                                  isUnlocked
+                                                    ? "bg-zinc-900/90 border-amber-500/30 hover:border-amber-400/60 shadow-sm"
+                                                    : "bg-zinc-950/60 border-zinc-800/80 opacity-70 hover:opacity-100"
+                                                }`}
+                                              >
+                                                {/* Achievement Icon */}
+                                                <div className="relative shrink-0">
+                                                  {iconSrc ? (
+                                                    <img
+                                                      src={iconSrc}
+                                                      alt={ach.name || ach.apiname}
+                                                      className={`w-12 h-12 rounded-lg object-cover border ${
+                                                        isUnlocked
+                                                          ? "border-amber-400/50 shadow-md"
+                                                          : "border-zinc-800 grayscale opacity-60"
+                                                      }`}
+                                                      loading="lazy"
+                                                    />
+                                                  ) : (
+                                                    <div
+                                                      className={`w-12 h-12 rounded-lg border flex items-center justify-center ${
+                                                        isUnlocked
+                                                          ? "bg-amber-500/20 border-amber-400/40 text-amber-300"
+                                                          : "bg-zinc-900 border-zinc-800 text-zinc-600"
+                                                      }`}
+                                                    >
+                                                      <Trophy size={20} />
+                                                    </div>
+                                                  )}
+
+                                                  {/* Checkmark overlay for unlocked */}
+                                                  {isUnlocked && (
+                                                    <div className="absolute -bottom-1 -right-1 bg-emerald-500 text-zinc-950 rounded-full p-0.5 border border-zinc-900 shadow">
+                                                      <Check size={10} className="font-bold stroke-[3]" />
+                                                    </div>
+                                                  )}
+                                                </div>
+
+                                                {/* Achievement Info */}
+                                                <div className="min-w-0 flex-1 space-y-1">
+                                                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                                                    <h5
+                                                      className={`font-bold text-xs leading-snug truncate ${
+                                                        isUnlocked ? "text-zinc-100" : "text-zinc-400"
+                                                      }`}
+                                                      title={ach.name || ach.apiname}
+                                                    >
+                                                      {ach.name || ach.apiname}
+                                                    </h5>
+
+                                                    {/* Ultra Rare / Global Percent Badge */}
+                                                    {ach.globalPercent !== undefined && (
+                                                      <span
+                                                        className={`text-[9px] font-mono font-bold px-1.5 py-0.5 rounded-full border shrink-0 ${
+                                                          ach.isUltraRare || ach.globalPercent <= 10
+                                                            ? "bg-purple-950/80 text-purple-300 border-purple-500/40"
+                                                            : "bg-zinc-900 text-zinc-400 border-zinc-800"
+                                                        }`}
+                                                        title="Porcentagem de todos os jogadores da Steam que possuem esta conquista"
+                                                      >
+                                                        {ach.isUltraRare || ach.globalPercent <= 10 ? "💎 " : ""}
+                                                        {ach.globalPercent}%
+                                                      </span>
+                                                    )}
+                                                  </div>
+
+                                                  <p className="text-[11px] text-zinc-400 leading-tight line-clamp-2">
+                                                    {ach.description || "Conquista secreta ou sem descrição."}
+                                                  </p>
+
+                                                  {/* Unlock timestamp */}
+                                                  {isUnlocked && ach.unlocktime > 0 && (
+                                                    <span className="text-[9px] font-mono text-amber-400/90 font-medium flex items-center gap-1 pt-0.5">
+                                                      <Clock size={9} />
+                                                      <span>
+                                                        Desbloqueado em:{" "}
+                                                        {new Date(ach.unlocktime * 1000).toLocaleString("pt-BR", {
+                                                          day: "2-digit",
+                                                          month: "2-digit",
+                                                          year: "numeric",
+                                                          hour: "2-digit",
+                                                          minute: "2-digit",
+                                                        })}
+                                                      </span>
+                                                    </span>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <div className="p-4 bg-zinc-950 rounded-xl border border-zinc-800 text-center text-xs text-zinc-400">
+                                          Nenhuma conquista encontrada com os filtros selecionados.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {(game.hltbId || game.hltbMain || game.hltbExtra || game.hltbCompletionist) && (
-                        <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-800/80 pt-3.5 mt-2 text-left">
-                          <div className="flex items-center justify-start gap-3 mb-2 flex-wrap">
+                        <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-purple-500/50 hover:border-purple-500/80 shadow-md shadow-purple-500/10 mt-1 text-left space-y-3 transition-all">
+                          <div className="flex items-center justify-between gap-3 flex-wrap border-b border-purple-500/30 pb-2">
                             <div className="flex items-center gap-2">
-                              <Globe size={15} className="text-purple-400" />
-                              <span className="text-purple-300 text-xs uppercase tracking-wider font-bold font-mono">HowLongToBeat (Médias da Comunidade)</span>
+                              <Globe size={16} className="text-purple-400 shrink-0" />
+                              <span className="text-purple-300 text-xs uppercase tracking-wider font-extrabold font-mono">HowLongToBeat (Médias da Comunidade)</span>
                             </div>
                             {game.hltbId && (
                               <button
@@ -1302,11 +3612,12 @@ export default function GameDetailDrawer({
                         </div>
                       )}
 
-                      <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-800/80 pt-3.5 mt-2 text-left">
-                        <div className="flex items-center justify-start gap-3 mb-2 flex-wrap">
+                      {/* Bloco: Métricas de Avaliação */}
+                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-amber-500/50 hover:border-amber-500/80 shadow-md shadow-amber-500/10 mt-1 text-left space-y-3 transition-all">
+                        <div className="flex items-center justify-between gap-3 flex-wrap border-b border-amber-500/30 pb-2">
                           <div className="flex items-center gap-2">
-                            <Globe size={15} className="text-amber-400" />
-                            <span className="text-amber-300 text-xs uppercase tracking-wider font-bold font-mono">Métricas de Avaliação</span>
+                            <Star size={16} className="text-amber-400 shrink-0" />
+                            <span className="text-amber-300 text-xs uppercase tracking-wider font-extrabold font-mono">Métricas de Avaliação</span>
                           </div>
                           {game.metacriticUrl && (
                             <button
@@ -1393,6 +3704,7 @@ export default function GameDetailDrawer({
                             </a>
                           </div>
                         )}
+                      </div>
                         
                         {/* Pros & Cons Display Section */}
                         {(() => {
@@ -1408,7 +3720,12 @@ export default function GameDetailDrawer({
                             : [];
 
                           return (
-                            <div className="mt-3 border-t border-zinc-900/80 pt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="mt-3 col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-emerald-500/50 hover:border-emerald-500/80 shadow-md shadow-emerald-500/10 space-y-3 transition-all">
+                              <div className="flex items-center gap-2 pb-2 border-b border-emerald-500/30">
+                                <ThumbsUp size={16} className="text-emerald-400 shrink-0" />
+                                <span className="text-emerald-300 text-xs uppercase tracking-wider font-extrabold font-mono">Prós e Contras</span>
+                              </div>
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                               {/* + Prós */}
                               <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/20 space-y-1.5">
                                 <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-emerald-400 font-mono">
@@ -1493,28 +3810,37 @@ export default function GameDetailDrawer({
                                 )}
                               </div>
                             </div>
-                          );
-                        })()}
-                      </div>
+                          </div>
+                        );
+                      })()}
 
-                      <div className="sm:col-span-2 lg:col-span-4 border-t border-zinc-800/80 pt-3.5 mt-2">
+                      {/* Bloco: Gêneros */}
+                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4 border-2 border-fuchsia-500/50 hover:border-fuchsia-500/80 shadow-md shadow-fuchsia-500/10 mt-1 transition-all">
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold w-20 shrink-0">Gêneros:</span>
+                          <div className="flex items-center gap-1.5 w-24 shrink-0">
+                            <Gamepad2 size={16} className="text-fuchsia-400 shrink-0" />
+                            <span className="text-xs uppercase tracking-wider text-fuchsia-300 font-extrabold font-mono">Gêneros:</span>
+                          </div>
                           <div className="flex flex-wrap gap-1.5">
                             {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
-                              <span key={`${g}-${idx}`} className="px-2.5 py-1 rounded-lg bg-purple-950/40 text-purple-200 text-xs font-bold border border-purple-900/40 shadow-sm">
+                              <span key={`${g}-${idx}`} className="px-2.5 py-1 rounded-lg bg-fuchsia-950/40 text-fuchsia-200 text-xs font-bold border border-fuchsia-500/40 shadow-sm">
                                 {g}
                               </span>
                             ))}
                           </div>
                         </div>
                       </div>
-                      <div className="sm:col-span-2 lg:col-span-4 pt-1">
+
+                      {/* Bloco: Tags / Etiquetas */}
+                      <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4 border-2 border-cyan-500/50 hover:border-cyan-500/80 shadow-md shadow-cyan-500/10 mt-1 transition-all">
                         <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                          <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold w-20 shrink-0">Tags:</span>
+                          <div className="flex items-center gap-1.5 w-24 shrink-0">
+                            <Tag size={16} className="text-cyan-400 shrink-0" />
+                            <span className="text-xs uppercase tracking-wider text-cyan-300 font-extrabold font-mono">Tags:</span>
+                          </div>
                           <div className="flex flex-wrap gap-1.5">
                             {[...game.tags].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
-                              <span key={`${t}-${idx}`} className="px-2.5 py-1 rounded-lg bg-zinc-900 text-cyan-200 text-xs font-bold border border-cyan-900/40 shadow-sm">
+                              <span key={`${t}-${idx}`} className="px-2.5 py-1 rounded-lg bg-cyan-950/40 text-cyan-200 text-xs font-bold border border-cyan-500/40 shadow-sm">
                                 {t}
                               </span>
                             ))}
@@ -1527,11 +3853,60 @@ export default function GameDetailDrawer({
                     </div>
                   </div>
 
-                  {/* Diary / Journal Timeline */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="text-lg font-bold text-white">Diário da Jogatina</h3>
+                  {/* Reading Mode Banner */}
+                  {isReadingMode && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/80 via-orange-950/60 to-zinc-950 border border-amber-500/40 flex flex-wrap items-center justify-between gap-3 text-amber-200 text-xs shadow-xl"
+                    >
+                      <div className="flex items-center gap-2.5">
+                        <BookOpen size={18} className="text-amber-400 shrink-0" />
+                        <div>
+                          <p className="font-extrabold text-amber-100 uppercase tracking-wider text-[11px] font-mono">
+                            Modo de Leitura e Revisão Imersivo Ativo
+                          </p>
+                          <p className="text-zinc-300 text-xs font-medium">
+                            Controles de edição ocultos para focar inteiramente na leitura da sua jornada e mídias.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setIsReadingMode(false)}
+                        className="px-3 py-1.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-zinc-950 font-extrabold text-xs transition-all cursor-pointer shadow-md"
+                      >
+                        Sair do Modo Leitura
+                      </button>
+                    </motion.div>
+                  )}
+
+                  {/* Bloco: Diário da Jogatina */}
+                  <div className="bg-zinc-950/80 rounded-2xl p-5 border-2 border-cyan-500/50 hover:border-cyan-500/80 shadow-md shadow-cyan-500/10 space-y-4 transition-all">
+                    <div className="flex items-center justify-between gap-3 pb-2.5 border-b border-cyan-500/30 flex-wrap">
                       <div className="flex items-center gap-2">
+                        <BookOpen size={18} className="text-cyan-400 shrink-0" />
+                        <h3 className="text-sm sm:text-base font-extrabold text-cyan-300 font-mono uppercase tracking-wider">Diário da Jogatina & Anotações</h3>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {!isReadingMode && game.diary && game.diary.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsEntrySelectionMode(!isEntrySelectionMode);
+                              setSelectedEntryIds(new Set());
+                            }}
+                            className={`px-3 py-1.5 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer ${
+                              isEntrySelectionMode
+                                ? "bg-cyan-950 border-cyan-500/60 text-cyan-300"
+                                : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white hover:border-zinc-700"
+                            }`}
+                          >
+                            {isEntrySelectionMode ? <CheckSquare size={13} /> : <Square size={13} />}
+                            <span>{isEntrySelectionMode ? "Sair da Seleção" : "Seleção em Lote"}</span>
+                          </button>
+                        )}
+
                         {game.diary && game.diary.length > 0 && (
                           <button
                             onClick={() => {
@@ -1550,394 +3925,282 @@ export default function GameDetailDrawer({
                             {game.diary.every((e) => collapsedEntries[e.id]) ? "Expandir Tudo" : "Colapsar Tudo"}
                           </button>
                         )}
-                        <button
-                          onClick={() => {
-                            if (showAddDiary) {
-                              handleCancelDiary();
-                            } else {
-                              setShowAddDiary(true);
-                            }
-                          }}
-                          className="px-3 py-1.5 rounded-xl bg-cyan-950/45 hover:bg-cyan-900/45 text-cyan-300 border border-cyan-800/30 text-xs font-bold flex items-center gap-1 transition-all"
-                        >
-                          <Plus size={12} /> {editingDiaryId ? "Editar Entrada" : "Adicionar Entrada"}
-                        </button>
+
+                        {!isReadingMode && (
+                          <button
+                            onClick={handleAddNewDiaryClick}
+                            className="px-3 py-1.5 rounded-xl bg-cyan-950/45 hover:bg-cyan-900/45 text-cyan-300 border border-cyan-800/30 text-xs font-bold flex items-center gap-1 transition-all cursor-pointer"
+                          >
+                            <Plus size={12} /> {editingDiaryId ? "Editar Entrada" : "Adicionar Entrada"}
+                          </button>
+                        )}
                       </div>
                     </div>
 
-                    {/* Inline diary entry form */}
-                    <AnimatePresence>
-                      {showAddDiary && (
-                        <motion.div
-                          key="add-diary-form-panel"
-                          initial={{ opacity: 0, height: 0 }}
-                          animate={{ opacity: 1, height: "auto" }}
-                          exit={{ opacity: 0, height: 0 }}
-                          className="glass rounded-3xl border border-zinc-800 p-5 space-y-4 overflow-hidden shadow-lg"
-                        >
-                          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                            <span className="text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold flex items-center gap-1.5">
-                              <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse" />
-                              {editingDiaryId ? "Editar Registro" : "Novo Registro"}
+                      {/* Batch Entry Action Bar */}
+                      {isEntrySelectionMode && game.diary && game.diary.length > 0 && (
+                        <div className="p-3 rounded-2xl bg-zinc-950 border border-zinc-800 flex flex-wrap items-center justify-between gap-3 text-xs font-mono mb-4 animate-fadeIn">
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (selectedEntryIds.size === game.diary!.length) {
+                                  setSelectedEntryIds(new Set());
+                                } else {
+                                  const allIds = new Set(game.diary!.map((e) => e.id));
+                                  setSelectedEntryIds(allIds);
+                                }
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs font-bold"
+                            >
+                              {selectedEntryIds.size === game.diary.length ? "Desmarcar Todas" : "Marcar Todas"}
+                            </button>
+                            <span className="text-zinc-400 text-xs font-sans">
+                              <strong>{selectedEntryIds.size}</strong> de {game.diary.length} entrada(s) selecionada(s)
                             </span>
-                            <div className="flex gap-2">
-                              <button
-                                type="button"
-                                onClick={handleCancelDiary}
-                                className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-bold hover:bg-zinc-850 text-xs cursor-pointer transition-all active:scale-95"
-                              >
-                                Cancelar
-                              </button>
-                              <button
-                                type="button"
-                                onClick={handleAddDiarySubmit}
-                                className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-purple-600 to-cyan-500 text-white font-bold text-xs cursor-pointer hover:opacity-90 active:scale-95 transition-all"
-                              >
-                                {editingDiaryId ? "Atualizar Entrada" : "Salvar Entrada"}
-                              </button>
-                            </div>
-                          </div>
-                          <div>
-                            <label className="block text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-1">
-                              Período de Aventura *
-                            </label>
-                            <div className="flex items-center gap-2 font-mono text-sm max-w-md">
-                              <input
-                                type="date"
-                                value={diaryStart}
-                                onChange={(e) => setDiaryStart(e.target.value)}
-                                className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
-                              />
-                              <span className="text-zinc-400">~</span>
-                              <input
-                                type="date"
-                                value={diaryEnd}
-                                onChange={(e) => setDiaryEnd(e.target.value)}
-                                className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
-                              />
-                            </div>
                           </div>
 
-                          <div>
-                            <label className="block text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-1">
-                              {editingDiaryId ? "Editar Entrada de Diário *" : "Entrada de Diário *"}
-                            </label>
-                            <RichTextEditor
-                              value={diaryText}
-                              onChange={setDiaryText}
-                              gameName={game?.name}
-                              placeholder="Relate conquistas, batalhas difíceis, sentimentos, chefes derrotados..."
-                            />
-                          </div>
-
-                          <div>
-                            <label className="block text-[10px] uppercase tracking-[0.25em] text-zinc-400 font-bold mb-1.5">
-                              Anexar Screenshot ou Vídeo (ImgBB & YouTube)
-                            </label>
-                            
-                            <div className="space-y-3">
-                              {/* Drag and drop zone */}
-                              <div
-                                onDragOver={handleDiaryDragOver}
-                                onDragLeave={handleDiaryDragLeave}
-                                onDrop={handleDiaryDrop}
-                                className={`flex flex-col items-center justify-center p-6 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
-                                  isDragOverDiaryMedia
-                                    ? "border-cyan-500 bg-cyan-950/10 scale-[1.01]"
-                                    : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
-                                }`}
+                          <div className="flex items-center gap-2">
+                            {selectedEntryIds.size > 0 && (
+                              <button
+                                type="button"
                                 onClick={() => {
-                                  const diaryInput = document.getElementById("diary-media-input");
-                                  if (diaryInput) diaryInput.click();
-                                }}
-                              >
-                                <input
-                                  id="diary-media-input"
-                                  type="file"
-                                  multiple
-                                  disabled={isUploadingMedia}
-                                  accept="image/*,video/*"
-                                  onChange={handleDiaryMediaUpload}
-                                  className="hidden"
-                                />
-                                {isUploadingMedia ? (
-                                  <div className="flex flex-col items-center gap-2 py-1 text-center">
-                                    <span className="w-6 h-6 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                                    <span className="text-xs text-cyan-400 font-semibold animate-pulse">{uploadProgressText || "Enviando mídias..."}</span>
-                                  </div>
-                                ) : (
-                                  <div className="flex flex-col items-center gap-1.5 text-center">
-                                    <Upload size={20} className="text-cyan-400" />
-                                    <p className="text-xs font-semibold text-zinc-300">
-                                      Arraste screenshots ou vídeos aqui ou <span className="text-cyan-400 underline decoration-dashed underline-offset-4">escolha ficheiros</span>
-                                    </p>
-                                    <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">
-                                      Múltiplos arquivos suportados
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
-
-                              {/* Manual Link input fallback */}
-                              <div className="flex w-full gap-2 items-center">
-                                <input
-                                  type="url"
-                                  value={diaryScreenshotUrl}
-                                  onChange={(e) => setDiaryScreenshotUrl(e.target.value)}
-                                  placeholder="Ou cole link direto de Imagem ou YouTube..."
-                                  className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-xs"
-                                  onKeyDown={(e) => {
-                                    if (e.key === "Enter") {
-                                      e.preventDefault();
-                                      handleAddLink();
+                                  const count = selectedEntryIds.size;
+                                  triggerConfirm(
+                                    "Excluir Entradas Selecionadas",
+                                    `Tem certeza que deseja excluir permanentemente ${count} ${count === 1 ? "entrada" : "entradas"} de diário selecionada(s)?`,
+                                    () => {
+                                      const entryIdsArray: string[] = Array.from(selectedEntryIds) as any;
+                                      if (onDeleteMultipleDiaryEntries) {
+                                        onDeleteMultipleDiaryEntries(game.id, entryIdsArray);
+                                      } else {
+                                        entryIdsArray.forEach((id) => onDeleteDiaryEntry(game.id, id));
+                                      }
+                                      setSelectedEntryIds(new Set());
+                                      setIsEntrySelectionMode(false);
                                     }
-                                  }}
-                                />
-                                <button
-                                  type="button"
-                                  onClick={handleAddLink}
-                                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-cyan-400 transition-all flex items-center justify-center cursor-pointer"
-                                  title="Adicionar Link"
-                                >
-                                  <Link2 size={14} />
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-
-                          {tempDiaryMedias.length > 0 && (
-                            <div className="space-y-1.5">
-                              <p className="text-[10px] text-zinc-400 flex items-center gap-1.5 px-1 text-left">
-                                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                                Arraste e solte as mídias para reordenar a exibição
-                              </p>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 p-3 rounded-2xl bg-zinc-950 border border-zinc-800">
-                                {tempDiaryMedias.map((m, idx) => {
-                                  const isYt = isYoutubeUrl(m.src);
-                                  const ytThumb = isYt ? `https://img.youtube.com/vi/${getYoutubeEmbedUrl(m.src)?.split("/embed/")[1]}/0.jpg` : "";
-                                  const isDragged = draggedMediaIndex === idx;
-                                  const isDragOver = dragOverMediaIndex === idx;
-
-                                  return (
-                                    <motion.div
-                                      layout
-                                      transition={{ type: "spring", stiffness: 300, damping: 25 }}
-                                      key={m.src || idx}
-                                      draggable
-                                      onDragStart={(e) => handleMediaDragStart(e, idx)}
-                                      onDragOver={(e) => handleMediaDragOver(e, idx)}
-                                      onDragLeave={() => {
-                                        if (dragOverMediaIndex === idx) setDragOverMediaIndex(null);
-                                      }}
-                                      onDrop={() => handleMediaDrop(idx)}
-                                      onDragEnd={() => {
-                                        setDraggedMediaIndex(null);
-                                        setDragOverMediaIndex(null);
-                                      }}
-                                      className={`flex flex-col rounded-xl overflow-hidden border bg-zinc-900 relative transition-all duration-300 cursor-grab active:cursor-grabbing select-none ${
-                                        isDragged ? "opacity-35 border-cyan-500 scale-95 shadow-inner bg-zinc-950 border-dashed" : "border-zinc-800 hover:border-zinc-700 hover:scale-[1.01]"
-                                      }`}
-                                    >
-                                      {/* Media Thumbnail */}
-                                      <div className="h-20 w-full relative bg-black flex items-center justify-center overflow-hidden pointer-events-none">
-                                        {isYt ? (
-                                          <img src={ytThumb} className="w-full h-full object-cover" alt="YouTube Thumbnail" referrerPolicy="no-referrer" />
-                                        ) : m.isVideo ? (
-                                          <video src={m.src} className="w-full h-full object-cover" muted />
-                                        ) : (
-                                          <img src={m.src} className="w-full h-full object-cover" alt="prev" referrerPolicy="no-referrer" />
-                                        )}
-                                        
-                                        {/* Media type indicator */}
-                                        <div className="absolute bottom-1 right-1 bg-black/80 px-1 py-0.5 rounded text-[8px] text-zinc-300 flex items-center gap-0.5">
-                                          {isYt ? (
-                                            <>
-                                              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                                              <span>YouTube</span>
-                                            </>
-                                          ) : m.isVideo ? (
-                                            <>
-                                              <Film size={8} className="text-cyan-400" />
-                                              <span>Vídeo</span>
-                                            </>
-                                          ) : (
-                                            <>
-                                              <ImageIcon size={8} className="text-purple-400" />
-                                              <span>Imagem</span>
-                                            </>
-                                          )}
-                                        </div>
-                                      </div>
-
-                                      {/* Actions / Reordering Bar */}
-                                      <div className="h-8 bg-zinc-950 border-t border-zinc-800/80 flex items-center justify-between px-2">
-                                        {/* Move Left */}
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            moveMedia(idx, "left");
-                                          }}
-                                          disabled={idx === 0}
-                                          className="p-1 rounded text-zinc-400 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-zinc-400 transition-all cursor-pointer"
-                                          title="Mover para esquerda"
-                                        >
-                                          <ArrowLeft size={12} />
-                                        </button>
-
-                                        {/* Remove */}
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            const itemToRemove = tempDiaryMedias[idx];
-                                            if (itemToRemove && itemToRemove.deleteUrl) {
-                                              fetch("/api/delete-imgbb", {
-                                                method: "POST",
-                                                headers: { "Content-Type": "application/json" },
-                                                body: JSON.stringify({ deleteUrl: itemToRemove.deleteUrl })
-                                              }).catch((err) => console.error("Erro ao deletar do ImgBB no backend:", err));
-                                            }
-                                            setTempDiaryMedias((prev) => prev.filter((_, i) => i !== idx));
-                                          }}
-                                          className="p-1 rounded text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
-                                          title="Remover mídia"
-                                        >
-                                          <Trash2 size={12} />
-                                        </button>
-
-                                        {/* Move Right */}
-                                        <button
-                                          type="button"
-                                          onClick={(e) => {
-                                            e.stopPropagation();
-                                            moveMedia(idx, "right");
-                                          }}
-                                          disabled={idx === tempDiaryMedias.length - 1}
-                                          className="p-1 rounded text-zinc-400 hover:text-cyan-400 disabled:opacity-20 disabled:hover:text-zinc-400 transition-all cursor-pointer"
-                                          title="Mover para direita"
-                                        >
-                                          <ArrowRight size={12} />
-                                        </button>
-                                      </div>
-                                    </motion.div>
                                   );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-red-950 border border-red-500/60 text-red-300 hover:bg-red-900 hover:text-white font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-lg animate-pulse text-xs"
+                              >
+                                <Trash2 size={13} />
+                                <span>Excluir Selecionadas ({selectedEntryIds.size})</span>
+                              </button>
+                            )}
 
-                    {/* Timeline Log Lists */}
-                    <div className="space-y-5 pt-2">
-                      {(!game.diary || game.diary.length === 0) && (
-                        <div className="glass rounded-3xl border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">
-                          Nenhuma entrada registrada ainda no diário da jogatina deste jogo.
+                            <button
+                              type="button"
+                              onClick={() => {
+                                triggerConfirm(
+                                  "Excluir TODAS as Entradas",
+                                  `Tem certeza que deseja apagar TODAS as ${game.diary!.length} entradas do diário de "${game.name}"?`,
+                                  () => {
+                                    const allIds = game.diary!.map((e) => e.id);
+                                    if (onDeleteMultipleDiaryEntries) {
+                                      onDeleteMultipleDiaryEntries(game.id, allIds);
+                                    } else {
+                                      allIds.forEach((id) => onDeleteDiaryEntry(game.id, id));
+                                    }
+                                    setSelectedEntryIds(new Set());
+                                    setIsEntrySelectionMode(false);
+                                  }
+                                );
+                              }}
+                              className="px-3 py-1.5 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-red-950 hover:border-red-500/50 text-zinc-400 hover:text-red-300 transition-all cursor-pointer flex items-center gap-1.5 text-xs font-bold"
+                              title="Eliminar todas as entradas deste diário"
+                            >
+                              <Trash2 size={13} />
+                              <span>Deletar Todas ({game.diary.length})</span>
+                            </button>
+                          </div>
                         </div>
                       )}
 
-                      {sortedDiary.map((entry, idx) => {
-                        const isCollapsed = collapsedEntries[entry.id] !== false;
-                        const entryKey = entry.id ? `${entry.id}-${idx}` : `diary-${idx}`;
-                        return (
-                          <div key={entryKey} id={`diary-entry-${entry.id || idx}`} className="relative pl-6 border-l-2 border-cyan-500/20 pb-4 scroll-mt-10">
-                            <div className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-cyan-400 ring-4 ring-[#080a10]" />
-                            <div className="flex items-center justify-between gap-2">
-                              <span
-                                className="px-3 py-1.5 rounded-xl chip-pink text-xs sm:text-sm font-bold uppercase tracking-wider font-mono cursor-pointer hover:bg-pink-950/40 hover:border-pink-500/40 transition-all flex items-center gap-1.5 select-none"
-                                onClick={() => setCollapsedEntries((prev) => ({ ...prev, [entry.id]: prev[entry.id] === false }))}
-                                title="Clique para expandir ou colapsar esta entrada"
-                              >
-                                {entry.period}
-                                {isCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-                              </span>
-                              <div className="flex items-center gap-3">
-                                <button
-                                  onClick={() => handleEditDiaryClick(entry)}
-                                  className="text-xs font-semibold text-purple-400 hover:text-purple-300 flex items-center gap-1 transition-all cursor-pointer"
-                                >
-                                  <Edit size={12} /> Editar
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteDiaryClick(entry.id)}
-                                  className="text-xs font-semibold text-red-400 hover:text-red-300 flex items-center gap-1 transition-all cursor-pointer"
-                                >
-                                  <Trash2 size={12} /> Eliminar
-                                </button>
-                              </div>
-                            </div>
-                            
-                            <AnimatePresence initial={false}>
-                              {!isCollapsed && (
-                                <motion.div
-                                  key={`diary-entry-content-${entry.id || idx}`}
-                                  initial={{ opacity: 0, height: 0 }}
-                                  animate={{ opacity: 1, height: "auto" }}
-                                  exit={{ opacity: 0, height: 0 }}
-                                  transition={{ duration: 0.2 }}
-                                  className="overflow-hidden"
-                                >
-                                  <div className="mt-3 bg-zinc-900/30 p-5 border border-zinc-850 rounded-2xl">
-                                    <div
-                                      className="text-sm sm:text-base text-zinc-200 leading-relaxed prose prose-invert prose-sm max-w-none break-words"
-                                      dangerouslySetInnerHTML={{ __html: cleanHTMLText(entry.text) }}
-                                    />
-                                  </div>
+                      {/* Inline diary entry form for NEW entry */}
+                      <AnimatePresence>
+                        {showAddDiary && editingDiaryId === null && renderDiaryForm(null)}
+                      </AnimatePresence>
 
-                                  {entry.medias && entry.medias.length > 0 && (
-                                    <div className="mt-4 border border-zinc-800 bg-zinc-950 rounded-3xl overflow-hidden shadow-2xl p-4">
-                                      <button
-                                        onClick={() => setExpandedMediaEntries((prev) => ({ ...prev, [entry.id]: !prev[entry.id] }))}
-                                        className="w-full text-left px-1 flex items-center justify-between hover:opacity-80 transition-all select-none cursor-pointer focus:outline-none"
-                                      >
-                                        <span className="text-xs font-bold font-mono text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
-                                          Mídias Acopladas ({entry.medias.length})
-                                        </span>
-                                        <span className="text-xs font-bold text-cyan-500 hover:text-cyan-400 flex items-center gap-1.5 font-mono uppercase tracking-wider">
-                                          {expandedMediaEntries[entry.id] ? "Ocultar" : "Visualizar"}
-                                          {expandedMediaEntries[entry.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                                        </span>
-                                      </button>
-                                      
-                                      <AnimatePresence initial={false}>
-                                        {expandedMediaEntries[entry.id] && (
-                                          <motion.div
-                                            initial={{ opacity: 0, height: 0, marginTop: 0 }}
-                                            animate={{ opacity: 1, height: "auto", marginTop: 12 }}
-                                            exit={{ opacity: 0, height: 0, marginTop: 0 }}
-                                            transition={{ duration: 0.2 }}
-                                            className="overflow-hidden"
-                                          >
-                                            <div className="max-h-[720px] overflow-y-auto p-3 bg-zinc-900/20 border border-zinc-900 rounded-2xl">
-                                              <DiaryMediaGrid medias={entry.medias} handleOpenZoom={handleOpenZoom} />
-                                            </div>
-                                          </motion.div>
-                                        )}
-                                      </AnimatePresence>
-                                    </div>
-                                  )}
-                                </motion.div>
-                              )}
-                            </AnimatePresence>
+                      {/* Timeline Log Lists */}
+                      <div className="space-y-5 pt-2">
+                        {(!game.diary || game.diary.length === 0) && (
+                          <div className="glass rounded-3xl border border-dashed border-zinc-800 p-8 text-center text-sm text-zinc-500">
+                            Nenhuma entrada registrada ainda no diário da jogatina deste jogo.
                           </div>
-                        );
-                      })}
-                    </div>
+                        )}
+
+                        {sortedDiary.map((entry, idx) => {
+                          const isCollapsed = collapsedEntries[entry.id] !== false;
+                          const entryKey = entry.id ? `${entry.id}-${idx}` : `diary-${idx}`;
+                          const isEditingThisEntry = showAddDiary && editingDiaryId === entry.id;
+                          const isEntrySelected = selectedEntryIds.has(entry.id);
+
+                          return (
+                            <div key={entryKey} id={`diary-entry-${entry.id || idx}`} className="relative pl-6 border-l-2 border-cyan-500/20 pb-4 scroll-mt-10">
+                              <div className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-cyan-400 ring-4 ring-[#080a10]" />
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                  {isEntrySelectionMode && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setSelectedEntryIds((prev) => {
+                                          const next = new Set(prev);
+                                          if (next.has(entry.id)) next.delete(entry.id);
+                                          else next.add(entry.id);
+                                          return next;
+                                        });
+                                      }}
+                                      className={`px-2.5 py-1 rounded-xl border flex items-center gap-1.5 text-xs font-bold transition-all cursor-pointer ${
+                                        isEntrySelected
+                                          ? "bg-cyan-950 border-cyan-500/80 text-cyan-300"
+                                          : "bg-zinc-900 border-zinc-800 text-zinc-400 hover:text-white"
+                                      }`}
+                                    >
+                                      {isEntrySelected ? <CheckSquare size={13} className="text-cyan-400" /> : <Square size={13} />}
+                                      <span>{isEntrySelected ? "Selecionada" : "Selecionar"}</span>
+                                    </button>
+                                  )}
+
+                                  <span
+                                    className="px-3 py-1.5 rounded-xl chip-pink text-xs sm:text-sm font-bold uppercase tracking-wider font-mono cursor-pointer hover:bg-pink-950/40 hover:border-pink-500/40 transition-all flex items-center gap-1.5 select-none"
+                                    onClick={() => setCollapsedEntries((prev) => ({ ...prev, [entry.id]: prev[entry.id] === false }))}
+                                    title="Clique para expandir ou colapsar esta entrada"
+                                  >
+                                    {entry.period}
+                                    {isCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                                  </span>
+                                </div>
+                                
+                                {!isReadingMode && (
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditDiaryClick(entry, "text")}
+                                      className="text-xs font-semibold text-cyan-300 hover:text-white flex items-center gap-1.5 transition-all cursor-pointer bg-cyan-950/60 hover:bg-cyan-900/80 px-2.5 py-1 rounded-xl border border-cyan-500/40 shadow-sm"
+                                      title="Editar apenas o texto desta entrada (sem carregar fotos e vídeos)"
+                                    >
+                                      <FileText size={12} className="text-cyan-400" /> Editar Texto
+                                    </button>
+                                    
+                                    <button
+                                      type="button"
+                                      onClick={() => handleEditDiaryClick(entry, "full")}
+                                      className="text-xs font-semibold text-purple-300 hover:text-white flex items-center gap-1.5 transition-all cursor-pointer bg-purple-950/60 hover:bg-purple-900/80 px-2.5 py-1 rounded-xl border border-purple-500/40 shadow-sm"
+                                      title="Editar texto e gerenciar mídias desta entrada"
+                                    >
+                                      <Edit size={12} className="text-purple-400" /> Editar Entrada
+                                    </button>
+                                    
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteDiaryClick(entry.id)}
+                                      className="text-xs font-semibold text-red-400 hover:text-red-300 flex items-center gap-1 transition-all cursor-pointer bg-red-950/30 hover:bg-red-900/40 px-2.5 py-1 rounded-xl border border-red-900/30"
+                                      title="Eliminar esta entrada de diário"
+                                    >
+                                      <Trash2 size={12} />
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                              
+                              <AnimatePresence initial={false}>
+                                {!isCollapsed && (
+                                  <motion.div
+                                    key={`diary-entry-content-${entry.id || idx}`}
+                                    initial={{ opacity: 0, height: 0 }}
+                                    animate={{ opacity: 1, height: "auto" }}
+                                    exit={{ opacity: 0, height: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="overflow-hidden"
+                                  >
+                                    {isReadingMode ? (
+                                      <ReadingModeResizableRow
+                                        entry={entry}
+                                        expandedMediaEntries={expandedMediaEntries}
+                                        setExpandedMediaEntries={setExpandedMediaEntries}
+                                        handleOpenZoom={handleOpenZoom}
+                                        readingTextWidthPercent={readingTextWidthPercent}
+                                        setReadingTextWidthPercent={setReadingTextWidthPercent}
+                                      />
+                                    ) : (
+                                      /* Layout Padrão Stacked */
+                                      <div className="space-y-4">
+                                        <div className="mt-3 bg-zinc-900/30 p-5 border border-zinc-850 rounded-2xl">
+                                          <div
+                                            className="text-sm sm:text-base text-zinc-200 leading-relaxed prose prose-invert prose-sm max-w-none break-words"
+                                            dangerouslySetInnerHTML={{ __html: cleanHTMLText(entry.text) }}
+                                          />
+                                        </div>
+
+                                        {entry.medias && entry.medias.length > 0 && (
+                                          <div className="border border-zinc-800 bg-zinc-950 rounded-3xl overflow-hidden shadow-2xl p-4">
+                                            <button
+                                              onClick={() => setExpandedMediaEntries((prev) => ({ ...prev, [entry.id]: !prev[entry.id] }))}
+                                              className="w-full text-left px-1 flex items-center justify-between hover:opacity-80 transition-all select-none cursor-pointer focus:outline-none"
+                                            >
+                                              <span className="text-xs font-bold font-mono text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+                                                Mídias Acopladas ({entry.medias.length})
+                                              </span>
+                                              <span className="text-xs font-bold text-cyan-500 hover:text-cyan-400 flex items-center gap-1.5 font-mono uppercase tracking-wider">
+                                                {expandedMediaEntries[entry.id] ? "Ocultar" : "Visualizar"}
+                                                {expandedMediaEntries[entry.id] ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                                              </span>
+                                            </button>
+                                            
+                                            <AnimatePresence initial={false}>
+                                              {expandedMediaEntries[entry.id] && (
+                                                <motion.div
+                                                  initial={{ opacity: 0, height: 0, marginTop: 0 }}
+                                                  animate={{ opacity: 1, height: "auto", marginTop: 12 }}
+                                                  exit={{ opacity: 0, height: 0, marginTop: 0 }}
+                                                  transition={{ duration: 0.2 }}
+                                                  className="overflow-hidden"
+                                                >
+                                                  <div className="max-h-[720px] overflow-y-auto p-3 bg-zinc-900/20 border border-zinc-900 rounded-2xl">
+                                                    <DiaryMediaGrid
+                                                      medias={entry.medias}
+                                                      handleOpenZoom={handleOpenZoom}
+                                                      onDeleteMedias={(mediasToDelete) => handleDeleteEntryMedias(entry.id, mediasToDelete)}
+                                                      onDeleteAllMedias={() => handleDeleteAllEntryMedias(entry.id)}
+                                                      triggerConfirm={triggerConfirm}
+                                                      readOnly={isReadingMode}
+                                                    />
+                                                  </div>
+                                                </motion.div>
+                                              )}
+                                            </AnimatePresence>
+                                          </div>
+                                        )}
+                                      </div>
+                                    )}
+                                  </motion.div>
+                                )}
+                              </AnimatePresence>
+
+                              {/* Inline Editing Form directly under THIS specific entry */}
+                              <AnimatePresence>
+                                {isEditingThisEntry && renderDiaryForm(entry.id)}
+                              </AnimatePresence>
+                            </div>
+                          );
+                        })}
+                      </div>
                   </div>
 
                   {/* Danger Zone */}
-                  <div className="pt-6 border-t border-zinc-800 flex flex-col sm:flex-row justify-between items-center gap-3">
-                    <button
-                      onClick={handleDeleteClick}
-                      className="text-sm font-bold text-red-400 hover:text-red-300 flex items-center gap-1.5 transition-all"
-                    >
-                      <Trash2 size={14} /> Remover Jogo da Coleção
-                    </button>
-                    <span className="text-xs text-zinc-500">Catálogo local seguro no navegador</span>
-                  </div>
+                  {!isReadingMode && (
+                    <div className="pt-6 border-t border-zinc-800 flex flex-col sm:flex-row justify-between items-center gap-3">
+                      <button
+                        onClick={handleDeleteClick}
+                        className="text-sm font-bold text-red-400 hover:text-red-300 flex items-center gap-1.5 transition-all cursor-pointer"
+                      >
+                        <Trash2 size={14} /> Remover Jogo da Coleção
+                      </button>
+                      <span className="text-xs text-zinc-500">Catálogo local seguro no navegador</span>
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -2010,6 +4273,22 @@ export default function GameDetailDrawer({
         onSelectImage={(src) => setZoomedImage(src)}
         title={game?.name ? `Mídias - ${game.name}` : undefined}
       />
+
+      {/* Game Dictionary Modal */}
+      {game && (
+        <GameDictionaryModal
+          isOpen={isDictionaryModalOpen}
+          onClose={() => setIsDictionaryModalOpen(false)}
+          game={game}
+          onUpdateGame={onUpdateGame}
+          onApplyToCurrentEditor={() => {
+            if (diaryText && game.dictionary) {
+              const res = applyDictionaryToHtml(diaryText, game.dictionary);
+              setDiaryText(res.updatedHtml);
+            }
+          }}
+        />
+      )}
     </>
   );
 }

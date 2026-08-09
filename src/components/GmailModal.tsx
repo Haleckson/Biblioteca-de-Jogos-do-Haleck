@@ -11,6 +11,7 @@ import {
   formatLibraryReportHtml,
 } from "../utils/gmail";
 import { Mail, Send, X, CheckCircle, Loader2, AlertCircle, LogOut } from "lucide-react";
+import { useBodyScrollLock } from "../lib/bodyScrollLock";
 
 interface GmailModalProps {
   isOpen: boolean;
@@ -27,6 +28,8 @@ export default function GmailModal({
   gamesListForReport = [],
   triggerAlert,
 }: GmailModalProps) {
+  useBodyScrollLock(isOpen);
+
   const [isConnected, setIsConnected] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [recipient, setRecipient] = useState("");

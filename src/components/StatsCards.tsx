@@ -15,11 +15,12 @@ interface StatsProps {
 
 export default function StatsCards({ games, activeTab, onTabChange }: StatsProps) {
   const total = games.length;
-  const playing = games.filter(g => g.status.includes("Jogando")).length;
-  const hiatus = games.filter(g => g.status.includes("Em Hiatus")).length;
-  const finished = games.filter(g => g.status.includes("Terminado")).length;
-  const backlog = games.filter(g => g.status.includes("Backlog")).length;
-  const dropped = games.filter(g => g.status.includes("Desistido")).length;
+  const getStatus = (g: Game) => Array.isArray(g.status) ? g.status : typeof g.status === "string" ? [g.status] : [];
+  const playing = games.filter(g => getStatus(g).includes("Jogando")).length;
+  const hiatus = games.filter(g => getStatus(g).includes("Em Hiatus")).length;
+  const finished = games.filter(g => getStatus(g).includes("Terminado")).length;
+  const backlog = games.filter(g => getStatus(g).includes("Backlog")).length;
+  const dropped = games.filter(g => getStatus(g).includes("Desistido")).length;
 
   const stats = [
     { label: "Total", value: "Todos", count: total, color: "text-cyan-400", bg: "border-cyan-500/40", bgHover: "hover:border-cyan-400", icon: Gamepad2 },

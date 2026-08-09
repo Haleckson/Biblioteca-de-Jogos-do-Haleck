@@ -1,6 +1,9 @@
 import { signInWithPopup, GoogleAuthProvider, User, onAuthStateChanged } from "firebase/auth";
 import { auth } from "./firebase";
 import { Game } from "../types";
+import { generateBackupPDFReport, PDFReportData } from "./pdfReport";
+import { isVideoFile, isImageFile, getVideoMimeType } from "./mediaUtils";
+import { addBackupLog } from "./backupAuditLog";
 
 // In-memory token cache as required by the workspace integration guidelines
 let cachedAccessToken: string | null = null;
@@ -151,9 +154,27 @@ export async function signOutDrive(): Promise<void> {
 let activeBackupSignal: AbortSignal | null = null;
 
 /**
+ * Helper to pause execution while mediaUploadQueueManager is paused, or throw AbortError if canceled.
+ */
+export async function checkDrivePauseAndAbort(signal?: AbortSignal) {
+  const { mediaUploadQueueManager } = await import("./mediaUploadManager");
+  while (mediaUploadQueueManager.getIsPaused()) {
+    if (signal?.aborted || activeBackupSignal?.aborted) {
+      throw new DOMException("Backup cancelado pelo usuário", "AbortError");
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  if (signal?.aborted || activeBackupSignal?.aborted) {
+    throw new DOMException("Backup cancelado pelo usuário", "AbortError");
+  }
+}
+
+/**
  * Helper to fetch with Bearer token authorization and auto-refresh on 401.
  */
 async function driveFetch(url: string, options: RequestInit = {}): Promise<Response> {
+  await checkDrivePauseAndAbort(options.signal);
+
   let token = getDriveAccessToken();
 
   if (!token && localStorage.getItem("google_drive_connected") === "true") {
@@ -266,7 +287,23 @@ export async function uploadOrUpdateFile(
   const fileId = existingId || (await findFileByName(filename, parentId, false));
 
   if (fileId) {
-    // Update content of existing file
+    // 1. Update metadata (filename and mimeType) if updating an existing file
+    try {
+      await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          name: filename,
+          mimeType,
+        }),
+      });
+    } catch (err) {
+      console.warn("Aviso ao atualizar metadados do arquivo no Drive:", err);
+    }
+
+    // 2. Update content of existing file
     await driveFetch(
       `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`,
       {
@@ -336,7 +373,7 @@ export async function deleteFileOrFolder(id: string): Promise<void> {
 async function urlToBlob(url: string, retries = 2): Promise<Blob | null> {
   if (!url) return null;
 
-  // Handle data URI (base64)
+  // 1. Handle data URI (base64)
   if (url.startsWith("data:")) {
     try {
       const isBase64 = url.includes("base64,");
@@ -357,6 +394,50 @@ async function urlToBlob(url: string, retries = 2): Promise<Blob | null> {
     }
   }
 
+  // 2. Handle local blob: URL scheme directly (never pass referrerPolicy or CORS headers to blob: URLs)
+  if (url.startsWith("blob:")) {
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const b = await res.blob();
+        if (b && b.size > 0) return b;
+      }
+    } catch (err) {
+      console.warn(`Erro ao obter blob da URL local (${url}):`, err);
+    }
+
+    // Canvas fallback for local blob image without setting img.crossOrigin
+    try {
+      const blobFromCanvas = await new Promise<Blob | null>((resolve) => {
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const canvas = document.createElement("canvas");
+            canvas.width = img.naturalWidth || 800;
+            canvas.height = img.naturalHeight || 600;
+            const ctx = canvas.getContext("2d");
+            if (ctx) {
+              ctx.drawImage(img, 0, 0);
+              canvas.toBlob((b) => resolve(b), "image/png");
+            } else {
+              resolve(null);
+            }
+          } catch {
+            resolve(null);
+          }
+        };
+        img.onerror = () => resolve(null);
+        img.src = url;
+      });
+      if (blobFromCanvas) return blobFromCanvas;
+    } catch (e) {
+      console.warn("Erro no fallback de canvas para URL blob local:", e);
+    }
+
+    return null;
+  }
+
+  // 3. Handle standard HTTP/HTTPS URLs
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
       const res = await fetch(url, { referrerPolicy: "no-referrer" });
@@ -372,7 +453,7 @@ async function urlToBlob(url: string, retries = 2): Promise<Blob | null> {
     }
   }
 
-  // Fallback for images: load via HTML Image element and render to canvas to produce blob
+  // 4. Fallback for remote images: load via HTML Image element
   try {
     const blobFromCanvas = await new Promise<Blob | null>((resolve) => {
       const img = new Image();
@@ -404,11 +485,86 @@ async function urlToBlob(url: string, retries = 2): Promise<Blob | null> {
     console.error("Fallback image to blob error:", e);
   }
 
+  // 5. Final fallback for images: Proxy request through server endpoint
+  try {
+    const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(url)}`;
+    const proxyRes = await fetch(proxyUrl);
+    if (proxyRes.ok) {
+      return await proxyRes.blob();
+    }
+    console.warn(`Proxy de imagem do servidor retornou status ${proxyRes.status} para ${url}`);
+  } catch (err) {
+    console.error("Erro no proxy de imagem do servidor:", err);
+  }
+
   return null;
 }
 
 /**
- * Converts any image blob to webp format using standard client-side HTML5 Canvas.
+ * Computes SHA-256 hash of a string, Blob, or ArrayBuffer for backup change detection.
+ */
+export async function computeContentHash(data: string | Blob | ArrayBuffer): Promise<string> {
+  try {
+    let buffer: ArrayBuffer;
+    if (typeof data === "string") {
+      buffer = new TextEncoder().encode(data).buffer;
+    } else if (data instanceof Blob) {
+      buffer = await data.arrayBuffer();
+    } else {
+      buffer = data;
+    }
+    const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch (err) {
+    let str = "";
+    if (typeof data === "string") str = data;
+    else if (data instanceof Blob) str = `${data.size}_${data.type}`;
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = (hash << 5) - hash + char;
+      hash |= 0;
+    }
+    return `fnv_${Math.abs(hash)}`;
+  }
+}
+
+/**
+ * Generates an HTML shortcut redirect file content for a YouTube video.
+ */
+export function createYoutubeHtmlShortcut(youtubeUrl: string, gameName = "", entryTitle = ""): { content: string; blob: Blob } {
+  const cleanUrl = youtubeUrl || "https://www.youtube.com";
+  const content = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="refresh" content="0;url=${cleanUrl}">
+  <title>Atalho para Vídeo do YouTube - ${gameName.replace(/[<>]/g, "")}</title>
+</head>
+<body style="font-family: system-ui, -apple-system, sans-serif; background-color: #09090b; color: #f4f4f5; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; padding: 20px; text-align: center;">
+  <div style="background-color: #18181b; border: 1px solid #27272a; padding: 32px; border-radius: 20px; max-width: 480px; width: 100%; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);">
+    <div style="font-size: 40px; margin-bottom: 16px;">🎬</div>
+    <h2 style="font-size: 18px; font-weight: 800; margin: 0 0 8px 0; color: #ffffff;">Redirecionando para o YouTube...</h2>
+    <p style="color: #a1a1aa; font-size: 13px; margin: 0 0 24px 0; line-height: 1.5;">${gameName ? `Jogo: <strong>${gameName}</strong>` : ""}${entryTitle ? `<br/>${entryTitle}` : ""}</p>
+    <a href="${cleanUrl}" style="display: inline-block; background-color: #0891b2; color: #ffffff; font-weight: 700; font-size: 14px; padding: 12px 24px; border-radius: 12px; text-decoration: none; transition: all 0.2s;">Assistir Vídeo no YouTube</a>
+  </div>
+  <script>
+    setTimeout(function() {
+      window.location.href = "${cleanUrl}";
+    }, 100);
+  </script>
+</body>
+</html>`;
+
+  return {
+    content,
+    blob: new Blob([content], { type: "text/html;charset=utf-8" })
+  };
+}
+
+/**
+ * Converts any image blob to webp format using standard client-side HTML5 Canvas (100% quality, natural resolution).
  */
 async function convertBlobToWebp(blob: Blob): Promise<Blob> {
   if (blob.type === "image/webp" || blob.type === "image/gif") return blob;
@@ -418,6 +574,7 @@ async function convertBlobToWebp(blob: Blob): Promise<Blob> {
     img.onload = () => {
       URL.revokeObjectURL(url);
       const canvas = document.createElement("canvas");
+      // Preserve exact 1:1 natural resolution (no downsizing)
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       const ctx = canvas.getContext("2d");
@@ -435,7 +592,7 @@ async function convertBlobToWebp(blob: Blob): Promise<Blob> {
           }
         },
         "image/webp",
-        1.0
+        1.0 // 100% maximum visual quality
       );
     };
     img.onerror = () => {
@@ -447,120 +604,22 @@ async function convertBlobToWebp(blob: Blob): Promise<Blob> {
 }
 
 /**
- * Converts any video blob to webm format using a hidden HTML5 video, canvas, and MediaRecorder
- * at highest possible bitrate to ensure 100% visual quality.
+ * Resolves appropriate file extension and mime type for attached video blobs without re-encoding.
  */
-async function convertVideoToWebm(blob: Blob): Promise<Blob> {
-  if (blob.type === "video/webm") return blob;
+function getVideoDetails(blob: Blob, srcUrl: string): { extension: string; mimeType: string } {
+  const mime = blob.type || "";
+  if (mime.includes("mp4")) return { extension: "mp4", mimeType: "video/mp4" };
+  if (mime.includes("webm")) return { extension: "webm", mimeType: "video/webm" };
+  if (mime.includes("quicktime") || mime.includes("mov")) return { extension: "mov", mimeType: "video/quicktime" };
+  if (mime.includes("avi")) return { extension: "avi", mimeType: "video/x-msvideo" };
+  if (mime.includes("mkv")) return { extension: "mkv", mimeType: "video/x-matroska" };
 
-  return new Promise((resolve) => {
-    const video = document.createElement("video");
-    const url = URL.createObjectURL(blob);
-    
-    video.src = url;
-    video.muted = true;
-    video.playsInline = true;
-    
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    
-    video.onloadedmetadata = () => {
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      
-      let stream: MediaStream;
-      try {
-        stream = (canvas as any).captureStream ? (canvas as any).captureStream(30) : (canvas as any).mozCaptureStream ? (canvas as any).mozCaptureStream(30) : null;
-        if (!stream) {
-          throw new Error("captureStream not supported");
-        }
-        
-        // Capture audio if possible
-        if ((video as any).captureStream) {
-          const videoStream = (video as any).captureStream();
-          const audioTracks = videoStream.getAudioTracks();
-          if (audioTracks.length > 0) {
-            stream.addTrack(audioTracks[0]);
-          }
-        }
-      } catch (e) {
-        console.warn("Could not capture stream from canvas/video, uploading original video", e);
-        URL.revokeObjectURL(url);
-        resolve(blob);
-        return;
-      }
-      
-      // Determine the best supported mimeType for webm
-      let mimeType = "video/webm";
-      if (typeof MediaRecorder !== "undefined") {
-        if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9")) {
-          mimeType = "video/webm;codecs=vp9";
-        } else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8")) {
-          mimeType = "video/webm;codecs=vp8";
-        }
-      } else {
-        URL.revokeObjectURL(url);
-        resolve(blob);
-        return;
-      }
+  const lower = (srcUrl || "").toLowerCase();
+  if (lower.includes(".mp4")) return { extension: "mp4", mimeType: "video/mp4" };
+  if (lower.includes(".mov")) return { extension: "mov", mimeType: "video/quicktime" };
+  if (lower.includes(".webm")) return { extension: "webm", mimeType: "video/webm" };
 
-      const mediaRecorder = new MediaRecorder(stream, {
-        mimeType,
-        videoBitsPerSecond: 12000000 // 12 Mbps for 100% visual quality
-      });
-      
-      const chunks: Blob[] = [];
-      mediaRecorder.ondataavailable = (e) => {
-        if (e.data && e.data.size > 0) {
-          chunks.push(e.data);
-        }
-      };
-      
-      mediaRecorder.onstop = () => {
-        const webmBlob = new Blob(chunks, { type: "video/webm" });
-        URL.revokeObjectURL(url);
-        resolve(webmBlob);
-      };
-      
-      let animFrameId: number;
-      const drawFrame = () => {
-        if (video.paused || video.ended) {
-          return;
-        }
-        if (ctx) {
-          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        }
-        animFrameId = requestAnimationFrame(drawFrame);
-      };
-      
-      video.onplay = () => {
-        drawFrame();
-      };
-      
-      video.onended = () => {
-        cancelAnimationFrame(animFrameId);
-        try {
-          mediaRecorder.stop();
-        } catch (e) {}
-      };
-      
-      mediaRecorder.start();
-      video.play().catch((err) => {
-        console.error("Erro ao reproduzir vídeo para conversão WebM:", err);
-        cancelAnimationFrame(animFrameId);
-        try {
-          mediaRecorder.stop();
-        } catch (e) {}
-        resolve(blob); // fallback to original
-      });
-    };
-    
-    video.onerror = (err) => {
-      console.error("Erro ao carregar metadados do vídeo:", err);
-      URL.revokeObjectURL(url);
-      resolve(blob); // fallback
-    };
-  });
+  return { extension: "webm", mimeType: mime || "video/webm" };
 }
 
 /**
@@ -587,6 +646,9 @@ function parsePeriodStartDate(period: string): number {
  */
 function getFormattedPeriodAndDate(period: string): { startDateYMD: string; formattedRange: string } {
   try {
+    if (!period || typeof period !== "string" || !period.trim()) {
+      return { startDateYMD: "0000-00-00", formattedRange: "Sem_Data" };
+    }
     const parts = period.split("~");
     const firstPart = parts[0]?.trim() || "";
     const secondPart = parts[1]?.trim() || firstPart;
@@ -594,7 +656,7 @@ function getFormattedPeriodAndDate(period: string): { startDateYMD: string; form
     const partsStart = firstPart.split("/");
     const partsEnd = secondPart.split("/");
 
-    let startDateYMD = "9999-12-31";
+    let startDateYMD = "0000-00-00";
     let formattedRange = "Sem_Data";
 
     if (partsStart.length === 3) {
@@ -621,7 +683,13 @@ function getFormattedPeriodAndDate(period: string): { startDateYMD: string; form
   } catch (err) {
     console.error("Error formatting period:", err);
   }
-  return { startDateYMD: "9999-12-31", formattedRange: "Sem_Data" };
+  return { startDateYMD: "0000-00-00", formattedRange: "Sem_Data" };
+}
+
+function isValidMediaUrl(url?: string | null): boolean {
+  if (!url || typeof url !== "string") return false;
+  const trimmed = url.trim();
+  return trimmed.length > 0;
 }
 
 /**
@@ -671,6 +739,7 @@ function areGamesEqual(g1: Game | null, g2: Game | null): boolean {
       trophies: g.trophies || [],
       pros: g.pros || "",
       cons: g.cons || "",
+      dictionary: g.dictionary || [],
       diary: (g.diary || []).map(d => ({
         id: d.id,
         period: d.period || "",
@@ -690,7 +759,7 @@ export async function backupLibraryToDrive(
   games: Game[],
   globalTags: string[],
   globalGenres: string[],
-  onProgress?: (msg: string) => void,
+  onProgress?: (msg: string, completedSteps?: number, totalSteps?: number) => void,
   signal?: AbortSignal
 ): Promise<void> {
   if (signal) {
@@ -702,8 +771,31 @@ export async function backupLibraryToDrive(
       throw new Error("Não conectado ao Google Drive.");
     }
 
+    // Calculate exact total steps for accurate progress window calculation
+    let totalSteps = 4; // 1: Session check, 2: Root folder, 3: History check, 4: Folder sync
+    for (const g of games) {
+      totalSteps += 1; // game metadata json
+      if (isValidMediaUrl(g.cover)) totalSteps += 1;
+      if (isValidMediaUrl(g.icon) && g.iconType === "upload") totalSteps += 1;
+      if (g.diary) {
+        totalSteps += g.diary.length; // text for each diary entry
+        for (const entry of g.diary) {
+          if (entry.medias) {
+            totalSteps += entry.medias.length; // each media attachment
+          }
+        }
+      }
+    }
+    totalSteps += 1; // master json final save
+    let completedSteps = 0;
+
+    const report = (msg: string, stepIncrement = 1) => {
+      completedSteps = Math.min(completedSteps + stepIncrement, totalSteps);
+      onProgress?.(msg, completedSteps, totalSteps);
+    };
+
     if (tokenTimestamp > 0 && Date.now() - tokenTimestamp > 45 * 60 * 1000) {
-      onProgress?.("Renovando sessão do Google Drive para o backup...");
+      report("Renovando sessão do Google Drive para o backup...", 0);
       try {
         await refreshDriveToken();
       } catch (err) {
@@ -718,11 +810,11 @@ export async function backupLibraryToDrive(
     };
 
     checkAbort();
-    onProgress?.("Criando pasta principal no Google Drive...");
+    report("Criando pasta principal no Google Drive...");
     const rootFolderId = await getOrCreateFolder("Biblioteca_Jogos_Backup");
 
     checkAbort();
-    onProgress?.("Verificando estrutura e arquivos no Google Drive...");
+    report("Verificando estrutura e arquivos no Google Drive...");
     const rootItems = await listFilesAndFoldersInParent(rootFolderId);
 
     // Map existing root items: folders and master JSON file
@@ -741,7 +833,7 @@ export async function backupLibraryToDrive(
     const previousGamesMap = new Map<string, Game>();
     if (masterJsonItem) {
       try {
-        onProgress?.("Verificando histórico de backup anterior...");
+        report("Verificando histórico de backup anterior...");
         const response = await driveFetch(`https://www.googleapis.com/drive/v3/files/${masterJsonItem.id}?alt=media`);
         const previousData = await response.json();
         if (previousData && Array.isArray(previousData.games)) {
@@ -753,12 +845,11 @@ export async function backupLibraryToDrive(
       } catch (err) {
         console.warn("Aviso: Não foi possível ler dados_biblioteca.json anterior para comparação rápida:", err);
       }
+    } else {
+      report("Criando novo arquivo mestre de dados...", 0);
     }
 
-    // 1. Save updated master data backup json
-    onProgress?.("Salvando base de dados geral...");
-
-    // Sort ALL games' diaries to ensure the complete library database file also has them in ascending order!
+    // Prepare master JSON backup payload
     const sortedGames = games.map((game) => ({
       ...game,
       diary: game.diary ? [...game.diary].sort((a, b) => parsePeriodStartDate(a.period) - parsePeriodStartDate(b.period)) : []
@@ -771,24 +862,48 @@ export async function backupLibraryToDrive(
       backedUpAt: new Date().toISOString(),
     };
     const jsonContent = JSON.stringify(backupData, null, 2);
-    await uploadOrUpdateFile("dados_biblioteca.json", "application/json", jsonContent, rootFolderId, masterJsonItem?.id);
 
-    // 2. Clean up folders for deleted games in Drive
+    // Clean up folders for deleted games in Drive - collects obsolete items for manual deletion
     checkAbort();
-    onProgress?.("Sincronizando estrutura de pastas dos jogos...");
+    report("Sincronizando estrutura de pastas dos jogos...");
     const activeGameNames = games.map((g) => g.name);
 
+    const uploadedItems: PDFReportData["uploadedItems"] = [];
+    const youtubeVideos: PDFReportData["youtubeVideos"] = [];
+    const obsoleteItemsForManualDelete: PDFReportData["obsoleteItemsForManualDelete"] = [];
+    const backupErrors: string[] = [];
+
     for (const item of rootItems) {
+      if (item.name === "9999" || item.name.includes("9999") || item.name.startsWith("[9999")) {
+        report(`[GoogleDrive Cleanup] Removendo pasta legada malformada "${item.name}"...`);
+        console.log(`[GoogleDrive Backup Path] Limpeza automatica -> Removendo item malformado na raiz: ${item.name} (ID: ${item.id})`);
+        addBackupLog({
+          provider: "Google Drive",
+          action: "Limpeza de Pasta Legada 9999",
+          status: "success",
+          details: `Pasta legada com nome/data '9999' (${item.name}) removida da raiz do Google Drive.`,
+        });
+        try {
+          await deleteFileOrFolder(item.id);
+        } catch (delErr) {
+          console.warn(`Erro ao deletar item 9999 na raiz:`, delErr);
+        }
+        continue;
+      }
+
       if (item.mimeType === "application/vnd.google-apps.folder") {
         if (!["Capas_Temp", "Icones_Temp", "Diario_Temp"].includes(item.name) && !activeGameNames.includes(item.name)) {
-          onProgress?.(`Removendo pasta de jogo excluído do Drive: "${item.name}"...`);
-          await deleteFileOrFolder(item.id);
-          existingFoldersByName.delete(item.name);
+          report(`Identificado jogo obsoleto no Drive (excluído no site): "${item.name}"...`, 0);
+          obsoleteItemsForManualDelete.push({
+            gameName: item.name,
+            itemName: item.name,
+            itemType: "Pasta de Jogo Removida",
+          });
         }
       }
     }
 
-    // 3. Scan and upload metadata & media files for each game with differential fast-path
+    // Scan and upload metadata & media files for each game
     let skippedCount = 0;
     let changedCount = 0;
 
@@ -799,94 +914,128 @@ export async function backupLibraryToDrive(
       const sortedDiary = game.diary ? [...game.diary].sort((a, b) => parsePeriodStartDate(a.period) - parsePeriodStartDate(b.period)) : [];
       const gameToSave = { ...game, diary: sortedDiary };
 
+      const totalMediaCount = sortedDiary.reduce((sum, d) => sum + (d.medias ? d.medias.length : 0), 0);
+
       const existingFolderId = existingFoldersByName.get(game.name);
       const previousGame = (game.id && previousGamesMap.get(game.id)) || previousGamesMap.get(game.name) || null;
 
-      // Fast differential check: if game folder exists in Drive and game data is identical to last backup, skip!
       const isIdentical = previousGame ? areGamesEqual(gameToSave, previousGame) : false;
-      if (existingFolderId && isIdentical) {
+      if (existingFolderId && isIdentical && totalMediaCount === 0) {
         skippedCount++;
-        onProgress?.(`Verificando (${i + 1}/${games.length}): ${game.name} [Sem alterações]`);
+        const gameSteps = 1 + (isValidMediaUrl(game.cover) ? 1 : 0) + (isValidMediaUrl(game.icon) && game.iconType === "upload" ? 1 : 0);
+        report(`Verificando (${i + 1}/${games.length}): ${game.name} [Sem alterações]`, gameSteps);
         continue;
       }
 
       changedCount++;
-      onProgress?.(`Processando backup (${i + 1}/${games.length}): ${game.name}...`);
       const gameFolderId = existingFolderId || (await getOrCreateFolder(game.name, rootFolderId));
       existingFoldersByName.set(game.name, gameFolderId);
 
       checkAbort();
-      // List items in game folder
       const gameFolderItems = await listFilesAndFoldersInParent(gameFolderId);
 
-      // Save/check game-specific metadata and details
+      // Save/check game-specific metadata
       const gameJsonItem = gameFolderItems.find((item) => item.name === "dados_jogo.json");
       const gameMetadataChanged = !previousGame || !areGamesEqual(gameToSave, previousGame);
 
       if (!gameJsonItem || gameMetadataChanged) {
-        onProgress?.(`Atualizando metadados de ${game.name}...`);
+        report(`Atualizando metadados de ${game.name}...`);
         const gameJsonContent = JSON.stringify(gameToSave, null, 2);
         await uploadOrUpdateFile("dados_jogo.json", "application/json", gameJsonContent, gameFolderId, gameJsonItem?.id);
+        uploadedItems.push({ game: game.name, file: "dados_jogo.json", type: "Texto Diário", status: gameJsonItem ? "Atualizado" : "Novo" });
+      } else {
+        report(`Metadados de ${game.name} atualizados.`);
       }
 
       checkAbort();
       // Back up game cover directly inside the game folder
       const capaItem = gameFolderItems.find((item) => item.name === "capa.webp");
-      if (game.cover && (game.cover.startsWith("http") || game.cover.startsWith("data:"))) {
+      if (isValidMediaUrl(game.cover)) {
         const coverChanged = !previousGame || previousGame.cover !== game.cover;
         if (!capaItem || coverChanged) {
-          onProgress?.(`Fazendo backup da capa de ${game.name}...`);
-          const blob = await urlToBlob(game.cover);
-          if (blob) {
-            const webpBlob = await convertBlobToWebp(blob);
-            checkAbort();
-            await uploadOrUpdateFile("capa.webp", "image/webp", webpBlob, gameFolderId, capaItem?.id);
+          report(`Fazendo backup da capa de ${game.name}...`);
+          try {
+            const blob = await urlToBlob(game.cover);
+            if (blob) {
+              const webpBlob = await convertBlobToWebp(blob);
+              checkAbort();
+              await uploadOrUpdateFile("capa.webp", "image/webp", webpBlob, gameFolderId, capaItem?.id);
+              uploadedItems.push({ game: game.name, file: "capa.webp", type: "Capa WebP", status: capaItem ? "Atualizado" : "Novo" });
+            }
+          } catch (e: any) {
+            backupErrors.push(`Erro ao salvar capa de ${game.name}: ${e.message || e}`);
           }
+        } else {
+          report(`Capa de ${game.name} já está salva no Drive.`);
         }
       } else if (!game.cover && capaItem) {
-        onProgress?.(`Removendo capa desassociada de ${game.name}...`);
-        await deleteFileOrFolder(capaItem.id);
+        obsoleteItemsForManualDelete.push({ gameName: game.name, itemName: "capa.webp", itemType: "Mídia Desassociada" });
       }
 
       checkAbort();
       // Back up custom icon directly inside the game folder
       const iconeItem = gameFolderItems.find((item) => item.name === "icone.webp");
-      if (game.icon && (game.icon.startsWith("http") || game.icon.startsWith("data:")) && game.iconType === "upload") {
+      if (isValidMediaUrl(game.icon) && game.iconType === "upload") {
         const iconChanged = !previousGame || previousGame.icon !== game.icon || previousGame.iconType !== game.iconType;
         if (!iconeItem || iconChanged) {
-          onProgress?.(`Fazendo backup do ícone de ${game.name}...`);
-          const blob = await urlToBlob(game.icon);
-          if (blob) {
-            const webpBlob = await convertBlobToWebp(blob);
-            checkAbort();
-            await uploadOrUpdateFile("icone.webp", "image/webp", webpBlob, gameFolderId, iconeItem?.id);
+          report(`Fazendo backup do ícone de ${game.name}...`);
+          try {
+            const blob = await urlToBlob(game.icon);
+            if (blob) {
+              const webpBlob = await convertBlobToWebp(blob);
+              checkAbort();
+              await uploadOrUpdateFile("icone.webp", "image/webp", webpBlob, gameFolderId, iconeItem?.id);
+              uploadedItems.push({ game: game.name, file: "icone.webp", type: "Ícone WebP", status: iconeItem ? "Atualizado" : "Novo" });
+            }
+          } catch (e: any) {
+            backupErrors.push(`Erro ao salvar ícone de ${game.name}: ${e.message || e}`);
           }
+        } else {
+          report(`Ícone de ${game.name} já está salvo no Drive.`);
         }
       } else if ((!game.icon || game.iconType !== "upload") && iconeItem) {
-        onProgress?.(`Removendo ícone desassociado de ${game.name}...`);
-        await deleteFileOrFolder(iconeItem.id);
+        obsoleteItemsForManualDelete.push({ gameName: game.name, itemName: "icone.webp", itemType: "Mídia Desassociada" });
       }
 
-      // Back up diary entry text & medias inside structured subfolders for each entry
+      // Back up diary entries
       const activeFolderNames = sortedDiary.map((entry) => {
         const { startDateYMD, formattedRange } = getFormattedPeriodAndDate(entry.period);
         return `[${startDateYMD}] Diário (${formattedRange}) - ${entry.id}`;
       });
 
       checkAbort();
-      // Clean up obsolete/old format folders inside gameFolderId
       for (const item of gameFolderItems) {
         if (item.mimeType === "application/vnd.google-apps.folder") {
-          const isOldFormat = item.name.startsWith("Entrada ");
-          const isNewFormatAndObsolete = (item.name.startsWith("[") || item.name.includes("Diário")) && !activeFolderNames.includes(item.name);
-
-          if (item.name === "Midias_Diario") {
+          const is9999Folder = item.name === "9999" || item.name.includes("9999") || item.name.startsWith("[9999");
+          if (is9999Folder) {
+            report(`[GoogleDrive Cleanup] Excluindo pasta legada '9999' em ${game.name}: "${item.name}"...`);
+            console.log(`[GoogleDrive Backup Path] Biblioteca_Jogos_Backup > ${game.name} > Limpeza automatica -> Removendo ${item.name}`);
+            addBackupLog({
+              provider: "Google Drive",
+              action: "Limpeza de Pasta Legada 9999",
+              status: "success",
+              gameName: game.name,
+              details: `Pasta legada de diário '9999' (${item.name}) removida de ${game.name}.`,
+            });
+            try {
+              await deleteFileOrFolder(item.id);
+            } catch (e) {
+              console.warn(`Erro ao remover pasta legada 9999 (${item.name}):`, e);
+            }
             continue;
           }
 
+          const isOldFormat = item.name.startsWith("Entrada ");
+          const isNewFormatAndObsolete = (item.name.startsWith("[") || item.name.includes("Diário")) && !activeFolderNames.includes(item.name);
+
+          if (item.name === "Midias_Diario") continue;
+
           if (isOldFormat || isNewFormatAndObsolete) {
-            onProgress?.(`Removendo pasta de diário obsoleta do Drive: "${item.name}"...`);
-            await deleteFileOrFolder(item.id);
+            obsoleteItemsForManualDelete.push({
+              gameName: game.name,
+              itemName: item.name,
+              itemType: "Entrada de Diário Removida",
+            });
           }
         }
       }
@@ -898,11 +1047,20 @@ export async function backupLibraryToDrive(
         const { startDateYMD, formattedRange } = getFormattedPeriodAndDate(entry.period);
         const entryFolderName = `[${startDateYMD}] Diário (${formattedRange}) - ${entry.id}`;
 
+        const fullPath = `Biblioteca_Jogos_Backup > ${game.name} > ${entryFolderName}`;
+        console.log(`[GoogleDrive Backup Path] ${fullPath}`);
+        addBackupLog({
+          provider: "Google Drive",
+          action: "Verificação de Pasta de Diário",
+          status: "success",
+          gameName: game.name,
+          details: `Caminho da pasta no Drive: ${fullPath}`,
+        });
+
         const entryFolderId = await getOrCreateFolder(entryFolderName, gameFolderId);
         const entryFolderItems = await listFilesAndFoldersInParent(entryFolderId);
 
         checkAbort();
-        // 1. Back up diary entry text as a clean plain .txt file
         const txtFileName = "texto_entrada.txt";
         const txtContent = `==================================================\nDIÁRIO DE JOGATINA - ${game.name.toUpperCase()}\n==================================================\nEntrada: #${entryIdx + 1}\nPeríodo: ${entry.period || "Não especificado"}\n==================================================\n\n${stripHtml(entry.text || "")}\n\n==================================================\nGerado automaticamente via Biblioteca do Haleck\n==================================================`;
 
@@ -913,62 +1071,65 @@ export async function backupLibraryToDrive(
         const txtItem = entryFolderItems.find((item) => item.name === txtFileName);
 
         if (!txtItem || textChanged) {
-          onProgress?.(`Salvando texto do diário em "${entryFolderName}"...`);
+          report(`Salvando texto do diário em "${entryFolderName}"...`);
           await uploadOrUpdateFile(txtFileName, "text/plain", txtContent, entryFolderId, txtItem?.id);
+          uploadedItems.push({ game: game.name, file: `${entryFolderName}/${txtFileName}`, type: "Texto Diário", status: txtItem ? "Atualizado" : "Novo" });
+        } else {
+          report(`Texto do diário em "${entryFolderName}" já está atualizado.`);
         }
 
-        // 2. Build expected media filenames for this entry and clean up deleted media files
         const expectedMediaNames = new Set<string>();
         if (entry.medias && entry.medias.length > 0) {
           entry.medias.forEach((media, mIdx) => {
-            if (media.isVideo) {
-              const isYt = media.src && (media.src.includes("youtube.com") || media.src.includes("youtu.be"));
-              expectedMediaNames.add(isYt ? `video_youtube_${mIdx + 1}.txt` : `video_anexo_${mIdx + 1}.webm`);
+            const idxStr = mIdx + 1;
+            const isVid = media.isVideo || (media.src && (media.src.includes("youtube.com") || media.src.includes("youtu.be")));
+            if (isVid) {
+              expectedMediaNames.add(`midia_anexa_${idxStr}.html`);
+              expectedMediaNames.add(`midia_anexa_${idxStr}.txt`);
+              expectedMediaNames.add(`video_youtube_${idxStr}.txt`);
             } else {
-              expectedMediaNames.add(`midia_anexa_${mIdx + 1}.webp`);
+              expectedMediaNames.add(`midia_anexa_${idxStr}.webp`);
             }
           });
         }
 
-        // Remove any orphaned media files in entryFolderItems that are no longer part of entry.medias
         for (const item of entryFolderItems) {
           const isMediaFile = item.name.startsWith("midia_anexa_") || item.name.startsWith("video_anexo_") || item.name.startsWith("video_youtube_");
           if (isMediaFile && !expectedMediaNames.has(item.name)) {
-            onProgress?.(`Removendo mídia excluída do Drive em "${entryFolderName}": ${item.name}...`);
-            await deleteFileOrFolder(item.id);
+            obsoleteItemsForManualDelete.push({
+              gameName: game.name,
+              itemName: `${entryFolderName}/${item.name}`,
+              itemType: "Mídia Desassociada",
+            });
           }
         }
 
-        // 3. Back up diary entry medias
         if (entry.medias && entry.medias.length > 0) {
           for (let mediaIdx = 0; mediaIdx < entry.medias.length; mediaIdx++) {
             checkAbort();
             const media = entry.medias[mediaIdx];
-            if (media.src && (media.src.startsWith("http") || media.src.startsWith("data:"))) {
-              if (media.isVideo) {
-                const isYt = media.src.includes("youtube.com") || media.src.includes("youtu.be");
-                if (isYt) {
-                  const shortcutName = `video_youtube_${mediaIdx + 1}.txt`;
-                  const existingShortcut = entryFolderItems.find((item) => item.name === shortcutName);
-                  if (!existingShortcut) {
-                    onProgress?.(`Salvando atalho do vídeo do YouTube em "${entryFolderName}"...`);
-                    await uploadOrUpdateFile(shortcutName, "text/plain", `Link do YouTube: ${media.src}`, entryFolderId);
-                  }
-                } else {
-                  const videoName = `video_anexo_${mediaIdx + 1}.webm`;
-                  const existingVideo = entryFolderItems.find((item) => item.name === videoName);
-                  const prevMedia = prevEntry?.medias?.[mediaIdx];
-                  const mediaChanged = !prevMedia || prevMedia.src !== media.src;
+            if (isValidMediaUrl(media.src)) {
+              const isVideoOrYt = media.isVideo || media.src.includes("youtube.com") || media.src.includes("youtu.be");
+              if (isVideoOrYt) {
+                const shortcutName = `midia_anexa_${mediaIdx + 1}.html`;
+                const existingShortcut = entryFolderItems.find((item) => item.name === shortcutName || item.name === `video_youtube_${mediaIdx + 1}.txt` || item.name === `midia_anexa_${mediaIdx + 1}.txt`);
+                const prevMedia = prevEntry?.medias?.[mediaIdx];
+                const mediaChanged = !prevMedia || prevMedia.src !== media.src;
 
-                  if (!existingVideo || mediaChanged) {
-                    onProgress?.(`Salvando vídeo do diário em "${entryFolderName}" (${mediaIdx + 1}/${entry.medias.length})...`);
-                    const blob = await urlToBlob(media.src);
-                    if (blob) {
-                      const webmBlob = await convertVideoToWebm(blob);
-                      checkAbort();
-                      await uploadOrUpdateFile(videoName, "video/webm", webmBlob, entryFolderId, existingVideo?.id);
-                    }
-                  }
+                if (!existingShortcut || mediaChanged) {
+                  youtubeVideos.push({
+                    gameName: game.name,
+                    title: `Vídeo Anexo #${mediaIdx + 1}`,
+                    url: media.src,
+                    expectedFilename: shortcutName,
+                  });
+
+                  report(`Salvando atalho do vídeo do YouTube em "${entryFolderName}"...`);
+                  const { blob: htmlBlob } = createYoutubeHtmlShortcut(media.src, game.name, entry.period);
+                  await uploadOrUpdateFile(shortcutName, "text/html", htmlBlob, entryFolderId, existingShortcut?.id);
+                  uploadedItems.push({ game: game.name, file: `${entryFolderName}/${shortcutName}`, type: "Atalho YouTube", status: existingShortcut ? "Atualizado" : "Novo" });
+                } else {
+                  report(`Atalho do vídeo do YouTube já salvo.`);
                 }
               } else {
                 const mediaName = `midia_anexa_${mediaIdx + 1}.webp`;
@@ -977,25 +1138,72 @@ export async function backupLibraryToDrive(
                 const mediaChanged = !prevMedia || prevMedia.src !== media.src;
 
                 if (!existingMedia || mediaChanged) {
-                  onProgress?.(`Salvando imagem do diário de ${game.name} (${mediaIdx + 1}/${entry.medias.length})...`);
-                  const blob = await urlToBlob(media.src);
-                  if (blob) {
-                    const webpBlob = await convertBlobToWebp(blob);
-                    checkAbort();
-                    await uploadOrUpdateFile(mediaName, "image/webp", webpBlob, entryFolderId, existingMedia?.id);
+                  report(`Salvando imagem do diário de ${game.name} (${mediaIdx + 1}/${entry.medias.length})...`);
+                  try {
+                    const blob = await urlToBlob(media.src);
+                    if (blob) {
+                      const webpBlob = await convertBlobToWebp(blob);
+                      checkAbort();
+                      await uploadOrUpdateFile(mediaName, "image/webp", webpBlob, entryFolderId, existingMedia?.id);
+                      uploadedItems.push({ game: game.name, file: `${entryFolderName}/${mediaName}`, type: "Mídia WebP", status: existingMedia ? "Atualizado" : "Novo" });
+                    }
+                  } catch (e: any) {
+                    backupErrors.push(`Erro ao salvar mídia de ${game.name} em ${entryFolderName}: ${e.message || e}`);
                   }
+                } else {
+                  report(`Imagem (${mediaIdx + 1}/${entry.medias.length}) já está salva no Drive.`);
                 }
               }
+            } else {
+              report(`Mídia inválida ignorada.`);
             }
           }
         }
       }
     }
 
+    // Final step: Upload updated master database json
+    checkAbort();
+    report("Finalizando e salvando arquivo mestre dados_biblioteca.json...");
+    await uploadOrUpdateFile("dados_biblioteca.json", "application/json", jsonContent, rootFolderId, masterJsonItem?.id);
+    uploadedItems.push({ game: "Biblioteca", file: "dados_biblioteca.json", type: "Texto Diário", status: masterJsonItem ? "Atualizado" : "Novo" });
+
+    // Generate styled PDF Report
+    const reportData: PDFReportData = {
+      backupType: "Geral (Biblioteca Completa)",
+      timestamp: new Date().toLocaleString("pt-BR"),
+      stats: {
+        totalGamesProcessed: games.length,
+        syncedGamesCount: changedCount,
+        skippedGamesCount: skippedCount,
+        filesUploadedCount: uploadedItems.length,
+      },
+      uploadedItems,
+      youtubeVideos,
+      obsoleteItemsForManualDelete,
+      errors: backupErrors,
+    };
+
+    try {
+      generateBackupPDFReport(reportData);
+    } catch (pdfErr) {
+      console.error("Erro ao gerar relatório PDF:", pdfErr);
+    }
+
+    if (obsoleteItemsForManualDelete.length > 0) {
+      setTimeout(() => {
+        alert(
+          `Sincronização do Google Drive concluída!\n\n` +
+          `Atenção: Foram identificados ${obsoleteItemsForManualDelete.length} item(ns) obsoleto(s) no seu Google Drive (jogos ou diários excluídos no site).\n\n` +
+          `Para sua segurança, o site não apaga nada no Drive automaticamente. O relatório PDF baixado contém a lista completa destes arquivos para você remover manualmente se desejar.`
+        );
+      }, 500);
+    }
+
     if (changedCount === 0) {
-      onProgress?.("Backup concluído! Todos os jogos já estavam 100% atualizados no Google Drive.");
+      onProgress?.("Backup concluído! Todos os jogos já estavam 100% atualizados no Google Drive.", totalSteps, totalSteps);
     } else {
-      onProgress?.(`Backup concluído com sucesso! (${changedCount} jogo(s) sincronizado(s), ${skippedCount} sem alterações)`);
+      onProgress?.(`Backup concluído com sucesso! (${changedCount} jogo(s) sincronizado(s), ${skippedCount} sem alterações)`, totalSteps, totalSteps);
     }
   } finally {
     activeBackupSignal = null;
@@ -1038,37 +1246,34 @@ export function stripHtml(html: string): string {
 }
 
 /**
- * Uploads a single media directly to Google Drive as an immediate backup during upload.
+ * Uploads a single media directly to Google Drive into its game/entry folder as an immediate backup during upload.
  */
 export async function uploadSingleMediaBackup(
   fileOrBase64: File | string,
   folderType: "covers" | "icons" | "diary",
   fileName: string,
-  gameName?: string
+  gameName?: string,
+  entryDetails?: { entryId: string; period?: string; mediaIndex?: number },
+  signal?: AbortSignal
 ): Promise<string | null> {
   if (!isDriveAuthenticated()) {
     return null; // Skip if Google Drive is not connected
   }
 
   try {
+    await checkDrivePauseAndAbort(signal);
+
     const rootFolderId = await getOrCreateFolder("Biblioteca_Jogos_Backup");
     let targetFolderId = rootFolderId;
 
     if (gameName) {
       const gameFolderId = await getOrCreateFolder(gameName, rootFolderId);
-      if (folderType === "diary") {
-        targetFolderId = await getOrCreateFolder("Midias_Diario", gameFolderId);
+      if (folderType === "diary" && entryDetails?.entryId) {
+        const { startDateYMD, formattedRange } = getFormattedPeriodAndDate(entryDetails.period || "");
+        const entryFolderName = `[${startDateYMD}] Diário (${formattedRange}) - ${entryDetails.entryId}`;
+        targetFolderId = await getOrCreateFolder(entryFolderName, gameFolderId);
       } else {
         targetFolderId = gameFolderId;
-      }
-    } else {
-      // Fallback if no game name is provided
-      if (folderType === "covers") {
-        targetFolderId = await getOrCreateFolder("Capas_Temp", rootFolderId);
-      } else if (folderType === "icons") {
-        targetFolderId = await getOrCreateFolder("Icones_Temp", rootFolderId);
-      } else if (folderType === "diary") {
-        targetFolderId = await getOrCreateFolder("Diario_Temp", rootFolderId);
       }
     }
 
@@ -1077,42 +1282,445 @@ export async function uploadSingleMediaBackup(
 
     if (fileOrBase64 instanceof File) {
       blob = fileOrBase64;
-      mimeType = fileOrBase64.type;
+      mimeType = fileOrBase64.type || (isVideoFile(fileOrBase64) ? getVideoMimeType(fileOrBase64) : "image/jpeg");
     } else {
-      // Base64 string
       const response = await fetch(fileOrBase64);
       blob = await response.blob();
-      mimeType = blob.type || "image/jpeg";
+      mimeType = blob.type || (isVideoFile({ name: fileName }) ? getVideoMimeType({ name: fileName }) : "image/jpeg");
     }
 
-    // Convert to webp if it is an image (excluding gifs)
-    if (mimeType.startsWith("image/") && mimeType !== "image/gif") {
+    const isVid = isVideoFile({ name: fileName, type: mimeType }) || typeof fileOrBase64 === "string" && (fileOrBase64.includes("youtube.com") || fileOrBase64.includes("youtu.be"));
+    const isImg = isImageFile({ name: fileName, type: mimeType });
+    let targetFileName = fileName;
+
+    if (folderType === "covers") {
+      targetFileName = "capa.webp";
+    } else if (folderType === "icons") {
+      targetFileName = "icone.webp";
+    }
+
+    if (isVid) {
+      // Create HTML redirect shortcut for video backups on Drive
+      const youtubeUrl = typeof fileOrBase64 === "string" && fileOrBase64.startsWith("http") ? fileOrBase64 : "";
+      const { blob: htmlBlob } = createYoutubeHtmlShortcut(youtubeUrl, gameName);
+      blob = htmlBlob;
+      mimeType = "text/html";
+      if (folderType === "diary" && entryDetails?.mediaIndex) {
+        targetFileName = `midia_anexa_${entryDetails.mediaIndex}.html`;
+      } else {
+        targetFileName = `midia_anexa_1.html`;
+      }
+    } else if (isImg && mimeType !== "image/gif") {
       blob = await convertBlobToWebp(blob);
       mimeType = "image/webp";
-      const lastDotIndex = fileName.lastIndexOf(".");
-      if (lastDotIndex !== -1) {
-        fileName = fileName.substring(0, lastDotIndex) + ".webp";
-      } else {
-        fileName = fileName + ".webp";
+      if (folderType === "diary" && entryDetails?.mediaIndex) {
+        targetFileName = `midia_anexa_${entryDetails.mediaIndex}.webp`;
+      } else if (folderType !== "covers" && folderType !== "icons") {
+        const lastDotIndex = targetFileName.lastIndexOf(".");
+        targetFileName = lastDotIndex !== -1 ? targetFileName.substring(0, lastDotIndex) + ".webp" : targetFileName + ".webp";
       }
     }
 
-    // Convert to webm if it is a video
-    if (mimeType.startsWith("video/")) {
-      blob = await convertVideoToWebm(blob);
-      mimeType = "video/webm";
-      const lastDotIndex = fileName.lastIndexOf(".");
-      if (lastDotIndex !== -1) {
-        fileName = fileName.substring(0, lastDotIndex) + ".webm";
-      } else {
-        fileName = fileName + ".webm";
-      }
-    }
+    const fileId = await uploadOrUpdateFile(targetFileName, mimeType, blob, targetFolderId);
+    
+    addBackupLog({
+      provider: "Google Drive",
+      action: isVid ? "Atalho HTML Vídeo" : "Upload Mídia WebP",
+      status: "success",
+      gameName,
+      details: `Arquivo ${targetFileName} (${(blob.size / 1024).toFixed(1)} KB) salvo no Drive.`
+    });
 
-    const fileId = await uploadOrUpdateFile(fileName, mimeType, blob, targetFolderId);
     return fileId;
-  } catch (err) {
+  } catch (err: any) {
     console.error("Falha ao enviar backup de mídia para o Google Drive:", err);
+    addBackupLog({
+      provider: "Google Drive",
+      action: "Upload Mídia Backup",
+      status: "error",
+      gameName,
+      details: `Erro ao enviar ${fileName}: ${err.message || err}`
+    });
     return null;
+  }
+}
+
+/**
+ * Deep backup method for a single game: Forces an exhaustive verification of every cover,
+ * icon, diary entry text, and media attachment for this specific game in Google Drive.
+ */
+export async function backupSingleGameToDriveDeep(
+  game: Game,
+  allGames: Game[],
+  globalTags: string[],
+  globalGenres: string[],
+  onProgress?: (msg: string, completedSteps?: number, totalSteps?: number) => void,
+  signal?: AbortSignal
+): Promise<void> {
+  if (signal) {
+    activeBackupSignal = signal;
+  }
+
+  try {
+    if (!isDriveAuthenticated()) {
+      throw new Error("Não conectado ao Google Drive.");
+    }
+
+    const sortedDiary = game.diary ? [...game.diary].sort((a, b) => parsePeriodStartDate(a.period) - parsePeriodStartDate(b.period)) : [];
+    const totalDiaryMedias = sortedDiary.reduce((sum, d) => sum + (d.medias ? d.medias.length : 0), 0);
+
+    let totalSteps = 4; // 1: Session check, 2: Folders check, 3: Read previous json, 4: dados_jogo.json update
+    if (isValidMediaUrl(game.cover)) totalSteps += 1;
+    if (isValidMediaUrl(game.icon) && game.iconType === "upload") totalSteps += 1;
+    totalSteps += sortedDiary.length; // diary text files
+    totalSteps += totalDiaryMedias; // diary media attachments
+    totalSteps += 1; // master dados_biblioteca.json update
+
+    let completedSteps = 0;
+    const report = (msg: string, stepIncrement = 1) => {
+      completedSteps = Math.min(completedSteps + stepIncrement, totalSteps);
+      onProgress?.(msg, completedSteps, totalSteps);
+    };
+
+    if (tokenTimestamp > 0 && Date.now() - tokenTimestamp > 45 * 60 * 1000) {
+      report("Renovando sessão do Google Drive...", 0);
+      try {
+        await refreshDriveToken();
+      } catch (err) {
+        console.warn("Aviso ao renovar token:", err);
+      }
+    }
+
+    const checkAbort = () => {
+      if (activeBackupSignal?.aborted) {
+        throw new DOMException("Backup cancelado pelo usuário", "AbortError");
+      }
+    };
+
+    checkAbort();
+    report(`Iniciando backup profundo de "${game.name}"...`);
+    const rootFolderId = await getOrCreateFolder("Biblioteca_Jogos_Backup");
+
+    checkAbort();
+    const gameFolderId = await getOrCreateFolder(game.name, rootFolderId);
+    const gameFolderItems = await listFilesAndFoldersInParent(gameFolderId);
+
+    const uploadedItems: PDFReportData["uploadedItems"] = [];
+    const youtubeVideos: PDFReportData["youtubeVideos"] = [];
+    const obsoleteItemsForManualDelete: PDFReportData["obsoleteItemsForManualDelete"] = [];
+    const backupErrors: string[] = [];
+
+    const gameToSave = { ...game, diary: sortedDiary };
+    const gameJsonItem = gameFolderItems.find((item) => item.name === "dados_jogo.json");
+
+    // Retrieve previous game state stored in Drive if available to compare media changes
+    let drivePreviousGame: Game | null = null;
+    if (gameJsonItem) {
+      try {
+        const res = await driveFetch(`https://www.googleapis.com/drive/v3/files/${gameJsonItem.id}?alt=media`);
+        drivePreviousGame = await res.json();
+      } catch (err) {
+        console.warn("Não foi possível ler dados_jogo.json anterior do Drive para comparação:", err);
+      }
+    }
+    report("Metadados e arquivos do Drive verificados.");
+
+    // 1. Force upload/update of dados_jogo.json
+    checkAbort();
+    report(`Atualizando metadados de "${game.name}"...`);
+    const gameJsonContent = JSON.stringify(gameToSave, null, 2);
+    await uploadOrUpdateFile("dados_jogo.json", "application/json", gameJsonContent, gameFolderId, gameJsonItem?.id);
+    uploadedItems.push({ game: game.name, file: "dados_jogo.json", type: "Texto Diário", status: gameJsonItem ? "Atualizado" : "Novo" });
+
+    // 2. Deep check cover
+    checkAbort();
+    const capaItem = gameFolderItems.find((item) => item.name === "capa.webp");
+    if (isValidMediaUrl(game.cover)) {
+      const coverChanged = !drivePreviousGame || drivePreviousGame.cover !== game.cover;
+      if (!capaItem || coverChanged) {
+        report(`Enviando capa de "${game.name}" para o Drive...`);
+        try {
+          const blob = await urlToBlob(game.cover);
+          if (blob) {
+            const webpBlob = await convertBlobToWebp(blob);
+            checkAbort();
+            await uploadOrUpdateFile("capa.webp", "image/webp", webpBlob, gameFolderId, capaItem?.id);
+            uploadedItems.push({ game: game.name, file: "capa.webp", type: "Capa WebP", status: capaItem ? "Atualizado" : "Novo" });
+          }
+        } catch (e: any) {
+          backupErrors.push(`Erro ao salvar capa de ${game.name}: ${e.message || e}`);
+        }
+      } else {
+        report(`Capa de "${game.name}" já está salva no Drive.`);
+      }
+    } else if (!game.cover && capaItem) {
+      obsoleteItemsForManualDelete.push({ gameName: game.name, itemName: "capa.webp", itemType: "Mídia Desassociada" });
+    }
+
+    // 3. Deep check icon
+    checkAbort();
+    const iconeItem = gameFolderItems.find((item) => item.name === "icone.webp");
+    if (isValidMediaUrl(game.icon) && game.iconType === "upload") {
+      const iconChanged = !drivePreviousGame || drivePreviousGame.icon !== game.icon || drivePreviousGame.iconType !== game.iconType;
+      if (!iconeItem || iconChanged) {
+        report(`Enviando ícone de "${game.name}" para o Drive...`);
+        try {
+          const blob = await urlToBlob(game.icon);
+          if (blob) {
+            const webpBlob = await convertBlobToWebp(blob);
+            checkAbort();
+            await uploadOrUpdateFile("icone.webp", "image/webp", webpBlob, gameFolderId, iconeItem?.id);
+            uploadedItems.push({ game: game.name, file: "icone.webp", type: "Ícone WebP", status: iconeItem ? "Atualizado" : "Novo" });
+          }
+        } catch (e: any) {
+          backupErrors.push(`Erro ao salvar ícone de ${game.name}: ${e.message || e}`);
+        }
+      } else {
+        report(`Ícone de "${game.name}" já está salvo no Drive.`);
+      }
+    } else if ((!game.icon || game.iconType !== "upload") && iconeItem) {
+      obsoleteItemsForManualDelete.push({ gameName: game.name, itemName: "icone.webp", itemType: "Mídia Desassociada" });
+    }
+
+    // 4. Deep check diary entries and media attachments
+    const activeFolderNames = sortedDiary.map((entry) => {
+      const { startDateYMD, formattedRange } = getFormattedPeriodAndDate(entry.period);
+      return `[${startDateYMD}] Diário (${formattedRange}) - ${entry.id}`;
+    });
+
+    checkAbort();
+    // Clean up obsolete subfolders inside gameFolderId
+    for (const item of gameFolderItems) {
+      if (item.mimeType === "application/vnd.google-apps.folder") {
+        const is9999Folder = item.name === "9999" || item.name.includes("9999") || item.name.startsWith("[9999");
+        if (is9999Folder) {
+          report(`[GoogleDrive Cleanup] Excluindo pasta legada '9999' em ${game.name}: "${item.name}"...`);
+          console.log(`[GoogleDrive Backup Path] Biblioteca_Jogos_Backup > ${game.name} > Limpeza automatica -> Removendo ${item.name}`);
+          addBackupLog({
+            provider: "Google Drive",
+            action: "Limpeza de Pasta Legada 9999",
+            status: "success",
+            gameName: game.name,
+            details: `Pasta legada de diário '9999' (${item.name}) removida de ${game.name}.`,
+          });
+          try {
+            await deleteFileOrFolder(item.id);
+          } catch (e) {
+            console.warn(`Erro ao remover pasta legada 9999 (${item.name}):`, e);
+          }
+          continue;
+        }
+
+        const isOldFormat = item.name.startsWith("Entrada ");
+        const isTempFolder = ["Capas_Temp", "Icones_Temp", "Diario_Temp", "Midias_Diario"].includes(item.name);
+        const isNewFormatAndObsolete = (item.name.startsWith("[") || item.name.includes("Diário")) && !activeFolderNames.includes(item.name);
+
+        if (isOldFormat || isTempFolder || isNewFormatAndObsolete) {
+          obsoleteItemsForManualDelete.push({
+            gameName: game.name,
+            itemName: item.name,
+            itemType: isTempFolder ? "Pasta Temporária Obsoleta" : "Entrada de Diário Removida",
+          });
+        }
+      }
+    }
+
+    for (let entryIdx = 0; entryIdx < sortedDiary.length; entryIdx++) {
+      checkAbort();
+      const entry = sortedDiary[entryIdx];
+      const { startDateYMD, formattedRange } = getFormattedPeriodAndDate(entry.period);
+      const entryFolderName = `[${startDateYMD}] Diário (${formattedRange}) - ${entry.id}`;
+
+      const fullPath = `Biblioteca_Jogos_Backup > ${game.name} > ${entryFolderName}`;
+      console.log(`[GoogleDrive Backup Path] ${fullPath}`);
+      addBackupLog({
+        provider: "Google Drive",
+        action: "Verificação de Pasta de Diário",
+        status: "success",
+        gameName: game.name,
+        details: `Caminho da pasta no Drive: ${fullPath}`,
+      });
+
+      const entryFolderId = await getOrCreateFolder(entryFolderName, gameFolderId);
+      const entryFolderItems = await listFilesAndFoldersInParent(entryFolderId);
+
+      checkAbort();
+      // Text file
+      const txtFileName = "texto_entrada.txt";
+      const txtContent = `==================================================\nDIÁRIO DE JOGATINA - ${game.name.toUpperCase()}\n==================================================\nEntrada: #${entryIdx + 1}\nPeríodo: ${entry.period || "Não especificado"}\n==================================================\n\n${stripHtml(entry.text || "")}\n\n==================================================\nGerado automaticamente via Biblioteca do Haleck\n==================================================`;
+      const txtItem = entryFolderItems.find((item) => item.name === txtFileName);
+
+      const prevEntry = drivePreviousGame?.diary?.find((d: any) => d.id === entry.id);
+      const prevEntryIdx = drivePreviousGame?.diary ? drivePreviousGame.diary.findIndex((d: any) => d.id === entry.id) : -1;
+      const textChanged = !prevEntry || prevEntry.text !== entry.text || prevEntry.period !== entry.period || prevEntryIdx !== entryIdx;
+
+      if (!txtItem || textChanged) {
+        report(`Atualizando texto do diário (${entryIdx + 1}/${sortedDiary.length})...`);
+        await uploadOrUpdateFile(txtFileName, "text/plain", txtContent, entryFolderId, txtItem?.id);
+        uploadedItems.push({ game: game.name, file: `${entryFolderName}/${txtFileName}`, type: "Texto Diário", status: txtItem ? "Atualizado" : "Novo" });
+      } else {
+        report(`Texto do diário (${entryIdx + 1}/${sortedDiary.length}) já está atualizado.`);
+      }
+
+      // Media files
+      const expectedMediaNames = new Set<string>();
+      if (entry.medias && entry.medias.length > 0) {
+        entry.medias.forEach((media, mIdx) => {
+          const idxStr = mIdx + 1;
+          const isVid = media.isVideo || (media.src && (media.src.includes("youtube.com") || media.src.includes("youtu.be")));
+          if (isVid) {
+            expectedMediaNames.add(`midia_anexa_${idxStr}.html`);
+            expectedMediaNames.add(`midia_anexa_${idxStr}.txt`);
+            expectedMediaNames.add(`video_youtube_${idxStr}.txt`);
+          } else {
+            expectedMediaNames.add(`midia_anexa_${idxStr}.webp`);
+          }
+        });
+      }
+
+      // Cleanup deleted or obsolete media files
+      for (const item of entryFolderItems) {
+        const isMediaFile = item.name.startsWith("midia_anexa_") || item.name.startsWith("video_anexo_") || item.name.startsWith("video_youtube_");
+        if (isMediaFile && !expectedMediaNames.has(item.name)) {
+          obsoleteItemsForManualDelete.push({
+            gameName: game.name,
+            itemName: `${entryFolderName}/${item.name}`,
+            itemType: "Mídia Desassociada",
+          });
+        }
+      }
+
+      // Upload missing or modified media files
+      if (entry.medias && entry.medias.length > 0) {
+        for (let mediaIdx = 0; mediaIdx < entry.medias.length; mediaIdx++) {
+          checkAbort();
+          const media = entry.medias[mediaIdx];
+          if (isValidMediaUrl(media.src)) {
+            const prevMedia = prevEntry?.medias?.[mediaIdx];
+            const mediaChanged = !prevMedia || prevMedia.src !== media.src;
+
+            if (media.isVideo || media.src.includes("youtube.com") || media.src.includes("youtu.be")) {
+              const shortcutName = `midia_anexa_${mediaIdx + 1}.html`;
+              const existingShortcut = entryFolderItems.find((item) => item.name === shortcutName || item.name === `video_youtube_${mediaIdx + 1}.txt` || item.name === `midia_anexa_${mediaIdx + 1}.txt`);
+
+              if (!existingShortcut || mediaChanged) {
+                youtubeVideos.push({
+                  gameName: game.name,
+                  title: `Vídeo Anexo #${mediaIdx + 1}`,
+                  url: media.src,
+                  expectedFilename: shortcutName,
+                });
+
+                report(`Salvando atalho do vídeo no Drive (${mediaIdx + 1}/${entry.medias.length})...`);
+                const { blob: htmlBlob } = createYoutubeHtmlShortcut(media.src, game.name, entry.period);
+                await uploadOrUpdateFile(shortcutName, "text/html", htmlBlob, entryFolderId, existingShortcut?.id);
+                uploadedItems.push({ game: game.name, file: `${entryFolderName}/${shortcutName}`, type: "Atalho YouTube", status: existingShortcut ? "Atualizado" : "Novo" });
+                addBackupLog({
+                  provider: "Google Drive",
+                  action: "Atalho HTML Vídeo",
+                  status: "success",
+                  gameName: game.name,
+                  details: `Atalho ${shortcutName} para ${media.src} criado no Drive.`
+                });
+              } else {
+                report(`Atalho HTML do vídeo (${mediaIdx + 1}/${entry.medias.length}) já está salvo.`);
+              }
+            } else {
+              const mediaName = `midia_anexa_${mediaIdx + 1}.webp`;
+              const existingMedia = entryFolderItems.find((item) => item.name === mediaName);
+              if (!existingMedia || mediaChanged) {
+                report(`Enviando imagem original WebP (${mediaIdx + 1}/${entry.medias.length})...`);
+                try {
+                  const blob = await urlToBlob(media.src);
+                  if (blob) {
+                    const webpBlob = await convertBlobToWebp(blob);
+                    checkAbort();
+                    await uploadOrUpdateFile(mediaName, "image/webp", webpBlob, entryFolderId, existingMedia?.id);
+                    uploadedItems.push({ game: game.name, file: `${entryFolderName}/${mediaName}`, type: "Mídia WebP", status: existingMedia ? "Atualizado" : "Novo" });
+                    addBackupLog({
+                      provider: "Google Drive",
+                      action: "Upload Mídia WebP",
+                      status: "success",
+                      gameName: game.name,
+                      details: `Mídia ${mediaName} (${(webpBlob.size / 1024).toFixed(1)} KB) salva no Drive.`
+                    });
+                  }
+                } catch (e: any) {
+                  backupErrors.push(`Erro ao salvar mídia de ${game.name} em ${entryFolderName}: ${e.message || e}`);
+                  addBackupLog({
+                    provider: "Google Drive",
+                    action: "Upload Mídia WebP",
+                    status: "error",
+                    gameName: game.name,
+                    details: `Erro em ${mediaName}: ${e.message || e}`
+                  });
+                }
+              } else {
+                report(`Imagem (${mediaIdx + 1}/${entry.medias.length}) já está salva no Drive.`);
+              }
+            }
+          } else {
+            report(`Mídia inválida ignorada.`);
+          }
+        }
+      }
+    }
+
+    // 5. Update master dados_biblioteca.json in root folder
+    checkAbort();
+    report(`Atualizando arquivo mestre no Drive...`);
+    const rootItems = await listFilesAndFoldersInParent(rootFolderId);
+    const masterJsonItem = rootItems.find((i) => i.name === "dados_biblioteca.json");
+
+    const updatedGamesList = allGames.map((g) => (g.id === game.id ? gameToSave : g));
+    const backupData = {
+      games: updatedGamesList.map((g) => ({
+        ...g,
+        diary: g.diary ? [...g.diary].sort((a, b) => parsePeriodStartDate(a.period) - parsePeriodStartDate(b.period)) : [],
+      })),
+      globalTags,
+      globalGenres,
+      backedUpAt: new Date().toISOString(),
+    };
+    const jsonContent = JSON.stringify(backupData, null, 2);
+    await uploadOrUpdateFile("dados_biblioteca.json", "application/json", jsonContent, rootFolderId, masterJsonItem?.id);
+    uploadedItems.push({ game: game.name, file: "dados_biblioteca.json", type: "Texto Diário", status: masterJsonItem ? "Atualizado" : "Novo" });
+
+    // Generate styled PDF Report for single game deep backup
+    const reportData: PDFReportData = {
+      backupType: "Profundo (Jogo Individual)",
+      gameName: game.name,
+      timestamp: new Date().toLocaleString("pt-BR"),
+      stats: {
+        totalGamesProcessed: 1,
+        syncedGamesCount: 1,
+        skippedGamesCount: 0,
+        filesUploadedCount: uploadedItems.length,
+      },
+      uploadedItems,
+      youtubeVideos,
+      obsoleteItemsForManualDelete,
+      errors: backupErrors,
+    };
+
+    try {
+      generateBackupPDFReport(reportData);
+    } catch (pdfErr) {
+      console.error("Erro ao gerar relatório PDF:", pdfErr);
+    }
+
+    if (obsoleteItemsForManualDelete.length > 0) {
+      setTimeout(() => {
+        alert(
+          `Backup de "${game.name}" concluído!\n\n` +
+          `Atenção: Foram identificados ${obsoleteItemsForManualDelete.length} item(ns) obsoleto(s) no seu Google Drive para este jogo.\n\n` +
+          `O relatório PDF baixado contém a lista completa destes arquivos para remoção manual se desejar.`
+        );
+      }, 500);
+    }
+
+    onProgress?.(`Backup profundo de "${game.name}" concluído com sucesso!`, totalSteps, totalSteps);
+  } finally {
+    activeBackupSignal = null;
   }
 }

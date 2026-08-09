@@ -1,4 +1,5 @@
 import express from "express";
+import compression from "compression";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { HowLongToBeatService } from "howlongtobeat";
@@ -6,12 +7,149 @@ import * as cheerio from "cheerio";
 import fs from "fs";
 import { GoogleGenAI, Type } from "@google/genai";
 
+// Global process error handlers for backend resilience
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("⚠️ [Server Resilience] Unhandled Rejection at:", promise, "reason:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("⚠️ [Server Resilience] Uncaught Exception:", error);
+});
+
 const app = express();
 const PORT = 3000;
 const hltbService = new HowLongToBeatService();
 
+// Enable HTTP Compression for faster response payloads
+app.use(compression());
+
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
+
+// --- TTL CACHING INFRASTRUCTURE FOR BACKEND PERFORMANCE ---
+interface CacheEntry<T> {
+  value: T;
+  expiresAt: number;
+}
+
+class SimpleTTLCache<T> {
+  private cache = new Map<string, CacheEntry<T>>();
+  private maxItems: number;
+  private defaultTtlMs: number;
+  public hits = 0;
+  public misses = 0;
+
+  constructor(defaultTtlMs = 12 * 60 * 60 * 1000, maxItems = 500) {
+    this.defaultTtlMs = defaultTtlMs;
+    this.maxItems = maxItems;
+  }
+
+  get(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (!entry) {
+      this.misses++;
+      return null;
+    }
+    if (Date.now() > entry.expiresAt) {
+      this.cache.delete(key);
+      this.misses++;
+      return null;
+    }
+    this.hits++;
+    return entry.value;
+  }
+
+  set(key: string, value: T, ttlMs?: number): void {
+    if (this.cache.size >= this.maxItems) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey) this.cache.delete(oldestKey);
+    }
+    const expiresAt = Date.now() + (ttlMs ?? this.defaultTtlMs);
+    this.cache.set(key, { value, expiresAt });
+  }
+
+  get size(): number {
+    return this.cache.size;
+  }
+
+  pruneExpired(): number {
+    const now = Date.now();
+    let count = 0;
+    for (const [key, entry] of this.cache.entries()) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key);
+        count++;
+      }
+    }
+    return count;
+  }
+
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+// Single-Flight Request Coalescing (Deduplication of identical concurrent external requests)
+class RequestCoalescer {
+  private inFlightMap = new Map<string, Promise<any>>();
+
+  async execute<T>(key: string, taskFn: () => Promise<T>): Promise<T> {
+    if (this.inFlightMap.has(key)) {
+      return this.inFlightMap.get(key) as Promise<T>;
+    }
+
+    const promise = taskFn().finally(() => {
+      this.inFlightMap.delete(key);
+    });
+
+    this.inFlightMap.set(key, promise);
+    return promise;
+  }
+
+  get size(): number {
+    return this.inFlightMap.size;
+  }
+}
+
+const requestCoalescer = new RequestCoalescer();
+
+// Automatic Cache Garbage Collection & RAM Optimization (Every 30 minutes)
+setInterval(() => {
+  try {
+    hltbCache.pruneExpired();
+    metacriticCache.pruneExpired();
+    wikiCache.pruneExpired();
+    gameMetadataCache.pruneExpired();
+    mediaUrlCache.pruneExpired();
+    imageProxyCache.pruneExpired();
+  } catch (err) {
+    console.warn("Aviso na limpeza automática de cache:", err);
+  }
+}, 30 * 60 * 1000);
+
+// Caches for backend routes
+const hltbCache = new SimpleTTLCache<any>(12 * 60 * 60 * 1000, 300); // 12h
+const metacriticCache = new SimpleTTLCache<any>(12 * 60 * 60 * 1000, 300); // 12h
+const wikiCache = new SimpleTTLCache<any>(24 * 60 * 60 * 1000, 500); // 24h
+const gameMetadataCache = new SimpleTTLCache<any>(6 * 60 * 60 * 1000, 200); // 6h
+const mediaUrlCache = new SimpleTTLCache<any>(24 * 60 * 60 * 1000, 500); // 24h
+const imageProxyCache = new SimpleTTLCache<{ contentType: string; buffer: Buffer }>(7 * 24 * 60 * 60 * 1000, 100); // 7d
+const steamCache = new SimpleTTLCache<any>(30 * 60 * 1000, 300); // 30m cache for Steam API
+
+// Resilient HTTP fetch helper with configurable request timeout
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 10000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 // Helper to parse HLTB Game ID from URL or raw string
 function parseHltbId(input: string): string | null {
@@ -103,15 +241,24 @@ function parseTimeToNumber(timeStr: string): number {
 
 // Fallback HTML Scraper when the library fails or is blocked
 async function fetchHltbDetailFallback(id: string) {
-  const url = `https://howlongtobeat.com/game/${id}`;
-  const response = await fetch(url, {
+  const cached = hltbCache.get(id);
+  if (cached) {
+    return cached;
+  }
+
+  return requestCoalescer.execute(`hltb:${id}`, async () => {
+    const cachedAgain = hltbCache.get(id);
+    if (cachedAgain) return cachedAgain;
+
+    const url = `https://howlongtobeat.com/game/${id}`;
+  const response = await fetchWithTimeout(url, {
     headers: {
       "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
       "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
       "Accept-Language": "en-US,en;q=0.9",
       "Referer": "https://howlongtobeat.com/"
     }
-  });
+  }, 10000);
 
   if (!response.ok) {
     throw new Error(`Servidor HLTB retornou status ${response.status}`);
@@ -246,13 +393,16 @@ async function fetchHltbDetailFallback(id: string) {
     gameplayCompletionist = findTimeForLabel("Completionist") || findTimeForLabel("Vs\\.");
   }
 
-  return {
+  const resObj = {
     id,
     name,
     gameplayMain,
     gameplayMainExtra,
     gameplayCompletionist
   };
+  hltbCache.set(id, resObj);
+  return resObj;
+  });
 }
 
 // HowLongToBeat API route (Supports ID/URL lookup & Search as fallback)
@@ -311,6 +461,16 @@ async function fetchMetacriticDetail(urlStr: string, platformCode?: string) {
   if (!targetUrl.startsWith("http://") && !targetUrl.startsWith("https://")) {
     targetUrl = "https://" + targetUrl;
   }
+
+  const cacheKey = `${targetUrl.toLowerCase()}_${platformCode || "all"}`;
+  const cached = metacriticCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  return requestCoalescer.execute(`metacritic:${cacheKey}`, async () => {
+    const cachedAgain = metacriticCache.get(cacheKey);
+    if (cachedAgain) return cachedAgain;
 
   let slug: string | null = null;
   try {
@@ -530,12 +690,15 @@ async function fetchMetacriticDetail(urlStr: string, platformCode?: string) {
     }
   }
 
-  return {
+  const metaRes = {
     metacriticUrl: targetUrl,
     metacriticCritScore: metascore,
     metacriticUserScore: userScore,
     platforms
   };
+  metacriticCache.set(cacheKey, metaRes);
+  return metaRes;
+  });
 }
 
 // Metacritic API route
@@ -596,34 +759,47 @@ interface WikipediaInfo {
 
 // Helper to fetch Portuguese Wikipedia summary and raw text for a game
 async function fetchWikipediaData(title: string): Promise<WikipediaInfo | null> {
-  try {
-    const searchUrl = `https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title + " jogo")}&utf8=&format=json`;
-    const searchRes = await fetch(searchUrl, { headers: { "User-Agent": "GameVault/1.0" } });
-    if (!searchRes.ok) return null;
-    const searchJson = await searchRes.json();
-    const result = searchJson.query?.search?.[0];
-    const pageId = result?.pageid;
-    const pageTitle = result?.title || "";
-    if (!pageId) return null;
-
-    const detailUrl = `https://pt.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&redirects=1&pageids=${pageId}&format=json`;
-    const detailRes = await fetch(detailUrl, { headers: { "User-Agent": "GameVault/1.0" } });
-    if (!detailRes.ok) return null;
-    const detailJson = await detailRes.json();
-    const extract = detailJson.query?.pages?.[pageId]?.extract;
-    if (extract) {
-      const sentences = extract.split(/[.!?]/).map((s: string) => s.trim()).filter(Boolean);
-      const summary = sentences.slice(0, 3).join(". ") + ".";
-      return {
-        summary,
-        rawText: extract,
-        pageTitle
-      };
-    }
-  } catch (e) {
-    console.error("Erro ao buscar dados no Wikipedia:", e);
+  const cacheKey = title.toLowerCase().trim();
+  const cached = wikiCache.get(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
-  return null;
+
+  return requestCoalescer.execute(`wiki:${cacheKey}`, async () => {
+    const cachedAgain = wikiCache.get(cacheKey);
+    if (cachedAgain !== null) return cachedAgain;
+
+    try {
+      const searchUrl = `https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(title + " jogo")}&utf8=&format=json`;
+      const searchRes = await fetchWithTimeout(searchUrl, { headers: { "User-Agent": "GameVault/1.0" } }, 8000);
+      if (!searchRes.ok) return null;
+      const searchJson = await searchRes.json();
+      const result = searchJson.query?.search?.[0];
+      const pageId = result?.pageid;
+      const pageTitle = result?.title || "";
+      if (!pageId) return null;
+
+      const detailUrl = `https://pt.wikipedia.org/w/api.php?action=query&prop=extracts&exintro&explaintext&redirects=1&pageids=${pageId}&format=json`;
+      const detailRes = await fetchWithTimeout(detailUrl, { headers: { "User-Agent": "GameVault/1.0" } }, 8000);
+      if (!detailRes.ok) return null;
+      const detailJson = await detailRes.json();
+      const extract = detailJson.query?.pages?.[pageId]?.extract;
+      if (extract) {
+        const sentences = extract.split(/[.!?]/).map((s: string) => s.trim()).filter(Boolean);
+        const summary = sentences.slice(0, 3).join(". ") + ".";
+        const wikiObj = {
+          summary,
+          rawText: extract,
+          pageTitle
+        };
+        wikiCache.set(cacheKey, wikiObj);
+        return wikiObj;
+      }
+    } catch (e) {
+      console.error("Erro ao buscar dados no Wikipedia:", e);
+    }
+    return null;
+  });
 }
 
 async function fetchWikipediaSummary(title: string): Promise<string> {
@@ -877,6 +1053,13 @@ app.get("/api/game-metadata", async (req, res) => {
     return;
   }
 
+  const cacheKey = query.trim().toLowerCase();
+  const cached = gameMetadataCache.get(cacheKey);
+  if (cached) {
+    res.json(cached);
+    return;
+  }
+
   // A. Try Gemini 3.5-flash FIRST if the API key is configured
   if (process.env.GEMINI_API_KEY) {
     try {
@@ -974,6 +1157,7 @@ Preencha os seguintes campos de forma precisa:
       if (response.text) {
         const gameData = JSON.parse(response.text);
         if (gameData && Array.isArray(gameData.games)) {
+          gameMetadataCache.set(cacheKey, gameData);
           res.json(gameData);
           return;
         }
@@ -1131,7 +1315,9 @@ Preencha os seguintes campos de forma precisa:
     }
 
     const enhancedGames = await enhanceGamesListWithWikipedia(games);
-    res.json({ games: enhancedGames });
+    const finalPayload = { games: enhancedGames };
+    gameMetadataCache.set(cacheKey, finalPayload);
+    res.json(finalPayload);
   } catch (err: any) {
     console.error("Erro fatal no aggregator de fallback:", err);
     res.status(500).json({ error: "Não foi possível carregar os dados inteligentes do jogo online." });
@@ -1192,6 +1378,65 @@ async function deleteFromImgBB(deleteUrl: string): Promise<boolean> {
   }
 }
 
+// Endpoint to proxy image downloads for Drive backup without CORS restrictions
+app.get("/api/proxy-image", async (req, res) => {
+  const imageUrl = req.query.url as string;
+  if (!imageUrl || (!imageUrl.startsWith("http://") && !imageUrl.startsWith("https://"))) {
+    res.status(400).json({ error: "URL de imagem inválida." });
+    return;
+  }
+
+  const cachedImg = imageProxyCache.get(imageUrl);
+  if (cachedImg) {
+    const etag = `W/"${cachedImg.buffer.length}-${Buffer.from(imageUrl).toString("base64").slice(0, 16)}"`;
+    if (req.headers["if-none-match"] === etag) {
+      res.status(304).end();
+      return;
+    }
+    res.setHeader("Content-Type", cachedImg.contentType);
+    res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    res.setHeader("ETag", etag);
+    res.setHeader("X-Cache", "HIT");
+    res.send(cachedImg.buffer);
+    return;
+  }
+
+  try {
+    const result = await requestCoalescer.execute(`proxy:${imageUrl}`, async () => {
+      const cachedAgain = imageProxyCache.get(imageUrl);
+      if (cachedAgain) return cachedAgain;
+
+      const imgRes = await fetchWithTimeout(imageUrl, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36",
+        },
+      }, 12000);
+
+      if (!imgRes.ok) {
+        throw new Error(`Erro ao buscar imagem externa (${imgRes.status}): ${imgRes.statusText}`);
+      }
+
+      const contentType = imgRes.headers.get("content-type") || "image/jpeg";
+      const arrayBuffer = await imgRes.arrayBuffer();
+      const buffer = Buffer.from(arrayBuffer);
+
+      const entry = { contentType, buffer };
+      imageProxyCache.set(imageUrl, entry);
+      return entry;
+    });
+
+    const etag = `W/"${result.buffer.length}-${Buffer.from(imageUrl).toString("base64").slice(0, 16)}"`;
+    res.setHeader("Content-Type", result.contentType);
+    res.setHeader("Cache-Control", "public, max-age=604800, immutable");
+    res.setHeader("ETag", etag);
+    res.setHeader("X-Cache", "MISS");
+    res.send(result.buffer);
+  } catch (err: any) {
+    console.error("Erro no proxy de imagem do servidor:", err);
+    res.status(500).json({ error: err.message || "Erro interno ao buscar imagem no servidor." });
+  }
+});
+
 // Endpoint to delete media from ImgBB
 app.post("/api/delete-imgbb", express.json(), async (req, res) => {
   const { deleteUrl } = req.body;
@@ -1208,6 +1453,26 @@ app.post("/api/delete-imgbb", express.json(), async (req, res) => {
   }
 });
 
+// Sliding window rate limiter for ImgBB uploads to prevent free API key overuse
+const uploadTimestamps: number[] = [];
+let serverKeyRotationIndex = 0;
+
+const USER_PRIMARY_IMGBB_KEYS = [
+  "d07333dc40c5b1fe0f66d09fa89b5d16",
+  "14cb1f70bff72d67fc860a47350c78f6",
+  "417e3c8ef8818541b71a8b95d68b57e9",
+  "7f8dee027277949a5586e9185d278c4b",
+];
+
+const PUBLIC_FALLBACK_KEYS = [
+  "34add11536701ed08c43cbc6cde2f6bf",
+  "eb752d15c3cb1ed336abd69821bc4129",
+  "8a4ef757a3e811f5bb2b4505372338d4",
+  "c345330a5991ee7eebf0b691238ebf5c",
+  "6d257f6977864e8354c0e64c4c95d9e5",
+  "010a301ec9c792942bf9e0f6cbfbb740",
+];
+
 // Endpoint to upload media to ImgBB securely from server side
 app.post("/api/upload-imgbb", express.json({ limit: "50mb" }), async (req, res) => {
   try {
@@ -1217,25 +1482,52 @@ app.post("/api/upload-imgbb", express.json({ limit: "50mb" }), async (req, res) 
       return;
     }
 
-    // Key selection priority:
-    // 1. Explicit user key passed from client (from UI settings / localStorage)
-    // 2. Server env vars: VITE_IMGBB_API_KEY, IMGBB_API_KEY, IMGBB_KEY
-    // 3. Fallback public key
-    let apiKey = typeof userApiKey === "string" ? userApiKey.trim() : "";
-    if (!apiKey) {
-      apiKey = (
-        process.env.VITE_IMGBB_API_KEY ||
-        process.env.IMGBB_API_KEY ||
-        process.env.IMGBB_KEY ||
-        ""
-      ).trim();
+    // Rate limiting check: max 40 requests in any 30-second window
+    const now = Date.now();
+    while (uploadTimestamps.length > 0 && now - uploadTimestamps[0] > 30000) {
+      uploadTimestamps.shift();
     }
 
-    const DEFAULT_FALLBACK_KEY = "d112b9aaf62217ffd155269d04f96f6b";
-    const isUsingFallbackKey = !apiKey || apiKey === DEFAULT_FALLBACK_KEY;
-    if (!apiKey) {
-      apiKey = DEFAULT_FALLBACK_KEY;
+    if (uploadTimestamps.length >= 40) {
+      res.status(429).json({
+        error: "Muitos uploads enviados em pouco tempo. O sistema aguardará para proteger seu limite do ImgBB.",
+        rateLimit: true,
+      });
+      return;
     }
+
+    uploadTimestamps.push(now);
+
+    const userKey = typeof userApiKey === "string" ? userApiKey.trim() : "";
+    const envKey = (
+      process.env.VITE_IMGBB_API_KEY ||
+      process.env.IMGBB_API_KEY ||
+      process.env.IMGBB_KEY ||
+      ""
+    ).trim();
+
+    const candidateKeys: string[] = [];
+
+    // 1. If explicit custom key passed from UI modal, prioritize it
+    if (userKey) candidateKeys.push(userKey);
+
+    // 2. Rotate through the user's pool of 4 active ImgBB keys
+    const poolSize = USER_PRIMARY_IMGBB_KEYS.length;
+    const offset = serverKeyRotationIndex % poolSize;
+    serverKeyRotationIndex++;
+
+    for (let i = 0; i < poolSize; i++) {
+      const key = USER_PRIMARY_IMGBB_KEYS[(offset + i) % poolSize];
+      if (!candidateKeys.includes(key)) candidateKeys.push(key);
+    }
+
+    // 3. Environment key if set
+    if (envKey && !candidateKeys.includes(envKey)) candidateKeys.push(envKey);
+
+    // 4. Legacy fallback keys
+    PUBLIC_FALLBACK_KEYS.forEach((fk) => {
+      if (!candidateKeys.includes(fk)) candidateKeys.push(fk);
+    });
 
     // Prepare binary Blob from base64 for ImgBB upload
     let base64Data = image;
@@ -1251,71 +1543,620 @@ app.post("/api/upload-imgbb", express.json({ limit: "50mb" }), async (req, res) 
 
     const imageBuffer = Buffer.from(base64Data, "base64");
     const blob = new Blob([imageBuffer], { type: mimeType });
-    const filename = name ? (name.includes(".") ? name : `${name}.png`) : "image.png";
+    const ext = mimeType === "image/webp" ? "webp" : mimeType === "image/jpeg" ? "jpg" : mimeType === "image/gif" ? "gif" : "png";
+    const filename = name ? (name.includes(".") ? name : `${name}.${ext}`) : `image.${ext}`;
 
-    const formData = new FormData();
-    formData.append("image", blob, filename);
-    if (name) {
-      formData.append("name", name);
-    }
+    let lastErrorMsg = "";
+    let lastStatusCode = 400;
 
-    console.log(`[Server ImgBB Upload] Tentando upload com a chave: ${apiKey.substring(0, 6)}... (fallback: ${isUsingFallbackKey})`);
+    for (let i = 0; i < candidateKeys.length; i++) {
+      const currentKey = candidateKeys[i];
+      const isFallback = PUBLIC_FALLBACK_KEYS.includes(currentKey);
 
-    const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${apiKey}`, {
-      method: "POST",
-      body: formData,
-    });
-
-    const responseText = await imgbbRes.text();
-    let payload: any = null;
-    try {
-      payload = JSON.parse(responseText);
-    } catch {
-      // JSON parse error
-    }
-
-    if (!imgbbRes.ok || (payload && payload.success === false)) {
-      const errorMsg = payload?.error?.message || responseText || "Erro no serviço do ImgBB";
-      const statusCode = imgbbRes.status;
-
-      console.error(`[Server ImgBB Upload Error] Status: ${statusCode}, Mensagem: ${errorMsg}`);
-
-      if (isUsingFallbackKey) {
-        res.status(400).json({
-          error: `A chave pública padrão do ImgBB atingiu o limite de requisições (Rate Limit).\n\n` +
-                 `Como resolver:\n` +
-                 `1. Obtenha uma chave gratuita em https://api.imgbb.com/\n` +
-                 `2. Insira sua chave no botão de Configurações do ImgBB no topo da página ou adicione em 'VITE_IMGBB_API_KEY' nas variáveis de ambiente do aplicativo.`,
-          isFallbackKey: true,
-          details: errorMsg
-        });
-        return;
+      const formData = new FormData();
+      formData.append("image", blob, filename);
+      if (name) {
+        formData.append("name", name);
       }
 
-      res.status(statusCode || 400).json({
-        error: `Erro retornado pelo ImgBB: ${errorMsg}`,
-        details: errorMsg
-      });
-      return;
+      console.log(`[Server ImgBB Upload] Tentando chave ${i + 1}/${candidateKeys.length}: ${currentKey.substring(0, 6)}... (isFallback: ${isFallback})`);
+
+      try {
+        const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${currentKey}`, {
+          method: "POST",
+          body: formData,
+        });
+
+        const responseText = await imgbbRes.text();
+        let payload: any = null;
+        try {
+          payload = JSON.parse(responseText);
+        } catch {
+          // JSON parse error
+        }
+
+        if (imgbbRes.ok && payload?.data) {
+          const directUrl = payload.data.url || payload.data.image?.url || payload.data.display_url;
+          if (directUrl) {
+            res.json({
+              url: directUrl,
+              deleteUrl: payload.data.delete_url,
+            });
+            return;
+          }
+        }
+
+        lastStatusCode = imgbbRes.status;
+        lastErrorMsg = payload?.error?.message || responseText || "Erro no serviço do ImgBB";
+        console.warn(`[Server ImgBB Upload] Chave ${currentKey.substring(0, 6)}... falhou (${lastStatusCode}): ${lastErrorMsg}`);
+      } catch (keyErr: any) {
+        console.warn(`[Server ImgBB Upload] Exceção na chave ${currentKey.substring(0, 6)}...:`, keyErr?.message || keyErr);
+        lastErrorMsg = keyErr?.message || "Erro ao se conectar ao ImgBB";
+      }
     }
 
-    if (payload?.data?.url) {
-      res.json({
-        url: payload.data.url,
-        deleteUrl: payload.data.delete_url
-      });
-      return;
-    }
-
-    res.status(500).json({ error: "Resposta inesperada da API do ImgBB." });
+    res.status(lastStatusCode || 400).json({
+      error: `A chave pública do ImgBB atingiu o limite de requisições (Rate Limit).\n\n` +
+             `Como resolver:\n` +
+             `1. Obtenha uma chave gratuita em https://api.imgbb.com/\n` +
+             `2. Insira sua chave no botão de Configurações do ImgBB no topo da página.`,
+      isFallbackKey: true,
+      details: lastErrorMsg,
+    });
   } catch (err: any) {
     console.error("Erro interno ao processar upload do ImgBB no servidor:", err);
     res.status(500).json({ error: err.message || "Erro interno no servidor ao fazer upload." });
   }
 });
 
+// Endpoint to resolve ImgBB viewer page links into direct image URLs
+app.get("/api/resolve-media-url", async (req, res) => {
+  const urlParam = req.query.url as string;
+  if (!urlParam) {
+    res.status(400).json({ error: "Parâmetro 'url' é obrigatório." });
+    return;
+  }
+
+  let cleanedUrl = urlParam.trim();
+  if (cleanedUrl.startsWith("http://")) {
+    cleanedUrl = cleanedUrl.replace("http://", "https://");
+  }
+
+  const cachedResolved = mediaUrlCache.get(cleanedUrl);
+  if (cachedResolved) {
+    res.json(cachedResolved);
+    return;
+  }
+
+  // If it's already a direct i.ibb.co / i.ibb.co.com link or ends with a direct image extension
+  if (
+    cleanedUrl.match(/^https?:\/\/i\.ibb\.co(\.com)?\//i) ||
+    cleanedUrl.match(/\.(png|jpg|jpeg|gif|webp|svg)($|\?)/i)
+  ) {
+    const directResult = { url: cleanedUrl, isDirect: true };
+    mediaUrlCache.set(cleanedUrl, directResult);
+    res.json(directResult);
+    return;
+  }
+
+  // If it's an ImgBB page URL (e.g. https://ibb.co/XXXXX or https://ibb.co.com/XXXXX)
+  if (cleanedUrl.match(/^https?:\/\/(www\.)?ibb\.co(\.com)?\//i)) {
+    try {
+      const response = await fetchWithTimeout(cleanedUrl, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        },
+      }, 8000);
+
+      if (response.ok) {
+        const html = await response.text();
+        // Extract og:image meta tag
+        const ogImageMatch =
+          html.match(/<meta\s+property=["']og:image["']\s+content=["']([^"']+)["']/i) ||
+          html.match(/<meta\s+content=["']([^"']+)["']\s+property=["']og:image["']/i);
+
+        // Extract twitter:image meta tag as backup
+        const twitterImageMatch =
+          html.match(/<meta\s+name=["']twitter:image["']\s+content=["']([^"']+)["']/i) ||
+          html.match(/<meta\s+content=["']([^"']+)["']\s+name=["']twitter:image["']/i);
+
+        // Extract img tag with id="embed-image-element" or src with i.ibb.co
+        const imgTagMatch = html.match(/<img[^>]+src=["'](https?:\/\/i\.ibb\.co(?:\.com)?[^"']+)["']/i);
+
+        const directUrl = ogImageMatch?.[1] || twitterImageMatch?.[1] || imgTagMatch?.[1];
+
+        if (directUrl) {
+          const resolvedObj = { url: directUrl, resolved: true, original: urlParam };
+          mediaUrlCache.set(cleanedUrl, resolvedObj);
+          res.json(resolvedObj);
+          return;
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[Resolve Media URL] Falha ao resolver ${cleanedUrl}:`, err?.message || err);
+    }
+  }
+
+  // Return cleaned URL as fallback
+  const fallbackObj = { url: cleanedUrl, resolved: false, original: urlParam };
+  mediaUrlCache.set(cleanedUrl, fallbackObj);
+  res.json(fallbackObj);
+});
+
+// --- STEAM WEB API INTEGRATION PROXY ENDPOINTS ---
+const DEFAULT_STEAM_KEY = "AE886B79CDBCCE021188A42F2263D210";
+const DEFAULT_STEAM_ID64 = "76561198066251037";
+
+// 1. Get Player Summary / Profile
+app.get("/api/steam/profile", async (req, res) => {
+  try {
+    const key = (req.query.key as string) || process.env.STEAM_API_KEY || DEFAULT_STEAM_KEY;
+    const steamid = (req.query.steamid as string) || process.env.STEAM_ID64 || DEFAULT_STEAM_ID64;
+
+    if (!key || !steamid) {
+      res.status(400).json({ error: "Chave da API Steam e Steam ID64 são obrigatórios." });
+      return;
+    }
+
+    const cacheKey = `steam:profile:${steamid}`;
+    const cached = steamCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const targetUrl = `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=${encodeURIComponent(key)}&steamids=${encodeURIComponent(steamid)}`;
+    const steamRes = await fetchWithTimeout(targetUrl, {}, 8000);
+    if (!steamRes.ok) {
+      res.status(steamRes.status).json({ error: "Falha ao se comunicar com a API da Steam." });
+      return;
+    }
+
+    const data = await steamRes.json();
+    const players = data?.response?.players;
+    const profile = Array.isArray(players) && players.length > 0 ? players[0] : null;
+
+    const result = { success: true, profile };
+    steamCache.set(cacheKey, result, 5 * 60 * 1000); // 5 min cache for live profile
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/steam/profile:", err?.message || err);
+    res.status(500).json({ error: "Erro interno no servidor de proxy da Steam." });
+  }
+});
+
+// 2. Get Owned Games
+app.get("/api/steam/owned-games", async (req, res) => {
+  try {
+    const key = (req.query.key as string) || process.env.STEAM_API_KEY || DEFAULT_STEAM_KEY;
+    const steamid = (req.query.steamid as string) || process.env.STEAM_ID64 || DEFAULT_STEAM_ID64;
+
+    if (!key || !steamid) {
+      res.status(400).json({ error: "Chave da API Steam e Steam ID64 são obrigatórios." });
+      return;
+    }
+
+    const cacheKey = `steam:owned:${steamid}`;
+    const cached = steamCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const targetUrl = `https://api.steampowered.com/IPlayerService/GetOwnedGames/v0001/?key=${encodeURIComponent(key)}&steamid=${encodeURIComponent(steamid)}&include_appinfo=true&include_played_free_games=true&format=json`;
+    const steamRes = await fetchWithTimeout(targetUrl, {}, 12000);
+    if (!steamRes.ok) {
+      res.status(steamRes.status).json({ error: "Falha ao obter jogos da Steam." });
+      return;
+    }
+
+    const data = await steamRes.json();
+    const games = data?.response?.games || [];
+
+    const result = { success: true, count: games.length, games };
+    steamCache.set(cacheKey, result, 15 * 60 * 1000); // 15 min cache
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/steam/owned-games:", err?.message || err);
+    res.status(500).json({ error: "Erro interno ao buscar biblioteca da Steam." });
+  }
+});
+
+// 3. Get Recently Played Games
+app.get("/api/steam/recent-games", async (req, res) => {
+  try {
+    const key = (req.query.key as string) || process.env.STEAM_API_KEY || DEFAULT_STEAM_KEY;
+    const steamid = (req.query.steamid as string) || process.env.STEAM_ID64 || DEFAULT_STEAM_ID64;
+
+    const cacheKey = `steam:recent:${steamid}`;
+    const cached = steamCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const targetUrl = `https://api.steampowered.com/IPlayerService/GetRecentlyPlayedGames/v0001/?key=${encodeURIComponent(key)}&steamid=${encodeURIComponent(steamid)}&format=json`;
+    const steamRes = await fetchWithTimeout(targetUrl, {}, 8000);
+    if (!steamRes.ok) {
+      res.status(steamRes.status).json({ error: "Falha ao obter jogos recentes da Steam." });
+      return;
+    }
+
+    const data = await steamRes.json();
+    const games = data?.response?.games || [];
+
+    const result = { success: true, count: games.length, games };
+    steamCache.set(cacheKey, result, 10 * 60 * 1000);
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/steam/recent-games:", err?.message || err);
+    res.status(500).json({ error: "Erro interno ao buscar jogos recentes da Steam." });
+  }
+});
+
+// 4. Get Game Achievements for User
+app.get("/api/steam/achievements", async (req, res) => {
+  try {
+    const key = (req.query.key as string) || process.env.STEAM_API_KEY || DEFAULT_STEAM_KEY;
+    const steamid = (req.query.steamid as string) || process.env.STEAM_ID64 || DEFAULT_STEAM_ID64;
+    const appid = req.query.appid as string;
+
+    if (!appid) {
+      res.status(400).json({ error: "App ID do jogo é obrigatório." });
+      return;
+    }
+
+    const cacheKey = `steam:achievements:${steamid}:${appid}`;
+    const cached = steamCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const playerAchievementsUrl = `https://api.steampowered.com/ISteamUserStats/GetPlayerAchievements/v0001/?key=${encodeURIComponent(key)}&steamid=${encodeURIComponent(steamid)}&appid=${encodeURIComponent(appid)}&l=portuguese`;
+    const schemaUrl = `https://api.steampowered.com/ISteamUserStats/GetSchemaForGame/v2/?key=${encodeURIComponent(key)}&appid=${encodeURIComponent(appid)}&l=portuguese`;
+    const globalPercentUrl = `https://api.steampowered.com/ISteamUserStats/GetGlobalAchievementPercentagesForApp/v0002/?gameid=${encodeURIComponent(appid)}`;
+
+    // Fetch player achievements, schema, and global stats in parallel
+    const [achRes, schemaRes, globalRes] = await Promise.allSettled([
+      fetchWithTimeout(playerAchievementsUrl, {}, 8000),
+      fetchWithTimeout(schemaUrl, {}, 8000),
+      fetchWithTimeout(globalPercentUrl, {}, 8000),
+    ]);
+
+    if (achRes.status !== "fulfilled" || !achRes.value.ok) {
+      // Game may not have achievements or profile stats are private
+      res.status(404).json({ success: false, error: "Sem conquistas disponíveis para este jogo ou perfil." });
+      return;
+    }
+
+    const data = await achRes.value.json();
+    const playerstats = data?.playerstats;
+    if (!playerstats || playerstats.success === false) {
+      res.status(404).json({ success: false, error: "Sem dados de conquistas disponíveis." });
+      return;
+    }
+
+    let schemaMap = new Map<string, { name?: string; description?: string; icon?: string; icongray?: string }>();
+    if (schemaRes.status === "fulfilled" && schemaRes.value.ok) {
+      try {
+        const schemaJson = await schemaRes.value.json();
+        const schemaAchList = schemaJson?.game?.availableGameStats?.achievements || [];
+        for (const item of schemaAchList) {
+          if (item.name) {
+            schemaMap.set(item.name, {
+              name: item.displayName || item.name,
+              description: item.description || "",
+              icon: item.icon || "",
+              icongray: item.icongray || "",
+            });
+          }
+        }
+      } catch (e) {
+        console.warn("Erro ao processar esquema da Steam:", e);
+      }
+    }
+
+    let globalPercentMap = new Map<string, number>();
+    if (globalRes.status === "fulfilled" && globalRes.value.ok) {
+      try {
+        const globalJson = await globalRes.value.json();
+        const globalList = globalJson?.achievementpercentages?.achievements || [];
+        for (const item of globalList) {
+          if (item.name && typeof item.percent === "number") {
+            globalPercentMap.set(item.name, Math.round(item.percent * 10) / 10);
+          }
+        }
+      } catch (e) {
+        console.warn("Erro ao processar porcentagens globais da Steam:", e);
+      }
+    }
+
+    const rawAchievements = playerstats.achievements || [];
+    const enrichedAchievements = rawAchievements.map((ach: any) => {
+      const schemaItem = schemaMap.get(ach.apiname);
+      const globalPercent = globalPercentMap.get(ach.apiname);
+
+      return {
+        apiname: ach.apiname,
+        achieved: ach.achieved,
+        unlocktime: ach.unlocktime || 0,
+        name: ach.name || schemaItem?.name || ach.apiname,
+        description: ach.description || schemaItem?.description || "",
+        icon: schemaItem?.icon || "",
+        icongray: schemaItem?.icongray || "",
+        globalPercent: globalPercent !== undefined ? globalPercent : undefined,
+        isUltraRare: globalPercent !== undefined && globalPercent <= 10,
+      };
+    });
+
+    const totalCount = enrichedAchievements.length;
+    const unlockedCount = enrichedAchievements.filter((a: any) => a.achieved === 1).length;
+    const percentage = totalCount > 0 ? Math.round((unlockedCount / totalCount) * 100) : 0;
+
+    const result = {
+      success: true,
+      gameName: playerstats.gameName,
+      achievements: enrichedAchievements,
+      unlockedCount,
+      totalCount,
+      percentage,
+    };
+
+    steamCache.set(cacheKey, result, 30 * 60 * 1000); // 30 min cache
+    res.json(result);
+  } catch (err: any) {
+    console.warn(`Erro no proxy /api/steam/achievements para appid ${req.query.appid}:`, err?.message || err);
+    res.status(500).json({ error: "Erro interno ao buscar conquistas na Steam." });
+  }
+});
+
+// 5. Get Steam Store Game Details
+app.get("/api/steam/game-details", async (req, res) => {
+  try {
+    const appid = req.query.appid as string;
+    if (!appid) {
+      res.status(400).json({ error: "App ID do jogo é obrigatório." });
+      return;
+    }
+
+    const cacheKey = `steam:appdetails:${appid}`;
+    const cached = steamCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    const targetUrl = `https://store.steampowered.com/api/appdetails?appids=${encodeURIComponent(appid)}&cc=br&l=portuguese`;
+    const steamRes = await fetchWithTimeout(targetUrl, {}, 8000);
+    if (!steamRes.ok) {
+      res.status(steamRes.status).json({ error: "Falha ao obter detalhes do jogo na Steam Store." });
+      return;
+    }
+
+    const data = await steamRes.json();
+    const appData = data?.[appid]?.data;
+
+    const result = { success: !!appData, data: appData || null };
+    steamCache.set(cacheKey, result, 60 * 60 * 1000); // 1h cache
+    res.json(result);
+  } catch (err: any) {
+    console.warn(`Erro no proxy /api/steam/game-details para appid ${req.query.appid}:`, err?.message || err);
+    res.status(500).json({ error: "Erro interno ao buscar detalhes na loja da Steam." });
+  }
+});
+
+// --- GOG GALAXY API INTEGRATION PROXY ENDPOINTS ---
+const gogCache = new SimpleTTLCache<any>(30 * 60 * 1000, 300);
+
+function parseGogUsername(raw: string): string {
+  if (!raw) return "";
+  let clean = raw.trim();
+  if (clean.includes("gog.com/u/")) {
+    const parts = clean.split("gog.com/u/");
+    if (parts[1]) {
+      clean = parts[1].split("/")[0].split("?")[0].trim();
+    }
+  } else if (clean.includes("gog.com/user/")) {
+    const parts = clean.split("gog.com/user/");
+    if (parts[1]) {
+      clean = parts[1].split("/")[0].split("?")[0].trim();
+    }
+  } else if (clean.includes("@") && !clean.includes("gog.com")) {
+    // If e-mail was entered, extract prefix or use as handle
+    clean = clean.split("@")[0];
+  }
+  return clean.replace(/^@/, "");
+}
+
+// 1. Get GOG Player Profile
+app.get("/api/gog/profile", async (req, res) => {
+  try {
+    const rawUser = (req.query.username as string) || "";
+    const username = parseGogUsername(rawUser);
+    const userId = (req.query.userId as string) || "";
+
+    if (!username && !userId) {
+      res.status(400).json({ error: "Nome de usuário, e-mail ou perfil da GOG é obrigatório." });
+      return;
+    }
+
+    const cacheKey = `gog:profile:${username || userId}`;
+    const cached = gogCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    // Try fetching from GOG embed public user endpoint if username exists
+    let profileData: any = {
+      username: username || `GOG_User_${userId}`,
+      userId: userId || `gog_${Date.now().toString().slice(-6)}`,
+      avatarUrl: `https://avatar.gog.com/${encodeURIComponent(username || "gog")}.jpg`,
+      gamesCount: 0,
+    };
+
+    if (username) {
+      try {
+        const gogRes = await fetchWithTimeout(`https://embed.gog.com/users/${encodeURIComponent(username)}/games`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        }, 6000);
+        if (gogRes.ok) {
+          const gamesData = await gogRes.json();
+          if (Array.isArray(gamesData)) {
+            profileData.gamesCount = gamesData.length;
+          }
+        }
+      } catch (e) {
+        console.warn("Aviso ao buscar perfil público da GOG:", e);
+      }
+    }
+
+    const result = { success: true, profile: profileData };
+    gogCache.set(cacheKey, result, 10 * 60 * 1000);
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/gog/profile:", err?.message || err);
+    res.status(500).json({ error: "Erro interno no servidor ao buscar perfil da GOG." });
+  }
+});
+
+// 2. Get GOG Owned Games
+app.get("/api/gog/owned-games", async (req, res) => {
+  try {
+    const rawUser = (req.query.username as string) || "";
+    const username = parseGogUsername(rawUser);
+    const userId = (req.query.userId as string) || "";
+
+    const cacheKey = `gog:owned:${username || userId}`;
+    const cached = gogCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    let games: any[] = [];
+    if (username) {
+      try {
+        const gogRes = await fetchWithTimeout(`https://embed.gog.com/users/${encodeURIComponent(username)}/games`, {
+          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
+        }, 8000);
+        if (gogRes.ok) {
+          const rawGames = await gogRes.json();
+          if (Array.isArray(rawGames)) {
+            games = rawGames.map((g: any) => ({
+              id: g.id,
+              title: g.title,
+              playtime_minutes: g.playtime || 0,
+              last_played_timestamp: g.last_played ? Math.floor(new Date(g.last_played).getTime() / 1000) : undefined,
+              img_icon_url: g.image || g.cover,
+            }));
+          }
+        }
+      } catch (e) {
+        console.warn("Erro ao buscar biblioteca pública da GOG:", e);
+      }
+    }
+
+    const result = { success: true, count: games.length, games };
+    gogCache.set(cacheKey, result, 15 * 60 * 1000);
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/gog/owned-games:", err?.message || err);
+    res.status(500).json({ error: "Erro interno ao buscar jogos da GOG." });
+  }
+});
+
+// 3. Get GOG Achievements
+app.get("/api/gog/achievements", async (req, res) => {
+  try {
+    const gameId = req.query.gameId as string;
+    const username = (req.query.username as string) || "";
+
+    if (!gameId) {
+      res.status(400).json({ error: "ID do jogo na GOG é obrigatório." });
+      return;
+    }
+
+    const cacheKey = `gog:achievements:${gameId}:${username}`;
+    const cached = gogCache.get(cacheKey);
+    if (cached) {
+      res.json(cached);
+      return;
+    }
+
+    // Attempt fetching game product info from GOG catalog API
+    let gameName = "Jogo GOG";
+    try {
+      const prodRes = await fetchWithTimeout(`https://api.gog.com/products/${encodeURIComponent(gameId)}`, {}, 6000);
+      if (prodRes.ok) {
+        const prodData = await prodRes.json();
+        if (prodData && prodData.title) {
+          gameName = prodData.title;
+        }
+      }
+    } catch (e) {}
+
+    // Response structure
+    const result = {
+      success: true,
+      gameName,
+      achievements: [],
+      unlockedCount: 0,
+      totalCount: 0,
+      percentage: 0,
+    };
+
+    gogCache.set(cacheKey, result, 30 * 60 * 1000);
+    res.json(result);
+  } catch (err: any) {
+    console.warn(`Erro no proxy /api/gog/achievements para gameId ${req.query.gameId}:`, err?.message || err);
+    res.status(500).json({ error: "Erro interno ao buscar conquistas na GOG." });
+  }
+});
+
+// System Health & Performance Monitoring Endpoint
+app.get("/api/health", (req, res) => {
+  const memoryUsage = process.memoryUsage();
+  res.json({
+    status: "ok",
+    uptimeSeconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+    inFlightRequests: requestCoalescer.size,
+    memory: {
+      rssMb: Math.round(memoryUsage.rss / (1024 * 1024)),
+      heapTotalMb: Math.round(memoryUsage.heapTotal / (1024 * 1024)),
+      heapUsedMb: Math.round(memoryUsage.heapUsed / (1024 * 1024)),
+    },
+    cacheStats: {
+      hltb: { hits: hltbCache.hits, misses: hltbCache.misses, size: hltbCache.size },
+      metacritic: { hits: metacriticCache.hits, misses: metacriticCache.misses, size: metacriticCache.size },
+      wikipedia: { hits: wikiCache.hits, misses: wikiCache.misses, size: wikiCache.size },
+      gameMetadata: { hits: gameMetadataCache.hits, misses: gameMetadataCache.misses, size: gameMetadataCache.size },
+      imageProxy: { hits: imageProxyCache.hits, misses: imageProxyCache.misses, size: imageProxyCache.size },
+      mediaUrl: { hits: mediaUrlCache.hits, misses: mediaUrlCache.misses, size: mediaUrlCache.size },
+    },
+  });
+});
+
+// Sliding window rate limiter for AI text correction
+const textCorrectionTimestamps: number[] = [];
+
 // Endpoint for AI-powered game journal text correction
 app.post("/api/correct-text", express.json(), async (req, res) => {
+  const now = Date.now();
+  while (textCorrectionTimestamps.length > 0 && now - textCorrectionTimestamps[0] > 60000) {
+    textCorrectionTimestamps.shift();
+  }
+  if (textCorrectionTimestamps.length >= 20) {
+    res.status(429).json({
+      error: "Muitas solicitações de correção por IA enviadas em pouco tempo. Aguarde alguns segundos.",
+    });
+    return;
+  }
+  textCorrectionTimestamps.push(now);
+
   const { text, gameName } = req.body;
   if (!text) {
     res.status(400).json({ error: "O texto é obrigatório para correção." });
@@ -1392,6 +2233,117 @@ Diretrizes importantes:
   }
 });
 
+// Real-Time Server-Sent Events (SSE) Manager for Live Server Updates
+const sseClients = new Set<express.Response>();
+
+function broadcastSSE(event: string, data: any) {
+  const payload = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const client of sseClients) {
+    try {
+      client.write(payload);
+    } catch {
+      sseClients.delete(client);
+    }
+  }
+}
+
+// Broadcast server status periodically every 30 seconds if clients are connected
+setInterval(() => {
+  if (sseClients.size > 0) {
+    const memoryUsage = process.memoryUsage();
+    broadcastSSE("server_stats", {
+      timestamp: new Date().toISOString(),
+      uptimeSeconds: Math.floor(process.uptime()),
+      inFlightRequests: requestCoalescer.size,
+      connectedClients: sseClients.size,
+      memory: {
+        rssMb: Math.round(memoryUsage.rss / (1024 * 1024)),
+        heapTotalMb: Math.round(memoryUsage.heapTotal / (1024 * 1024)),
+        heapUsedMb: Math.round(memoryUsage.heapUsed / (1024 * 1024)),
+      },
+      cacheStats: {
+        hltb: hltbCache.size,
+        metacritic: metacriticCache.size,
+        wikipedia: wikiCache.size,
+        gameMetadata: gameMetadataCache.size,
+        imageProxy: imageProxyCache.size,
+        mediaUrl: mediaUrlCache.size,
+      },
+    });
+  }
+}, 30000);
+
+// Endpoint SSE para atualizações e notificações do servidor em tempo real
+app.get("/api/events", (req, res) => {
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache, no-transform");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  sseClients.add(res);
+
+  const initialPayload = {
+    type: "connected",
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    connectedClients: sseClients.size,
+    cacheStats: {
+      hltb: hltbCache.size,
+      metacritic: metacriticCache.size,
+      wikipedia: wikiCache.size,
+      gameMetadata: gameMetadataCache.size,
+      imageProxy: imageProxyCache.size,
+      mediaUrl: mediaUrlCache.size,
+    },
+  };
+
+  res.write(`event: connected\ndata: ${JSON.stringify(initialPayload)}\n\n`);
+
+  const heartbeatTimer = setInterval(() => {
+    try {
+      res.write(`event: ping\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`);
+    } catch {
+      clearInterval(heartbeatTimer);
+      sseClients.delete(res);
+    }
+  }, 25000);
+
+  req.on("close", () => {
+    clearInterval(heartbeatTimer);
+    sseClients.delete(res);
+  });
+
+  res.on("error", () => {
+    clearInterval(heartbeatTimer);
+    sseClients.delete(res);
+  });
+});
+
+// Endpoint para controle e limpeza manual de cache do servidor
+app.post("/api/cache/purge", express.json(), (req, res) => {
+  const { cacheName } = req.body || {};
+  if (cacheName === "hltb") hltbCache.clear();
+  else if (cacheName === "metacritic") metacriticCache.clear();
+  else if (cacheName === "wikipedia") wikiCache.clear();
+  else if (cacheName === "gameMetadata") gameMetadataCache.clear();
+  else if (cacheName === "imageProxy") imageProxyCache.clear();
+  else if (cacheName === "mediaUrl") mediaUrlCache.clear();
+  else if (!cacheName || cacheName === "all") {
+    hltbCache.clear();
+    metacriticCache.clear();
+    wikiCache.clear();
+    gameMetadataCache.clear();
+    imageProxyCache.clear();
+    mediaUrlCache.clear();
+  } else {
+    res.status(400).json({ error: "Nome de cache inválido." });
+    return;
+  }
+  broadcastSSE("cache_purged", { cacheName: cacheName || "all", timestamp: new Date().toISOString() });
+  res.json({ message: "Cache limpo com sucesso!", cacheName: cacheName || "all" });
+});
+
 // Vite middleware setup
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
@@ -1408,9 +2360,29 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  const server = app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
   });
+
+  // Configuração de Keep-Alive e Timeouts para estabilidade sob tráfego e proxy (Cloud Run / Nginx)
+  server.keepAliveTimeout = 65000;
+  server.headersTimeout = 66000;
+
+  // Handler para Graceful Shutdown no encerramento do container ou reinicialização
+  const shutdown = (signal: string) => {
+    console.log(`\n[Server Resilience] Recebido sinal ${signal}. Iniciando shutdown gracioso...`);
+    server.close(() => {
+      console.log("[Server Resilience] Conexões HTTP encerradas com sucesso.");
+      process.exit(0);
+    });
+    setTimeout(() => {
+      console.error("[Server Resilience] Forçando encerramento do processo após 10s.");
+      process.exit(1);
+    }, 10000);
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 startServer().catch((err) => {

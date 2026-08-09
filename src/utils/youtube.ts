@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getDriveAccessToken } from "./googleDrive";
+import { getDriveAccessToken, refreshDriveToken, signInWithGoogleDrive } from "./googleDrive";
+import { getVideoMimeType } from "./mediaUtils";
 
 /**
  * Checks if a URL is a valid YouTube link and extracts the embeddable format.
@@ -27,10 +28,65 @@ export function getYoutubeEmbedUrl(url: string): string | null {
 }
 
 /**
+ * Extracts the 11-character YouTube video ID from any YouTube URL format.
+ */
+export function getYoutubeVideoId(url: string): string | null {
+  if (!url) return null;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+  const match = url.match(regExp);
+  if (match && match[2] && match[2].length === 11) {
+    return match[2];
+  }
+  return null;
+}
+
+/**
  * Returns true if the URL is a YouTube link.
  */
 export function isYoutubeUrl(url: string): boolean {
   return !!getYoutubeEmbedUrl(url);
+}
+
+/**
+ * Checks whether YouTube API quota is available for video operations.
+ */
+export async function checkYoutubeQuota(customToken?: string): Promise<{ available: boolean; message?: string }> {
+  let token = customToken || getDriveAccessToken();
+  if (!token) {
+    return { available: true };
+  }
+
+  try {
+    const res = await fetch("https://www.googleapis.com/youtube/v3/playlists?mine=true&maxResults=1&part=id", {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (res.status === 403 || res.status === 429) {
+      const errText = await res.text();
+      if (
+        errText.includes("quotaExceeded") ||
+        errText.includes("dailyLimitExceeded") ||
+        errText.includes("rateLimitExceeded") ||
+        errText.includes("quota")
+      ) {
+        return {
+          available: false,
+          message: "⚠️ Cota diária da API do YouTube atingida. Aguarde a renovação da cota pelo Google para realizar novos envios."
+        };
+      }
+    }
+    return { available: true };
+  } catch (err: any) {
+    console.warn("Aviso na verificação de cota do YouTube:", err);
+    return { available: true };
+  }
+}
+
+export interface YoutubeUploadResult {
+  videoUrl: string;
+  videoId: string;
+  playlistId?: string;
+  playlistUrl?: string;
 }
 
 /**
@@ -40,22 +96,78 @@ export function isYoutubeUrl(url: string): boolean {
 export async function uploadVideoToYoutube(
   file: File,
   gameName: string,
-  onProgress?: (progressText: string) => void
-): Promise<string> {
-  const token = getDriveAccessToken();
+  entryTitle?: string,
+  gridPosition?: number,
+  onProgress?: (progressText: string) => void,
+  signal?: AbortSignal
+): Promise<string & YoutubeUploadResult> {
+  if (signal?.aborted) {
+    throw new DOMException("Upload YouTube cancelado pelo usuário", "AbortError");
+  }
+
+  let token = getDriveAccessToken();
+  
+  // Auto-refresh token if missing but previously connected
+  if (!token && localStorage.getItem("google_drive_connected") === "true") {
+    try {
+      token = await refreshDriveToken();
+    } catch (e) {
+      console.warn("Falha ao reautenticar sessão salva do Google:", e);
+    }
+  }
+
   if (!token) {
-    throw new Error("Você precisa estar conectado ao Google. Clique em 'Conectar Google Drive' no topo da página.");
+    try {
+      token = await signInWithGoogleDrive();
+    } catch (e: any) {
+      throw new Error("Você precisa estar conectado ao Google para enviar vídeos. Por favor, conecte sua conta.");
+    }
+  }
+
+  // Pre-check YouTube API Quota before processing heavy file
+  const quotaCheck = await checkYoutubeQuota(token);
+  if (!quotaCheck.available) {
+    throw new Error(quotaCheck.message || "Cota diária da API do YouTube excedida.");
+  }
+
+  let videoMimeType = getVideoMimeType(file);
+  if (!videoMimeType || videoMimeType.includes("matroska") || videoMimeType.includes("mkv")) {
+    videoMimeType = "video/mp4";
   }
 
   // 1. Initiate Resumable Upload Session
   onProgress?.("Iniciando sessão de upload no YouTube...");
   
+  const cleanGameName = (gameName || "Jogo Sem Nome").replace(/[<>]/g, "").trim();
+  const displayEntryTitle = (entryTitle ? entryTitle.trim() : `Diário (${new Date().toLocaleDateString("pt-BR")})`).replace(/[<>]/g, "");
+  const posNumber = gridPosition || 1;
+  
+  let rawTitle = `${cleanGameName} - ${displayEntryTitle} - Vídeo #${posNumber}`;
+  if (rawTitle.length > 95) {
+    rawTitle = rawTitle.substring(0, 92) + "...";
+  }
+  const videoTitle = rawTitle;
+
+  const videoDesc = 
+    `Vídeo de gameplay do jogo "${cleanGameName}".\n` +
+    `Entrada do Diário: ${displayEntryTitle}\n` +
+    `Posição no Grid de Mídias: #${posNumber}\n` +
+    `Data de Envio: ${new Date().toLocaleString("pt-BR")}\n\n` +
+    `Gerenciado automaticamente pela sua Biblioteca de Jogos.`;
+
+  const safeTags = [
+    cleanGameName.substring(0, 45),
+    "Gaming Diary",
+    "Biblioteca de Jogos",
+    `Vídeo ${posNumber}`
+  ].filter((t) => typeof t === "string" && t.trim().length > 0);
+
   const metadata = {
     snippet: {
-      title: `${gameName} - Diário de Jogo (${new Date().toLocaleDateString("pt-BR")})`,
-      description: `Vídeo enviado automaticamente para o diário do jogo "${gameName}" na minha Biblioteca de Jogos.\n\nEnviado em: ${new Date().toLocaleString("pt-BR")}`,
+      title: videoTitle,
+      description: videoDesc.replace(/[<>]/g, ""),
       categoryId: "20", // Gaming Category ID
-      tags: [gameName, "Gaming Diary", "Biblioteca de Jogos"]
+      tags: safeTags
     },
     status: {
       privacyStatus: "unlisted", // Keep it unlisted by default so it's private/accessible only via link
@@ -63,23 +175,85 @@ export async function uploadVideoToYoutube(
     }
   };
 
-  const initResponse = await fetch(
-    "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json; charset=UTF-8",
-        "X-Upload-Content-Length": file.size.toString(),
-        "X-Upload-Content-Type": file.type
-      },
-      body: JSON.stringify(metadata)
-    }
-  );
+  let initResponse: Response | null = null;
+  let initError: any = null;
 
-  if (!initResponse.ok) {
-    const errText = await initResponse.text();
-    throw new Error(`Falha ao iniciar envio para o YouTube: ${initResponse.status} - ${errText}`);
+  for (let initAttempt = 1; initAttempt <= 3; initAttempt++) {
+    try {
+      // On retry 2, use fallback simple metadata and standard video/mp4 header
+      const payloadMetadata = initAttempt === 2 ? {
+        snippet: {
+          title: videoTitle.substring(0, 80),
+          description: `Vídeo de gameplay - ${cleanGameName}`
+        },
+        status: { privacyStatus: "unlisted" }
+      } : metadata;
+
+      const headerMime = initAttempt >= 2 ? "video/mp4" : videoMimeType;
+
+      initResponse = await fetch(
+        "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json; charset=UTF-8",
+            "X-Upload-Content-Length": (file.size || 0).toString(),
+            "X-Upload-Content-Type": headerMime
+          },
+          body: JSON.stringify(payloadMetadata)
+        }
+      );
+
+      if (initResponse.status === 401) {
+        if (initAttempt === 1) {
+          token = await refreshDriveToken();
+          continue;
+        } else if (initAttempt === 2) {
+          token = await signInWithGoogleDrive();
+          continue;
+        }
+      }
+
+      if (initResponse.ok) {
+        break;
+      }
+
+      // If status is 400 Bad Request, attempt next attempt with simplified metadata
+      if (initResponse.status === 400 && initAttempt < 3) {
+        console.warn(`Tentativa ${initAttempt} de envio ao YouTube retornou 400. Tentando fallback simples...`);
+        await new Promise((r) => setTimeout(r, 1000));
+        continue;
+      }
+    } catch (err: any) {
+      initError = err;
+      console.warn(`Tentativa ${initAttempt} de iniciar upload no YouTube falhou:`, err);
+      if (initAttempt === 1) {
+        try {
+          token = await refreshDriveToken();
+        } catch {
+          // Ignore refresh fail on attempt 1
+        }
+      }
+    }
+  }
+
+  if (!initResponse || !initResponse.ok) {
+    let errText = initError?.message || "Erro de conexão";
+    if (initResponse) {
+      try {
+        errText = await initResponse.text();
+      } catch {
+        errText = `HTTP ${initResponse.status}`;
+      }
+    }
+    if (errText.includes("youtubeSignupRequired") || errText.includes("channel")) {
+      throw new Error("Sua conta do Google ainda não possui um canal ativo no YouTube. Crie um canal no YouTube ou acesse youtube.com para ativá-lo.");
+    }
+    if (errText.toLowerCase().includes("invalid") || errText.includes("400")) {
+      throw new Error("O YouTube recusou os dados do vídeo (400 Bad Request / Request is invalid). Verifique se sua conta do Google possui canal no YouTube ativo.");
+    }
+    throw new Error(`Falha ao iniciar envio para o YouTube: ${errText}`);
   }
 
   const uploadUrl = initResponse.headers.get("Location");
@@ -87,33 +261,104 @@ export async function uploadVideoToYoutube(
     throw new Error("Não foi possível obter a URL de upload do YouTube a partir dos cabeçalhos da resposta.");
   }
 
-  // 2. Upload the binary data
-  onProgress?.("Enviando arquivo de vídeo para os servidores do YouTube...");
+  // 2. Upload binary data using resilient chunking (10MB chunks)
+  onProgress?.("Enviando arquivo de vídeo para o YouTube...");
   
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": file.type
-    },
-    body: file
-  });
+  const totalBytes = file.size;
+  const CHUNK_SIZE = 10 * 1024 * 1024; // 10MB chunk (multiple of 256KB required by YouTube)
+  let start = 0;
+  let videoId = "";
 
-  if (!uploadResponse.ok) {
-    const errText = await uploadResponse.text();
-    throw new Error(`Erro na transferência de dados para o YouTube: ${uploadResponse.status} - ${errText}`);
+  if (totalBytes === 0) {
+    const res = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: { "Content-Type": videoMimeType || "video/mp4" },
+      body: file
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Erro na transferência do arquivo para o YouTube: ${res.status} - ${errText}`);
+    }
+    const data = await res.json();
+    videoId = data.id;
+  } else {
+    while (start < totalBytes) {
+      const end = Math.min(start + CHUNK_SIZE, totalBytes);
+      const chunk = file.slice(start, end);
+      const pct = Math.round((end / totalBytes) * 100);
+
+      onProgress?.(`Enviando vídeo para o YouTube (${pct}%)...`);
+
+      let response: Response | null = null;
+      let lastError: any = null;
+
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          // DO NOT include Content-Length in fetch headers (it's a forbidden header name in browser fetch)
+          response = await fetch(uploadUrl, {
+            method: "PUT",
+            headers: {
+              "Content-Type": videoMimeType || "application/octet-stream",
+              "Content-Range": `bytes ${start}-${end - 1}/${totalBytes}`
+            },
+            body: chunk
+          });
+
+          if (response.status === 308 || response.ok) {
+            break;
+          } else if (response.status >= 500 || response.status === 429) {
+            console.warn(`Tentativa ${attempt} falhou com status ${response.status}. Tentando novamente...`);
+            await new Promise((r) => setTimeout(r, 2000 * attempt));
+          } else {
+            // Unrecoverable HTTP status (4xx other than 308)
+            const errText = await response.text();
+            throw new Error(`Servidor do YouTube recusou o envio: ${response.status} - ${errText}`);
+          }
+        } catch (fetchErr: any) {
+          lastError = fetchErr;
+          console.warn(`Tentativa ${attempt} de envio de bloco do vídeo falhou:`, fetchErr);
+          if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, 2000 * attempt));
+          }
+        }
+      }
+
+      if (!response && lastError) {
+        throw new Error(`Erro de conexão ao enviar vídeo para o YouTube: ${lastError.message || lastError}`);
+      }
+
+      if (response && response.ok) {
+        // Upload finished!
+        const videoData = await response.json();
+        videoId = videoData.id;
+        break;
+      }
+
+      if (response && response.status === 308) {
+        // Chunk uploaded successfully, move to next range
+        start = end;
+      } else {
+        const errText = response ? await response.text() : "Falha desconhecida";
+        throw new Error(`Erro na transferência de dados para o YouTube: ${response?.status || "sem resposta"} - ${errText}`);
+      }
+    }
   }
 
-  const videoData = await uploadResponse.json();
-  const videoId = videoData.id;
   if (!videoId) {
     throw new Error("O YouTube não retornou um ID de vídeo válido após o upload.");
   }
 
   onProgress?.("Vídeo enviado com sucesso! Configurando a playlist do jogo...");
 
+  let playlistId = "";
+  let playlistUrl = "";
+
   try {
     // 3. Find or Create Playlist for this Game
-    const playlistId = await findOrCreateGamePlaylist(gameName, token, onProgress);
+    playlistId = await findOrCreateGamePlaylist(gameName, token, onProgress);
+    if (playlistId) {
+      playlistUrl = `https://www.youtube.com/playlist?list=${playlistId}`;
+    }
 
     // 4. Associate the uploaded video with this playlist
     onProgress?.("Adicionando vídeo à playlist do jogo...");
@@ -125,7 +370,13 @@ export async function uploadVideoToYoutube(
   }
 
   onProgress?.("Upload concluído com sucesso!");
-  return `https://www.youtube.com/watch?v=${videoId}`;
+  const mainVideoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const resultObj = new String(mainVideoUrl) as string & YoutubeUploadResult;
+  resultObj.videoUrl = mainVideoUrl;
+  resultObj.videoId = videoId;
+  resultObj.playlistId = playlistId;
+  resultObj.playlistUrl = playlistUrl;
+  return resultObj;
 }
 
 /**

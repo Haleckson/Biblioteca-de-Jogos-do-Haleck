@@ -3,7 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { Game, DiaryEntry, splitEntities } from "./types";
 import { SAMPLE_GAMES, DEFAULT_TAGS, DEFAULT_GENRES, COVER_BANK } from "./data";
 import StatsCards from "./components/StatsCards";
@@ -12,23 +13,44 @@ import GameFormModal from "./components/GameFormModal";
 import GameDetailDrawer from "./components/GameDetailDrawer";
 import GameEstimateModal from "./components/GameEstimateModal";
 import { CustomAlert, CustomConfirm, CustomPasswordPrompt, CustomDriveConnectPrompt } from "./components/CustomDialogs";
-import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock, Mail, Move, ArrowUp, RotateCcw, Key, Settings, BarChart3 } from "lucide-react";
+import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock, Mail, Move, ArrowUp, RotateCcw, Key, Settings, BarChart3, Sparkles, Wifi, WifiOff } from "lucide-react";
+import GlobalSearchModal from "./components/GlobalSearchModal";
 import { DashboardView } from "./components/DashboardView";
-import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, auth } from "./utils/firebase";
+import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, verifyGameDataIntegrity, auth } from "./utils/firebase";
 import { uploadToImgBB, getCustomImgBBKey } from "./utils/imgbb";
 import {
   signInWithGoogleDrive,
   isDriveAuthenticated,
   signOutDrive,
-  backupLibraryToDrive
+  backupLibraryToDrive,
+  backupSingleGameToDriveDeep
 } from "./utils/googleDrive";
 import GmailModal from "./components/GmailModal";
 import { isGmailAuthenticated } from "./utils/gmail";
 import ImgBBModal from "./components/ImgBBModal";
 import WelcomeRoleModal from "./components/WelcomeRoleModal";
+import { GlobalUploadProgressWidget } from "./components/GlobalUploadProgressWidget";
+import { mediaUploadQueueManager } from "./utils/mediaUploadManager";
 import SiteSettingsModal from "./components/SiteSettingsModal";
+import { formatSteamPlaytime, fetchSteamOwnedGames, fetchSteamAchievements, fetchSteamProfile, SteamPlayerSummary } from "./utils/steamApi";
+import { fetchGogOwnedGames, fetchGogAchievements, formatGogPlaytime } from "./utils/gogApi";
 import ImageZoomLightbox from "./components/ImageZoomLightbox";
+import { repairAllGameMedias, recoverAndReindexImgBBMedias, deduplicateAndSanitizeGameMedias } from "./utils/mediaRepair";
 import { GlobalTooltip } from "./components/GlobalTooltip";
+import { LiveSessionWidget, LiveSessionHeaderBadge } from "./components/LiveSessionWidget";
+import { GamerRetrospectiveModal } from "./components/GamerRetrospectiveModal";
+import { runSyncDiagnostic, DiagnosticResult } from "./utils/syncDiagnostic";
+import { SyncDiagnosticModal } from "./components/SyncDiagnosticModal";
+import { ToastContainer } from "./components/ToastContainer";
+import { showToast } from "./utils/toast";
+import { moveToTrash } from "./utils/trashService";
+import { addToSyncQueue, initSyncQueueListener } from "./utils/syncQueue";
+import TrashModal from "./components/TrashModal";
+import SocialCardModal from "./components/SocialCardModal";
+import StorytellingModal from "./components/StorytellingModal";
+import KanbanView, { mapKanbanToStatus } from "./components/KanbanView";
+import { restoreTrashItem } from "./utils/trashService";
+import { playRetroSound } from "./utils/audioEffects";
 
 const sortAlphabetically = (arr: string[]) => {
   return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
@@ -241,6 +263,107 @@ export default function App() {
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [estimateGameModal, setEstimateGameModal] = useState<Game | null>(null);
 
+  // New Features Modal & View State
+  const [isTrashOpen, setIsTrashOpen] = useState(false);
+  const [socialCardGame, setSocialCardGame] = useState<Game | null>(null);
+  const [storytellingGame, setStorytellingGame] = useState<Game | null>(null);
+  const [dashboardViewMode, setDashboardViewMode] = useState<"grid" | "kanban">("grid");
+
+  const handleRestoreGameFromTrash = (game: Game) => {
+    setGames((prev) => {
+      const exists = prev.some((g) => g.id === game.id);
+      if (exists) return prev;
+      const updated = [game, ...prev];
+      saveToFirebase(updated, globalTags, globalGenres).catch(() => {});
+      return updated;
+    });
+    playRetroSound("statusChange");
+    showToast({
+      title: "Jogo Restaurado 🔄",
+      message: `"${game.name}" foi restaurado com sucesso.`,
+      type: "success",
+    });
+  };
+
+  const handleRestoreDiaryEntryFromTrash = (gameId: string, entry: DiaryEntry) => {
+    setGames((prev) => {
+      const updated = prev.map((g) => {
+        if (g.id !== gameId) return g;
+        const diary = g.diary || [];
+        const exists = diary.some((e) => e.id === entry.id);
+        const newDiary = exists ? diary : [...diary, entry];
+        return { ...g, diary: newDiary };
+      });
+      saveToFirebase(updated, globalTags, globalGenres).catch(() => {});
+      return updated;
+    });
+    playRetroSound("statusChange");
+    showToast({
+      title: "Entrada Restaurada 🔄",
+      message: `A entrada do diário foi restaurada.`,
+      type: "success",
+    });
+  };
+
+  const handleRestoreMediaFromTrash = (gameId: string, diaryEntryId: string, media: any) => {
+    setGames((prev) => {
+      const updated = prev.map((g) => {
+        if (g.id !== gameId) return g;
+        const newDiary = (g.diary || []).map((e) => {
+          if (e.id !== diaryEntryId) return e;
+          const medias = e.medias || [];
+          const exists = medias.some((m) => m.src === media.src);
+          return exists ? e : { ...e, medias: [...medias, media] };
+        });
+        return { ...g, diary: newDiary };
+      });
+      saveToFirebase(updated, globalTags, globalGenres).catch(() => {});
+      return updated;
+    });
+    playRetroSound("statusChange");
+    showToast({
+      title: "Mídia Restaurada 🔄",
+      message: "Mídia restaurada com sucesso no diário.",
+      type: "success",
+    });
+  };
+
+  // Global Search Modal state
+  const [isGlobalSearchOpen, setIsGlobalSearchOpen] = useState(false);
+  const [selectedSearchDiaryId, setSelectedSearchDiaryId] = useState<string | null>(null);
+  const [isRetrospectiveOpen, setIsRetrospectiveOpen] = useState(false);
+  const [selectedSearchOpenDictionary, setSelectedSearchOpenDictionary] = useState<boolean>(false);
+
+  // Diagnostic Modal state
+  const [isDiagnosticModalOpen, setIsDiagnosticModalOpen] = useState(false);
+  const [diagnosticResult, setDiagnosticResult] = useState<DiagnosticResult | null>(null);
+  const [isDiagnosticLoading, setIsDiagnosticLoading] = useState(false);
+
+  const handleRunDiagnostic = async () => {
+    setIsDiagnosticModalOpen(true);
+    setIsDiagnosticLoading(true);
+    try {
+      const res = await runSyncDiagnostic(games);
+      setDiagnosticResult(res);
+    } catch (err: any) {
+      console.error("Erro ao executar diagnóstico:", err);
+    } finally {
+      setIsDiagnosticLoading(false);
+    }
+  };
+
+  // Global Keyboard Shortcut (Ctrl+K or Cmd+K) to toggle Global Search Modal
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setIsGlobalSearchOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+
   // Custom alert & confirm states
   const [alertState, setAlertState] = useState({ isOpen: false, title: "", message: "" });
   const [confirmState, setConfirmState] = useState({
@@ -265,9 +388,46 @@ export default function App() {
     });
   };
 
+  const triggerAlert = useCallback((title: string, message: string) => {
+    const isError = /erro|falha|campo|inválid/i.test(title);
+    const isWarning = /aviso|alerta|parcial|atenção/i.test(title);
+    const isSuccess = /sucesso|concluíd|carregad|restaurad|salv|editad|excluíd/i.test(title);
+    const type = isError ? "error" : isWarning ? "warning" : isSuccess ? "success" : "info";
+
+    showToast({ title, message, type });
+  }, []);
+
+  const triggerConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmState({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        setConfirmState((prev) => ({ ...prev, isOpen: false }));
+        onConfirm();
+      }
+    });
+  };
+
   // Synced local storage effects
   useEffect(() => {
+    mediaUploadQueueManager.setGameUpdateCallback((gameId, updateFn) => {
+      setGames((prevGames) =>
+        prevGames.map((g) => (g.id === gameId ? updateFn(g) : g))
+      );
+    });
+  }, []);
+
+  const gamesRef = useRef(games);
+  useEffect(() => {
+    gamesRef.current = games;
     localStorage.setItem("gameLibrary", JSON.stringify(games));
+    console.log(`[GamesStateLog] Estado 'games' atualizado. Total de jogos: ${games.length}`, {
+      isEmpty: games.length === 0,
+      isComplete: games.length > 0,
+      gamesCount: games.length,
+      sampleGameNames: games.slice(0, 5).map((g) => g.name),
+    });
   }, [games]);
 
   useEffect(() => {
@@ -282,45 +442,36 @@ export default function App() {
     localStorage.setItem("globalCover", coverImage);
   }, [coverImage]);
 
-  // Synchronize and clean up game genres and tags to guarantee uniqueness and no orphans
+  // Synchronize and collect global tags and genres from games list automatically
   useEffect(() => {
-    const genresSet = new Set(globalGenres);
-    const tagsSet = new Set(globalTags);
-    let hasChanged = false;
+    let tagsAdded = false;
+    let genresAdded = false;
 
-    const sanitizedGames = games.map((game) => {
-      // Keep only unique, non-falsy genres that exist in the global genres list
-      const uniqueGenres = Array.from(new Set(game.genre || []))
-        .filter((g) => genresSet.has(g));
+    const tagsSet = new Set<string>(globalTags);
+    const genresSet = new Set<string>(globalGenres);
 
-      // Keep only unique, non-falsy tags that exist in the global tags list
-      const uniqueTags = Array.from(new Set(game.tags || []))
-        .filter((t) => tagsSet.has(t));
-
-      // Detect difference
-      const genresDiff = !game.genre || 
-        uniqueGenres.length !== game.genre.length || 
-        uniqueGenres.some((val, idx) => val !== game.genre[idx]);
-
-      const tagsDiff = !game.tags || 
-        uniqueTags.length !== game.tags.length || 
-        uniqueTags.some((val, idx) => val !== game.tags[idx]);
-
-      if (genresDiff || tagsDiff) {
-        hasChanged = true;
-        return {
-          ...game,
-          genre: uniqueGenres,
-          tags: uniqueTags,
-        };
-      }
-      return game;
+    games.forEach((game) => {
+      (game.tags || []).forEach((tag) => {
+        if (tag && !tagsSet.has(tag)) {
+          tagsSet.add(tag);
+          tagsAdded = true;
+        }
+      });
+      (game.genre || []).forEach((gen) => {
+        if (gen && !genresSet.has(gen)) {
+          genresSet.add(gen);
+          genresAdded = true;
+        }
+      });
     });
 
-    if (hasChanged) {
-      setGames(sanitizedGames);
+    if (tagsAdded) {
+      setGlobalTags(sortAlphabetically(Array.from(tagsSet)));
     }
-  }, [globalGenres, globalTags, games]);
+    if (genresAdded) {
+      setGlobalGenres(sortAlphabetically(Array.from(genresSet)));
+    }
+  }, [games]);
 
   // Firebase Realtime Synchronization refs and hooks
   const isIncomingFirebaseUpdate = useRef(false);
@@ -334,6 +485,54 @@ export default function App() {
   const [gmailTargetGame, setGmailTargetGame] = useState<Game | null>(null);
   const [imgBBModalOpen, setImgBBModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [steamModalOpen, setSteamModalOpen] = useState(false);
+
+  const handleImportSteamGame = (newGameData: Partial<Game>) => {
+    const newGameObj: Game = {
+      id: `game-steam-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+      name: newGameData.name || "Novo Jogo Steam",
+      platform: newGameData.platform || "PC (Steam)",
+      status: newGameData.status || ["Jogando"],
+      genre: newGameData.genre || ["PC"],
+      tags: newGameData.tags || ["Steam"],
+      cover: newGameData.cover || "https://images.unsplash.com/photo-1550745165-9bc0b252726f?w=600&auto=format&fit=crop&q=80",
+      icon: newGameData.icon || "🎮",
+      iconType: newGameData.iconType || "emoji",
+      rating: newGameData.rating || 0,
+      startDate: newGameData.startDate || new Date().toISOString().slice(0, 10),
+      endDate: "",
+      releaseDate: "",
+      playtime: newGameData.playtime || "0h",
+      series: "",
+      publisher: "Steam",
+      diary: [],
+      steamAppId: newGameData.steamAppId,
+      steamPlaytimeMinutes: newGameData.steamPlaytimeMinutes,
+      steamLastPlayedTimestamp: newGameData.steamLastPlayedTimestamp,
+      steamAchievementsCount: newGameData.steamAchievementsCount,
+      steamAchievementsTotal: newGameData.steamAchievementsTotal,
+    };
+
+    setGames((prev) => [newGameObj, ...prev]);
+    setHasUnsavedChanges(true);
+  };
+
+  const handleUpdateGameSteamPlaytime = (gameId: string, steamPlaytimeMins: number, appid: number) => {
+    setGames((prev) =>
+      prev.map((g) => {
+        if (g.id === gameId) {
+          return {
+            ...g,
+            steamAppId: appid,
+            steamPlaytimeMinutes: steamPlaytimeMins,
+            playtime: formatSteamPlaytime(steamPlaytimeMins),
+          };
+        }
+        return g;
+      })
+    );
+    setHasUnsavedChanges(true);
+  };
   const [drivePromptOpen, setDrivePromptOpen] = useState(false);
   const [globalZoomImage, setGlobalZoomImage] = useState<{ src: string; allImages?: string[]; title?: string } | null>(null);
   const [welcomeModalOpen, setWelcomeModalOpen] = useState<boolean>(() => {
@@ -384,6 +583,165 @@ export default function App() {
   });
 
   const [showScrollTop, setShowScrollTop] = useState(false);
+  const [isBatchSyncingSteam, setIsBatchSyncingSteam] = useState(false);
+  const [isBatchSyncingGog, setIsBatchSyncingGog] = useState(false);
+  const [steamProfile, setSteamProfile] = useState<SteamPlayerSummary | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadSteamProfile = async () => {
+      try {
+        const prof = await fetchSteamProfile();
+        if (mounted && prof) {
+          setSteamProfile(prof);
+        }
+      } catch (e) {
+        // ignore profile error
+      }
+    };
+    loadSteamProfile();
+    const interval = setInterval(loadSteamProfile, 2 * 60 * 1000);
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleBatchSyncSteam = async () => {
+    const steamLinkedGames = games.filter((g) => g.steamAppId || (g.steamPlaytimeMinutes && g.steamPlaytimeMinutes > 0));
+    if (steamLinkedGames.length === 0) {
+      triggerAlert("Nenhum Jogo Vinculado", "Não há jogos com ID da Steam na sua biblioteca para sincronizar.");
+      return;
+    }
+
+    setIsBatchSyncingSteam(true);
+    try {
+      const ownedList = await fetchSteamOwnedGames();
+      let updatedCount = 0;
+
+      const newGames = await Promise.all(
+        games.map(async (g) => {
+          if (!g.steamAppId) return g;
+          const match = ownedList.find((o) => o.appid === g.steamAppId || String(o.appid) === String(g.steamAppId));
+          let updated = { ...g };
+          if (match) {
+            updated.steamPlaytimeMinutes = match.playtime_forever;
+            if (match.rtime_last_played) {
+              updated.steamLastPlayedTimestamp = match.rtime_last_played;
+            }
+          }
+          try {
+            const ach = await fetchSteamAchievements(g.steamAppId);
+            if (ach) {
+              const prevCount = g.steamAchievementsCount;
+              const currentCount = ach.unlockedCount;
+              if (prevCount !== undefined && currentCount > prevCount) {
+                const diff = currentCount - prevCount;
+                showToast({
+                  title: `🏆 Novas Conquistas em "${g.name}"!`,
+                  message: `Você conquistou +${diff} nova(s) conquista(s)! Total: ${currentCount} / ${ach.totalCount}`,
+                  type: "achievement",
+                  duration: 8000,
+                });
+              }
+              updated.steamAchievementsCount = ach.unlockedCount;
+              updated.steamAchievementsTotal = ach.totalCount;
+            }
+          } catch {
+            // Ignore individual achievement fetch failure
+          }
+          updatedCount++;
+          return updated;
+        })
+      );
+
+      setGames(newGames);
+      triggerAlert(
+        "Sincronização em Lote Concluída",
+        `Sucesso! Dados e estatísticas da Steam sincronizados para ${updatedCount} ${updatedCount === 1 ? "jogo" : "jogos"}.`
+      );
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro na Sincronização em Lote", "Não foi possível buscar a lista de jogos do usuário na Steam Web API.");
+    } finally {
+      setIsBatchSyncingSteam(false);
+    }
+  };
+
+  const handleBatchSyncGog = async () => {
+    const gogLinkedGames = games.filter(
+      (g) => g.integrationPlatform === "gog" || g.gogGameId || (g.gogPlaytimeMinutes && g.gogPlaytimeMinutes > 0)
+    );
+    if (gogLinkedGames.length === 0) {
+      triggerAlert("Nenhum Jogo GOG Vinculado", "Não há jogos com dados ou ID da GOG na sua biblioteca para sincronizar.");
+      return;
+    }
+
+    setIsBatchSyncingGog(true);
+    try {
+      const ownedList = await fetchGogOwnedGames();
+      let updatedCount = 0;
+
+      const newGames = await Promise.all(
+        games.map(async (g) => {
+          if (g.integrationPlatform !== "gog" && !g.gogGameId) return g;
+          const match = ownedList.find(
+            (o) => String(o.id) === String(g.gogGameId) || o.title.toLowerCase() === g.name.toLowerCase()
+          );
+          let updated = { ...g };
+          if (match) {
+            updated.gogPlaytimeMinutes = match.playtime_minutes;
+            if (match.last_played_timestamp) {
+              updated.gogLastPlayedTimestamp = match.last_played_timestamp;
+            }
+            if (!updated.gogGameId) {
+              updated.gogGameId = String(match.id);
+            }
+            // Update main playtime string if GOG is the primary integration platform
+            if (g.integrationPlatform === "gog") {
+              updated.playtime = formatGogPlaytime(match.playtime_minutes);
+            }
+          }
+          try {
+            if (updated.gogGameId) {
+              const ach = await fetchGogAchievements(updated.gogGameId);
+              if (ach) {
+                const prevCount = g.gogAchievementsCount;
+                const currentCount = ach.unlockedCount;
+                if (prevCount !== undefined && currentCount > prevCount) {
+                  const diff = currentCount - prevCount;
+                  showToast({
+                    title: `🏆 Novas Conquistas GOG em "${g.name}"!`,
+                    message: `Você conquistou +${diff} nova(s) conquista(s) na GOG! Total: ${currentCount} / ${ach.totalCount}`,
+                    type: "achievement",
+                    duration: 8000,
+                  });
+                }
+                updated.gogAchievementsCount = ach.unlockedCount;
+                updated.gogAchievementsTotal = ach.totalCount;
+              }
+            }
+          } catch {
+            // Ignore individual achievement fetch failure
+          }
+          updatedCount++;
+          return updated;
+        })
+      );
+
+      setGames(newGames);
+      setHasUnsavedChanges(true);
+      triggerAlert(
+        "Sincronização em Lote GOG Concluída",
+        `Sucesso! Tempo de jogo e conquistas da GOG Galaxy sincronizados para ${updatedCount} ${updatedCount === 1 ? "jogo" : "jogos"}.`
+      );
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro na Sincronização GOG", "Não foi possível buscar a biblioteca GOG do usuário.");
+    } finally {
+      setIsBatchSyncingGog(false);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -394,27 +752,40 @@ export default function App() {
   }, [visibleCount]);
 
   useEffect(() => {
-    const handleScroll = () => {
+    let ticking = false;
+    const updateScrollTopState = () => {
+      let isPastThreshold = false;
       if (detailGameId !== null) {
         const drawerScrollable = document.querySelector(".drawer-scrollable-container");
         if (drawerScrollable) {
-          setShowScrollTop(drawerScrollable.scrollTop > 300);
-          return;
+          isPastThreshold = drawerScrollable.scrollTop > 300;
+        } else {
+          isPastThreshold = window.scrollY > 400;
         }
+      } else {
+        isPastThreshold = window.scrollY > 400;
       }
-      setShowScrollTop(window.scrollY > 400);
+      setShowScrollTop((prev) => (prev !== isPastThreshold ? isPastThreshold : prev));
+      ticking = false;
     };
 
-    window.addEventListener("scroll", handleScroll);
+    const handleScroll = () => {
+      if (!ticking) {
+        window.requestAnimationFrame(updateScrollTopState);
+        ticking = true;
+      }
+    };
+
+    window.addEventListener("scroll", handleScroll, { passive: true });
 
     let drawerEl: Element | null = null;
     const interval = setInterval(() => {
       const el = document.querySelector(".drawer-scrollable-container");
       if (el && el !== drawerEl) {
         drawerEl = el;
-        el.addEventListener("scroll", handleScroll);
+        el.addEventListener("scroll", handleScroll, { passive: true });
       }
-    }, 250);
+    }, 500);
 
     return () => {
       window.removeEventListener("scroll", handleScroll);
@@ -537,75 +908,78 @@ export default function App() {
 
     try {
       let gamesUpdated = false;
-      const processedGames = await Promise.all(
-        games.map(async (game) => {
-          let gameUpdated = false;
-          let updatedCover = game.cover;
-          let updatedIcon = game.icon;
+      const processedGames = [];
 
-          // Check if cover is base64
-          if (game.cover && game.cover.startsWith("data:")) {
-            try {
-              setBackupStatus(`Enviando capa de ${game.name}...`);
-              const res = await uploadToImgBB(game.cover, `${game.name}_cover`);
-              updatedCover = res.url;
-              gameUpdated = true;
-            } catch (err) {
-              console.error(`Falha ao carregar a capa do jogo ${game.name} para o ImgBB:`, err);
-            }
+      for (let i = 0; i < games.length; i++) {
+        const game = games[i];
+        let gameUpdated = false;
+        let updatedCover = game.cover;
+        let updatedIcon = game.icon;
+
+        // Check if cover is base64 or blob
+        if (game.cover && (game.cover.startsWith("data:") || game.cover.startsWith("blob:"))) {
+          try {
+            setBackupStatus(`Enviando capa de ${game.name} (${i + 1}/${games.length})...`);
+            const res = await uploadToImgBB(game.cover, `${game.name}_cover`);
+            updatedCover = res.url;
+            gameUpdated = true;
+          } catch (err) {
+            console.error(`Falha ao carregar a capa do jogo ${game.name} para o ImgBB:`, err);
           }
+        }
 
-          // Check if icon is base64 upload
-          if (game.icon && game.icon.startsWith("data:") && game.iconType === "upload") {
-            try {
-              setBackupStatus(`Enviando ícone de ${game.name}...`);
-              const res = await uploadToImgBB(game.icon, `${game.name}_icon`);
-              updatedIcon = res.url;
-              gameUpdated = true;
-            } catch (err) {
-              console.error(`Falha ao carregar o ícone do jogo ${game.name} para o ImgBB:`, err);
-            }
+        // Check if icon is base64 or blob upload
+        if (game.icon && (game.icon.startsWith("data:") || game.icon.startsWith("blob:")) && game.iconType === "upload") {
+          try {
+            setBackupStatus(`Enviando ícone de ${game.name}...`);
+            const res = await uploadToImgBB(game.icon, `${game.name}_icon`);
+            updatedIcon = res.url;
+            gameUpdated = true;
+          } catch (err) {
+            console.error(`Falha ao carregar o ícone do jogo ${game.name} para o ImgBB:`, err);
           }
+        }
 
-          // Check diary entry media items for base64 data
-          const updatedDiary = await Promise.all(
-            (game.diary || []).map(async (entry) => {
-              let entryUpdated = false;
-              const updatedMedias = await Promise.all(
-                (entry.medias || []).map(async (media, mediaIdx) => {
-                  if (media.src && media.src.startsWith("data:")) {
-                    try {
-                      setBackupStatus(`Enviando imagem do diário de ${game.name}...`);
-                      const res = await uploadToImgBB(media.src, `${game.name}_diario_${mediaIdx + 1}`);
-                      entryUpdated = true;
-                      return { ...media, src: res.url, deleteUrl: res.deleteUrl };
-                    } catch (err) {
-                      console.error(`Falha ao carregar imagem do diário do jogo ${game.name} para o ImgBB:`, err);
-                    }
-                  }
-                  return media;
-                })
-              );
+        // Check diary entry media items for base64 or blob data
+        const updatedDiary = [];
+        for (const entry of game.diary || []) {
+          let entryUpdated = false;
+          const updatedMedias = [];
 
-              if (entryUpdated) {
-                gameUpdated = true;
+          for (let mediaIdx = 0; mediaIdx < (entry.medias || []).length; mediaIdx++) {
+            const media = entry.medias![mediaIdx];
+            if (media.src && (media.src.startsWith("data:") || media.src.startsWith("blob:")) && !media.isVideo) {
+              try {
+                setBackupStatus(`Enviando foto do diário de ${game.name}...`);
+                const res = await uploadToImgBB(media.src, `${game.name}_diario_${mediaIdx + 1}`);
+                entryUpdated = true;
+                updatedMedias.push({ ...media, src: res.url, deleteUrl: res.deleteUrl || media.deleteUrl });
+              } catch (err) {
+                console.error(`Falha ao carregar imagem do diário do jogo ${game.name} para o ImgBB:`, err);
+                updatedMedias.push(media);
               }
-              return { ...entry, medias: updatedMedias };
-            })
-          );
-
-          if (gameUpdated) {
-            gamesUpdated = true;
+            } else {
+              updatedMedias.push(media);
+            }
           }
 
-          return {
-            ...game,
-            cover: updatedCover,
-            icon: updatedIcon,
-            diary: updatedDiary
-          };
-        })
-      );
+          if (entryUpdated) {
+            gameUpdated = true;
+          }
+          updatedDiary.push({ ...entry, medias: updatedMedias });
+        }
+
+        if (gameUpdated) {
+          gamesUpdated = true;
+        }
+
+        processedGames.push({
+          ...game,
+          cover: updatedCover,
+          icon: updatedIcon,
+          diary: updatedDiary
+        });
+      }
 
       let finalGames = games;
       if (gamesUpdated) {
@@ -619,9 +993,37 @@ export default function App() {
 
       // Sincronizar mídias e metadados no Google Drive se autenticado
       if (isDriveAuthenticated()) {
-        await backupLibraryToDrive(finalGames, globalTags, globalGenres, (statusMsg) => {
-          setBackupStatus(statusMsg);
-        }, abortController.signal);
+        const driveTaskId = `drive_backup_${Date.now()}`;
+        mediaUploadQueueManager.startDriveBackupTask({
+          id: driveTaskId,
+          gameCount: finalGames.length,
+          abortController,
+        });
+
+        try {
+          await backupLibraryToDrive(
+            finalGames,
+            globalTags,
+            globalGenres,
+            (statusMsg, completedSteps, totalSteps) => {
+              setBackupStatus(statusMsg);
+              mediaUploadQueueManager.updateDriveBackupProgress({
+                id: driveTaskId,
+                completedCount: completedSteps ?? 0,
+                totalCount: totalSteps ?? finalGames.length,
+                currentMessage: statusMsg,
+              });
+            },
+            abortController.signal
+          );
+          mediaUploadQueueManager.finishDriveBackupTask(driveTaskId);
+        } catch (backupErr: any) {
+          mediaUploadQueueManager.finishDriveBackupTask(
+            driveTaskId,
+            backupErr.name === "AbortError" || String(backupErr).includes("cancel") ? "Cancelado" : String(backupErr.message || backupErr)
+          );
+          throw backupErr;
+        }
       }
 
       triggerAlert(
@@ -648,10 +1050,71 @@ export default function App() {
     }
   };
 
+  const handleDeepBackupSingleGameDrive = useCallback(
+    async (game: Game) => {
+      if (!isDriveAuthenticated()) {
+        triggerConfirm(
+          "Google Drive Não Conectado",
+          "Deseja conectar sua conta do Google Drive agora para realizar o backup profundo deste jogo?",
+          () => {
+            handleConnectDrive();
+          }
+        );
+        return;
+      }
+
+      const driveTaskId = `deep_drive_backup_${game.id}_${Date.now()}`;
+      const abortController = new AbortController();
+
+      mediaUploadQueueManager.startDriveBackupTask({
+        id: driveTaskId,
+        gameCount: 1,
+        abortController,
+      });
+
+      try {
+        await backupSingleGameToDriveDeep(
+          game,
+          games,
+          globalTags,
+          globalGenres,
+          (statusMsg, completedSteps, totalSteps) => {
+            mediaUploadQueueManager.updateDriveBackupProgress({
+              id: driveTaskId,
+              completedCount: completedSteps ?? 0,
+              totalCount: totalSteps ?? 1,
+              currentMessage: statusMsg,
+            });
+          },
+          abortController.signal
+        );
+        mediaUploadQueueManager.finishDriveBackupTask(driveTaskId);
+        triggerAlert(
+          "Backup Profundo Concluído",
+          `O backup de "${game.name}" e todas as suas mídias foi totalmente verificado e salvo no Google Drive!`
+        );
+      } catch (err: any) {
+        const errMsg = err.name === "AbortError" || String(err).includes("cancel") ? "Cancelado" : String(err.message || err);
+        mediaUploadQueueManager.finishDriveBackupTask(driveTaskId, errMsg);
+        if (err.name !== "AbortError") {
+          triggerAlert("Erro no Backup", `Não foi possível concluir o backup no Google Drive: ${errMsg}`);
+        }
+      }
+    },
+    [games, globalTags, globalGenres, triggerAlert, triggerConfirm]
+  );
+
   useEffect(() => {
     if (!isFirebaseConfigured()) return;
 
     const unsubscribe = syncFromFirebase((remoteGames, remoteTags, remoteGenres) => {
+      console.log(`[FirebaseSync] Sincronização Firebase recebida. Jogos remotos: ${remoteGames.length}, Tags: ${remoteTags.length}, Gêneros: ${remoteGenres.length}`);
+      
+      // Executa verificação detalhada entre o estado local e os dados retornados pelo Firebase
+      if (gamesRef.current && gamesRef.current.length > 0) {
+        verifyGameDataIntegrity(gamesRef.current, remoteGames, "FirebaseSyncComparison");
+      }
+
       isIncomingFirebaseUpdate.current = true;
       
       if (remoteGames.length > 0 || remoteTags.length > 0 || remoteGenres.length > 0) {
@@ -660,6 +1123,7 @@ export default function App() {
         setGlobalGenres(sortAlphabetically(remoteGenres));
       } else {
         // If Firebase is empty, initialize it with current local/default data
+        console.log("[FirebaseSync] Firebase retornou array vazio. Inicializando com estado local.");
         saveToFirebase(games, globalTags, globalGenres).catch((err) => {
           console.error("Erro ao inicializar dados no Firebase:", err);
         });
@@ -678,6 +1142,91 @@ export default function App() {
     };
   }, []);
 
+  // Auto-repair and deduplicate ImgBB links and media URLs
+  const hasAttemptedAutoRepair = useRef(false);
+  useEffect(() => {
+    if (games.length === 0 || hasAttemptedAutoRepair.current) return;
+    
+    // First deduplicate any bloated/duplicate entries
+    const { sanitizedGames, deduplicatedCount } = deduplicateAndSanitizeGameMedias(games);
+    let workingGames = sanitizedGames;
+    if (deduplicatedCount > 0) {
+      console.log(`[AutoDeduplicate] Removidas ${deduplicatedCount} mídias duplicadas/inválidas das entradas.`);
+      setGames(sanitizedGames);
+    }
+
+    const needsRepair = workingGames.some((g) => {
+      if (g.cover && g.cover.includes("ibb.co") && !g.cover.includes("i.ibb.co")) return true;
+      if (g.icon && g.icon.includes("ibb.co") && !g.icon.includes("i.ibb.co")) return true;
+      return g.diary?.some((e) =>
+        e.medias?.some(
+          (m) => (m.src?.includes("ibb.co") && !m.src?.includes("i.ibb.co")) || m.src?.startsWith("blob:")
+        )
+      );
+    });
+
+    if (needsRepair) {
+      hasAttemptedAutoRepair.current = true;
+      repairAllGameMedias(workingGames).then(({ repairedGames, repairedCount }) => {
+        if (repairedCount > 0) {
+          console.log(`[AutoRepair] Corrigidas ${repairedCount} mídias automaticamente.`);
+          setGames(repairedGames);
+        }
+      });
+    }
+  }, [games]);
+
+  // Media upload error notification listener
+  useEffect(() => {
+    const handleUploadError = (e: any) => {
+      const detail = e.detail;
+      if (detail) {
+        triggerAlert(
+          "⚠️ Alerta de Falha de Upload / Indexação",
+          `Ocorreu uma falha ao enviar ${detail.failedCount} de ${detail.totalCount} mídias para "${detail.gameName}". As imagens enviadas com sucesso foram mantidas no cache. Clique em 'Reindexar Cache' nas configurações ou no diário para tentar recuperá-las.`
+        );
+      }
+    };
+    window.addEventListener("media_upload_error", handleUploadError);
+    return () => window.removeEventListener("media_upload_error", handleUploadError);
+  }, [triggerAlert]);
+
+  const handleRepairAllMedias = async () => {
+    setIsSaving(true);
+    try {
+      // Step 1: Deduplicate and sanitize
+      const { sanitizedGames, deduplicatedCount } = deduplicateAndSanitizeGameMedias(games);
+      
+      // Step 2: Repair page links to direct image URLs
+      const { repairedGames, repairedCount } = await repairAllGameMedias(sanitizedGames);
+
+      const totalFixed = deduplicatedCount + repairedCount;
+
+      if (totalFixed > 0) {
+        setGames(repairedGames);
+        if (isFirebaseConfigured()) {
+          await saveToFirebase(repairedGames, globalTags, globalGenres);
+        }
+        const msg = [
+          deduplicatedCount > 0 ? `• ${deduplicatedCount} mídias duplicadas/inválidas foram removidas.` : "",
+          repairedCount > 0 ? `• ${repairedCount} link(s) de imagem foram convertidos para URLs diretas.` : "",
+        ].filter(Boolean).join("\n");
+
+        triggerAlert("Mídias Limpas e Corrigidas!", msg);
+      } else {
+        triggerAlert(
+          "Mídias Verificadas",
+          "Todas as mídias e imagens da sua biblioteca estão organizadas, sem duplicatas e com links funcionais!"
+        );
+      }
+    } catch (err: any) {
+      console.error("Erro ao reparar mídias:", err);
+      triggerAlert("Erro na Correção", `Falha ao reparar links de mídias: ${err.message || err}`);
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   // Set hasUnsavedChanges when user updates local states
   useEffect(() => {
     if (isFirstMount.current) {
@@ -689,9 +1238,39 @@ export default function App() {
     }
   }, [games, globalTags, globalGenres]);
 
+  useEffect(() => {
+    const cleanup = initSyncQueueListener(async (item) => {
+      if (item.type === "FIREBASE_SAVE") {
+        if (!isFirebaseConfigured()) return false;
+        try {
+          await saveToFirebase(
+            item.payload.games,
+            item.payload.globalTags,
+            item.payload.globalGenres
+          );
+          return true;
+        } catch (err) {
+          console.error("[SyncQueue] Erro ao re-tentar salvamento no Firebase:", err);
+          return false;
+        }
+      }
+      return false;
+    });
+    return () => cleanup();
+  }, []);
+
   // Handle auto-save to Firebase and conditional sync completion
   useEffect(() => {
     if (isFirebaseConfigured() && hasInitiallySynced.current && !isIncomingFirebaseUpdate.current) {
+      if (typeof navigator !== "undefined" && !navigator.onLine) {
+        addToSyncQueue({
+          type: "FIREBASE_SAVE",
+          payload: { games, globalTags, globalGenres },
+          lastError: "Sem conexão com a internet (offline).",
+        });
+        return;
+      }
+
       saveToFirebase(games, globalTags, globalGenres)
         .then(() => {
           if (!hasBase64Images(games)) {
@@ -699,7 +1278,12 @@ export default function App() {
           }
         })
         .catch((err) => {
-          console.error("Erro ao salvar no Firebase:", err);
+          console.error("Erro ao salvar no Firebase. Adicionando à fila de sincronização:", err);
+          addToSyncQueue({
+            type: "FIREBASE_SAVE",
+            payload: { games, globalTags, globalGenres },
+            lastError: err?.message || String(err),
+          });
         });
     }
   }, [games, globalTags, globalGenres]);
@@ -892,38 +1476,77 @@ export default function App() {
     });
   };
 
-  const handleOpenEditForm = (game: Game) => {
+  const handleOpenEditForm = useCallback((game: Game) => {
     ensureAdmin("editar este jogo", () => {
       setEditGame(game);
       setIsFormOpen(true);
     });
-  };
+  }, [isAdmin]);
 
-  const handleUpdateGame = (updatedGame: Game) => {
-    setGames((prev) =>
-      prev.map((g) => (g.id === updatedGame.id ? updatedGame : g))
-    );
-  };
+  const handleUpdateGame = useCallback((updatedGame: Game) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para realizar alterações de dados.");
+      return;
+    }
+    console.log(`[handleUpdateGame] Jogo atualizado: "${updatedGame.name}" (ID: ${updatedGame.id})`);
+    setGames((prev) => prev.map((g) => (g.id === updatedGame.id ? updatedGame : g)));
+  }, [isAdmin]);
 
   // Create or Update
   const handleSaveGame = (
     gameData: Omit<Game, "id" | "diary"> & { id?: string; diary?: DiaryEntry[] }
   ) => {
-    if (gameData.id) {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para salvar dados.");
+      return;
+    }
+    // Sanitize and convert numeric fields safely
+    const parseNumber = (val: any): number | undefined => {
+      if (val === undefined || val === null) return undefined;
+      if (typeof val === "number") return isNaN(val) ? undefined : val;
+      if (typeof val === "string") {
+        const cleaned = val.replace(",", ".").trim();
+        if (cleaned === "") return undefined;
+        const parsed = Number(cleaned);
+        return isNaN(parsed) ? undefined : parsed;
+      }
+      return undefined;
+    };
+
+    const sanitizedRating = parseNumber(gameData.rating) ?? 0;
+    const sanitizedPricePaid = parseNumber(gameData.pricePaid);
+    const sanitizedReplayCount = parseNumber(gameData.replayCount);
+    const sanitizedCoverPosition = parseNumber(gameData.coverPosition);
+    const sanitizedCoverPositionX = parseNumber(gameData.coverPositionX);
+    const sanitizedCoverZoom = parseNumber(gameData.coverZoom);
+
+    const sanitizedGameData = {
+      ...gameData,
+      rating: Math.min(5, Math.max(0, sanitizedRating)),
+      pricePaid: sanitizedPricePaid,
+      replayCount: sanitizedReplayCount,
+      coverPosition: sanitizedCoverPosition,
+      coverPositionX: sanitizedCoverPositionX,
+      coverZoom: sanitizedCoverZoom,
+      playtime: typeof gameData.playtime === "string" ? gameData.playtime.trim() || "00h 00m" : "00h 00m",
+      additionalPlaytime: typeof gameData.additionalPlaytime === "string" ? gameData.additionalPlaytime.trim() : "",
+    };
+
+    if (sanitizedGameData.id) {
       // Edit mode
-      setGames((prev) =>
-        prev.map((g) => (g.id === gameData.id ? ({ ...g, ...gameData } as Game) : g))
-      );
-      // If we are looking at this game's detail, it will automatically update in UI
+      setGames((prev) => prev.map((g) => (g.id === sanitizedGameData.id ? ({ ...g, ...sanitizedGameData } as Game) : g)));
+      console.log(`[handleSaveGame] Jogo editado com sucesso: "${sanitizedGameData.name}" (ID: ${sanitizedGameData.id})`);
     } else {
       // Add mode
       const newGame: Game = {
-        ...gameData,
+        ...sanitizedGameData,
         id: "game-" + Date.now(),
-        diary: gameData.diary || []
+        diary: sanitizedGameData.diary || []
       } as Game;
       setGames((prev) => [newGame, ...prev]);
+      console.log(`[handleSaveGame] Novo jogo criado: "${newGame.name}" (ID: ${newGame.id})`);
     }
+
     setIsFormOpen(false);
     setEditGame(null);
   };
@@ -932,29 +1555,26 @@ export default function App() {
     ensureAdmin("excluir este jogo", () => {
       triggerConfirm(
         "Excluir Jogo",
-        "Tem certeza que deseja excluir este jogo permanentemente da biblioteca?",
+        "Tem certeza que deseja mover este jogo para a Lixeira?",
         () => {
-          // Find the game and delete all its diary medias from ImgBB asynchronously
           const targetGame = games.find((g) => g.id === gameId);
-          if (targetGame && targetGame.diary) {
-            targetGame.diary.forEach((entry) => {
-              if (entry.medias) {
-                entry.medias.forEach((media) => {
-                  if (media.deleteUrl) {
-                    fetch("/api/delete-imgbb", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ deleteUrl: media.deleteUrl }),
-                    }).catch((err) => console.error("Erro ao deletar mídia do ImgBB ao excluir jogo:", err));
-                  }
-                });
-              }
+          if (targetGame) {
+            moveToTrash({
+              type: "game",
+              title: targetGame.name,
+              data: targetGame,
+              gameId: targetGame.id,
+              gameTitle: targetGame.name,
             });
           }
 
           setGames((prev) => prev.filter((g) => g.id !== gameId));
           setDetailGameId(null);
-          triggerAlert("Excluído", "O jogo foi removido com sucesso.");
+          showToast({
+            title: "Movido para a Lixeira 🗑️",
+            message: `"${targetGame?.name || 'Jogo'}" foi enviado para a Lixeira.`,
+            type: "info",
+          });
         }
       );
     });
@@ -1001,19 +1621,16 @@ export default function App() {
 
   const handleDeleteDiaryEntry = (gameId: string, entryId: string) => {
     ensureAdmin("remover entrada do diário", () => {
-      // Find the entry and delete its ImgBB medias asynchronously before removing
       const targetGame = games.find((g) => g.id === gameId);
       if (targetGame && targetGame.diary) {
         const targetEntry = targetGame.diary.find((d) => d.id === entryId);
-        if (targetEntry && targetEntry.medias) {
-          targetEntry.medias.forEach((media) => {
-            if (media.deleteUrl) {
-              fetch("/api/delete-imgbb", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ deleteUrl: media.deleteUrl }),
-              }).catch((err) => console.error("Erro ao deletar mídia do ImgBB ao excluir entrada:", err));
-            }
+        if (targetEntry) {
+          moveToTrash({
+            type: "diary_entry",
+            title: `Registro ${targetEntry.period || "Sem Data"}`,
+            data: targetEntry,
+            gameId: targetGame.id,
+            gameTitle: targetGame.name,
           });
         }
       }
@@ -1027,19 +1644,78 @@ export default function App() {
           return g;
         })
       );
+
+      showToast({
+        title: "Movido para a Lixeira 🗑️",
+        message: "A entrada do diário foi enviada para a Lixeira.",
+        type: "info",
+      });
     });
   };
 
-  // Helper selectors
+  const handleDeleteMultipleDiaryEntries = (gameId: string, entryIds: string[]) => {
+    ensureAdmin("remover entradas do diário", () => {
+      const entryIdsSet = new Set(entryIds);
+      const targetGame = games.find((g) => g.id === gameId);
+      if (targetGame && targetGame.diary) {
+        targetGame.diary.forEach((entry) => {
+          if (entryIdsSet.has(entry.id)) {
+            moveToTrash({
+              type: "diary_entry",
+              title: `Registro ${entry.period || "Sem Data"}`,
+              data: entry,
+              gameId: targetGame.id,
+              gameTitle: targetGame.name,
+            });
+          }
+        });
+      }
+
+      setGames((prev) =>
+        prev.map((g) => {
+          if (g.id === gameId) {
+            const updatedDiary = (g.diary || []).filter((d) => !entryIdsSet.has(d.id));
+            return { ...g, diary: updatedDiary };
+          }
+          return g;
+        })
+      );
+
+      showToast({
+        title: "Movido para a Lixeira 🗑️",
+        message: `${entryIds.length} entrada(s) movida(s) para a Lixeira.`,
+        type: "info",
+      });
+    });
+  };
+
+  // Helper selectors & memoized handlers for high-performance rendering
   const activeGameDetail = useMemo(() => {
     return games.find((g) => g.id === detailGameId) || null;
   }, [games, detailGameId]);
+
+  const handleSelectGameCard = useCallback((gameId: string) => {
+    setDetailGameId(gameId);
+  }, []);
+
+  const handleOpenZoomForGame = useCallback((src: string, customAllImages?: string[], customTitle?: string) => {
+    setGlobalZoomImage({
+      src,
+      allImages: customAllImages,
+      title: customTitle,
+    });
+  }, []);
+
+  const handleEstimateForGame = useCallback((game: Game) => {
+    setEstimateGameModal(game);
+  }, []);
 
   // Sorting & Filtering Algorithm
   const filteredGames = useMemo(() => {
     let result = games.filter((game) => {
       // Filter by active tab (status matches)
-      const matchesTab = activeTab === "Todos" || game.status.includes(activeTab);
+      const gameStatusList = Array.isArray(game.status) ? game.status : typeof game.status === "string" ? [game.status] : [];
+      const matchesTab = activeTab === "Todos" || gameStatusList.includes(activeTab);
 
       // Filter by Search Input (matches title, series, publisher, studio, developer, genres or tags)
       const matchesSearch =
@@ -1075,7 +1751,8 @@ export default function App() {
         Backlog: 4,
         Desistido: 5
       };
-      const minVal = Math.min(...game.status.map((s) => order[s] || 99));
+      const gameStatusList = Array.isArray(game.status) ? game.status : typeof game.status === "string" ? [game.status] : [];
+      const minVal = Math.min(...gameStatusList.map((s) => order[s] || 99));
       return isFinite(minVal) ? minVal : 99;
     };
 
@@ -1092,22 +1769,23 @@ export default function App() {
 
   // Infinite scroll effect
   useEffect(() => {
+    let ticking = false;
     const handleInfiniteScroll = () => {
-      const threshold = 300; // px
-      const isNearBottom =
-        window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - threshold;
+      if (ticking) return;
+      ticking = true;
+      window.requestAnimationFrame(() => {
+        const threshold = 350; // px
+        const isNearBottom =
+          window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - threshold;
 
-      if (isNearBottom) {
-        setVisibleCount((prev) => {
-          if (prev < filteredGames.length) {
-            return prev + 9;
-          }
-          return prev;
-        });
-      }
+        if (isNearBottom) {
+          setVisibleCount((prev) => (prev < filteredGames.length ? prev + 9 : prev));
+        }
+        ticking = false;
+      });
     };
 
-    window.addEventListener("scroll", handleInfiniteScroll);
+    window.addEventListener("scroll", handleInfiniteScroll, { passive: true });
     return () => window.removeEventListener("scroll", handleInfiniteScroll);
   }, [filteredGames.length]);
 
@@ -1117,11 +1795,6 @@ export default function App() {
     // If the filtered games count is smaller than current visibleCount, that's fine.
   }, [activeTab, searchTerm, platformFilter, publisherFilter, seriesFilter, tagFilter]);
 
-  // Dialog Helpers
-  const triggerAlert = (title: string, message: string) => {
-    setAlertState({ isOpen: true, title, message });
-  };
-
   // Find game for cover image to use its custom position if available
   const matchedGameForCover = games.find((g) => g.cover === coverImage);
   const bannerPositionStyle: React.CSSProperties = {
@@ -1129,18 +1802,6 @@ export default function App() {
     transformOrigin: `${bannerX}% ${bannerY}%`,
     transform: `scale(${bannerZoom / 100})`,
     transition: isRepositioning ? "none" : "transform 0.3s ease-out",
-  };
-
-  const triggerConfirm = (title: string, message: string, onConfirm: () => void) => {
-    setConfirmState({
-      isOpen: true,
-      title,
-      message,
-      onConfirm: () => {
-        onConfirm();
-        setConfirmState((prev) => ({ ...prev, isOpen: false }));
-      }
-    });
   };
 
   return (
@@ -1266,79 +1927,112 @@ export default function App() {
               Biblioteca do Haleck
             </h1>
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
-              {/* Google Drive Visual Connection Indicator */}
-              {isDriveConnected ? (
+              {/* Database / Synchronization Status Badge (Network Icon Only) */}
+              {!isFirebaseConfigured() ? (
                 <span 
-                  className="inline-flex items-center gap-1.5 text-xs font-bold text-sky-400 bg-blue-950/50 px-3.5 py-1.5 rounded-full border border-blue-500/30 shadow-sm shadow-blue-950/20"
-                  title="Google Drive Conectado: Seus backups de mídias e metadados estão sincronizados na nuvem."
+                  className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-full bg-red-950/50 text-red-400 border border-red-500/40 shadow-sm shadow-red-950/20"
+                  title="Servidor Desconectado (Modo Local Offline)"
                 >
-                  <HardDrive size={12} className="text-sky-400 animate-pulse" />
-                  Google Drive Conectado
+                  <WifiOff size={13} className="text-red-400" />
+                </span>
+              ) : hasUnsavedChanges ? (
+                <span 
+                  className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-full bg-red-950/50 text-red-400 border border-red-500/40 shadow-sm shadow-red-950/20 animate-pulse"
+                  title="Servidor Desconectado / Pendente de Sincronização (Clique em Salvar)"
+                >
+                  <WifiOff size={13} className="text-red-400" />
                 </span>
               ) : (
                 <span 
-                  className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-400 bg-zinc-900/40 px-3.5 py-1.5 rounded-full border border-zinc-800/40 shadow-sm"
-                  title="Google Drive Desconectado. Você pode conectar no menu de Configurações (engrenagem) ou ao Clicar em Salvar."
+                  className="inline-flex items-center justify-center px-2.5 py-1.5 rounded-full bg-emerald-950/50 text-emerald-400 border border-emerald-500/40 shadow-sm shadow-emerald-950/20"
+                  title="Servidor Conectado & Sincronizado"
                 >
-                  <HardDrive size={12} className="text-zinc-500" />
-                  Google Drive Desconectado
+                  <Wifi size={13} className="text-emerald-400" />
                 </span>
               )}
 
+              {/* Mode Identifier Badge (Leitor / Editor) */}
               {isAdmin ? (
                 <button
                   onClick={() => {
                     setIsAdmin(false);
                     sessionStorage.removeItem("admin_unlocked");
-                    triggerAlert("Sessão Encerrada", "Você voltou para o Modo de Leitura.");
+                    triggerAlert("Sessão Encerrada", "Você voltou para o modo Leitor.");
                   }}
-                  className="inline-flex items-center gap-1.5 text-xs font-bold text-amber-400 bg-amber-950/40 hover:bg-red-950/40 hover:text-red-400 px-3.5 py-1.5 rounded-full border border-amber-800/30 shadow-sm shadow-amber-950/10 cursor-pointer transition-all"
-                  title="Modo de Edição liberado. Clique para bloquear e voltar ao modo de leitura."
+                  className="inline-flex items-center gap-1.5 text-xs font-extrabold text-amber-300 bg-amber-950/60 hover:bg-amber-900/60 px-3.5 py-1.5 rounded-full border border-amber-500/40 shadow-sm shadow-amber-950/20 cursor-pointer transition-all"
+                  title="Modo Editor ativo. Clique para bloquear e voltar ao modo Leitor."
                 >
-                  <Unlock size={11} />
-                  Modo Admin (Ativo)
+                  <Unlock size={11} className="text-amber-400" />
+                  <span>Editor</span>
                 </button>
               ) : (
                 <button
                   onClick={() => {
                     ensureAdmin("liberar o modo de edição", () => {
-                      triggerAlert("Modo Admin Ativo", "Você agora tem permissões de administrador!");
+                      triggerAlert("Modo Editor Ativo", "Você agora tem permissões de Editor!");
                     });
                   }}
-                  className="inline-flex items-center gap-1.5 text-xs font-bold text-zinc-400 bg-zinc-900/40 hover:bg-zinc-800/50 hover:text-amber-400 px-3.5 py-1.5 rounded-full border border-zinc-800/30 shadow-sm shadow-zinc-950/10 cursor-pointer transition-all"
-                  title="Modo de Leitura (Sem edição). Clique para inserir a senha do administrador."
+                  className="inline-flex items-center gap-1.5 text-xs font-extrabold text-sky-400 bg-blue-950/60 hover:bg-blue-900/60 px-3.5 py-1.5 rounded-full border border-blue-500/40 shadow-sm shadow-blue-950/20 cursor-pointer transition-all"
+                  title="Modo Leitor. Clique para inserir a senha do Editor."
                 >
-                  <Lock size={11} />
-                  Modo Leitura (Bloqueado)
+                  <Lock size={11} className="text-sky-400" />
+                  <span>Leitor</span>
                 </button>
               )}
 
-              {/* Database / Synchronization Status Badge */}
-              {!isFirebaseConfigured() ? (
+              {/* Google Drive Visual Connection Indicator */}
+              {isDriveConnected ? (
                 <span 
-                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-500 bg-amber-950/30 px-3.5 py-1.5 rounded-full border border-amber-500/20 shadow-sm"
-                  title="Aviso: Firebase não está configurado nesta versão. Suas alterações são salvas localmente neste navegador/dispositivo."
+                  className="inline-flex items-center gap-1.5 text-xs font-extrabold text-sky-400 bg-blue-950/60 px-3.5 py-1.5 rounded-full border border-blue-500/40 shadow-sm shadow-blue-950/30"
+                  title="GDrive Conectado: Seus backups de mídias e metadados estão sincronizados no Google Drive."
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                  Modo Local (Offline)
-                </span>
-              ) : hasUnsavedChanges ? (
-                <span 
-                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-amber-400 bg-amber-950/40 px-3.5 py-1.5 rounded-full border border-amber-500/30 shadow-sm animate-pulse"
-                  title="Você possui alterações locais ou imagens prontas para salvar. Clique em 'Salvar' para sincronizar de forma definitiva!"
-                >
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
-                  Não Sincronizado
+                  <HardDrive size={12} className="text-sky-400 animate-pulse" />
+                  <span>GDrive</span>
                 </span>
               ) : (
                 <span 
-                  className="inline-flex items-center gap-1.5 text-[11px] font-bold text-emerald-400 bg-emerald-950/30 px-3.5 py-1.5 rounded-full border border-emerald-500/20 shadow-sm"
-                  title="Sincronização Ativa: Todos os seus jogos e mídias estão totalmente salvos na nuvem!"
+                  className="inline-flex items-center gap-1.5 text-xs font-medium text-zinc-500 bg-zinc-900/40 px-3.5 py-1.5 rounded-full border border-zinc-800/40 shadow-sm opacity-60 grayscale"
+                  title="GDrive Desconectado. Você pode conectar no menu de Configurações (engrenagem) ou ao Clicar em Salvar."
                 >
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                  Sincronizado na Nuvem
+                  <HardDrive size={12} className="text-zinc-500 grayscale" />
+                  <span>GDrive</span>
                 </span>
               )}
+
+              {/* Steam Persona Real-Time Status Badge */}
+              {steamProfile && (
+                steamProfile.gameextrainfo ? (
+                  <a
+                    href={steamProfile.profileurl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 text-xs font-extrabold text-emerald-300 bg-emerald-950/70 hover:bg-emerald-900/80 px-3.5 py-1.5 rounded-full border border-emerald-500/50 shadow-md shadow-emerald-950/40 transition-all animate-pulse cursor-pointer"
+                    title={`Sua conta Steam (${steamProfile.personaname}) está jogando no momento! Clique para abrir perfil.`}
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping shrink-0" />
+                    <Gamepad2 size={13} className="text-emerald-400 shrink-0" />
+                    <span>Jogando Agora: <strong className="text-white underline underline-offset-2">{steamProfile.gameextrainfo}</strong></span>
+                  </a>
+                ) : (
+                  <a
+                    href={steamProfile.profileurl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-blue-300 bg-blue-950/40 hover:bg-blue-900/50 px-3.5 py-1.5 rounded-full border border-blue-500/30 shadow-sm transition-all cursor-pointer"
+                    title={`Steam Profile: ${steamProfile.personaname}`}
+                  >
+                    {steamProfile.avatar ? (
+                      <img src={steamProfile.avatar} alt={steamProfile.personaname} className="w-4 h-4 rounded-full" />
+                    ) : (
+                      <Gamepad2 size={12} className="text-blue-400" />
+                    )}
+                    <span>Steam: <strong className="text-zinc-200">{steamProfile.personaname}</strong> ({steamProfile.personastate > 0 ? "Online" : "Offline"})</span>
+                  </a>
+                )
+              )}
+
+              {/* Live Session Header Badge Indicator */}
+              <LiveSessionHeaderBadge games={games} />
             </div>
           </div>
 
@@ -1433,6 +2127,7 @@ export default function App() {
               setActiveViewMode("library");
             }}
             onUpdateGame={handleUpdateGame}
+            onOpenRetrospective={() => setIsRetrospectiveOpen(true)}
             isAdmin={isAdmin}
           />
         ) : (
@@ -1442,17 +2137,32 @@ export default function App() {
 
             {/* Filters Controls */}
             <div className="space-y-4 mb-10">
-              <div className="relative w-full">
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Procurar por título, série, estúdio, tags, gêneros..."
-                  className="w-full pl-11 pr-4 py-3 bg-zinc-900 border border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm text-zinc-100 placeholder-zinc-500 shadow-sm"
-                />
-                <div className="absolute left-4 top-3.5 text-zinc-400">
-                  <Search size={18} />
+              <div className="relative w-full flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5">
+                <div className="relative flex-1">
+                  <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Filtrar por título, série, estúdio, tags, gêneros..."
+                    className="w-full pl-11 pr-4 py-3 bg-zinc-900 border border-zinc-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-cyan-500 text-sm text-zinc-100 placeholder-zinc-500 shadow-sm"
+                  />
+                  <div className="absolute left-4 top-3.5 text-zinc-400">
+                    <Search size={18} />
+                  </div>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => setIsGlobalSearchOpen(true)}
+                  className="px-4 py-3 rounded-xl bg-gradient-to-r from-cyan-950/90 to-purple-950/90 hover:from-cyan-900/90 hover:to-purple-900/90 border border-cyan-500/40 hover:border-cyan-400 text-cyan-200 text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shrink-0 group active:scale-95"
+                  title="Abrir Busca Global Integrada (pesquisa diários de bordo, dicionário de estilização, anotações e notas)"
+                >
+                  <Sparkles size={16} className="text-cyan-400 group-hover:rotate-12 transition-transform" />
+                  <span>Busca Global Profunda</span>
+                  <kbd className="px-2 py-0.5 rounded bg-cyan-900/60 text-cyan-300 font-mono text-[10px] border border-cyan-500/30 shadow-inner">
+                    ⌘K
+                  </kbd>
+                </button>
               </div>
 
               <div className="flex flex-wrap items-center gap-3 bg-zinc-950/60 p-3 rounded-2xl border border-zinc-800/60">
@@ -1525,6 +2235,40 @@ export default function App() {
                     ))}
                 </select>
 
+                {/* View Mode Switcher: Grid vs Kanban */}
+                <div className="flex items-center gap-1 bg-zinc-900/90 p-1 rounded-xl border border-zinc-800 ml-auto">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDashboardViewMode("grid");
+                      playRetroSound("click");
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      dashboardViewMode === "grid"
+                        ? "bg-purple-600 text-white shadow-md shadow-purple-900/50"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    <BarChart3 size={14} />
+                    <span>Grade</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDashboardViewMode("kanban");
+                      playRetroSound("click");
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                      dashboardViewMode === "kanban"
+                        ? "bg-purple-600 text-white shadow-md shadow-purple-900/50"
+                        : "text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    <Move size={14} />
+                    <span>Kanban</span>
+                  </button>
+                </div>
+
                 {/* Clean filter helper if any is active */}
                 {(platformFilter !== "All" || seriesFilter !== "All" || publisherFilter !== "All" || tagFilter !== "All") && (
                   <button
@@ -1542,36 +2286,86 @@ export default function App() {
               </div>
             </div>
 
-            {/* Games Catalogue Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {filteredGames.slice(0, visibleCount).map((game) => (
-                <GameCard
-                  key={game.id}
-                  game={game}
-                  onClick={() => setDetailGameId(game.id)}
-                  isAdmin={isAdmin}
-                  onUpdateGame={handleUpdateGame}
-                  onEditGame={handleOpenEditForm}
-                  onOpenGameEstimateModal={(g) => setEstimateGameModal(g)}
-                  onOpenZoom={(src) =>
-                    setGlobalZoomImage({
-                      src,
-                      allImages: filteredGames.map((g) => g.cover).filter(Boolean),
-                      title: `Capa - ${game.name}`,
-                    })
+            {/* Games Catalogue View (Grid or Kanban) */}
+            {dashboardViewMode === "kanban" ? (
+              <KanbanView
+                games={filteredGames}
+                onSelectGame={(selectedGame) => {
+                  const gameId = typeof selectedGame === "string" ? selectedGame : selectedGame?.id;
+                  if (gameId) {
+                    handleSelectGameCard(gameId);
                   }
-                />
-              ))}
-            </div>
+                }}
+                onUpdateGameStatus={(gameId, newStatusInput) => {
+                  const targetGame = games.find((g) => g.id === gameId);
+                  if (targetGame) {
+                    const primaryStatuses = [
+                      "Jogando",
+                      "Em Hiatus",
+                      "Pausado",
+                      "Terminado",
+                      "Zerado",
+                      "Backlog",
+                      "Quero Jogar",
+                      "Desistido",
+                      "Abandonado",
+                    ];
 
-            {/* Loading Indicator for Infinite Scroll */}
-            {filteredGames.length > visibleCount && (
-              <div className="flex justify-center items-center py-10">
-                <span className="text-xs text-zinc-500 font-mono flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-ping"></span>
-                  Carregando mais jogos...
-                </span>
-              </div>
+                    const mappedStatus = mapKanbanToStatus(
+                      typeof newStatusInput === "string"
+                        ? newStatusInput
+                        : Array.isArray(newStatusInput)
+                        ? newStatusInput[0]
+                        : "Jogando"
+                    );
+
+                    const currentStatusList = Array.isArray(targetGame.status)
+                      ? targetGame.status.filter(Boolean)
+                      : typeof targetGame.status === "string" && targetGame.status
+                      ? [targetGame.status]
+                      : [];
+
+                    const otherStatuses = currentStatusList.filter(
+                      (s) => !primaryStatuses.some((p) => p.toLowerCase() === (s || "").toLowerCase())
+                    );
+
+                    const updatedStatuses = [mappedStatus, ...otherStatuses];
+
+                    handleUpdateGame({ ...targetGame, status: updatedStatuses });
+                    playRetroSound("statusChange");
+                  }
+                }}
+                onOpenGameForm={() => setIsFormOpen(true)}
+              />
+            ) : (
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                  <AnimatePresence mode="popLayout">
+                    {filteredGames.slice(0, visibleCount).map((game) => (
+                      <GameCard
+                        key={game.id}
+                        game={game}
+                        onClick={handleSelectGameCard}
+                        isAdmin={isAdmin}
+                        onUpdateGame={handleUpdateGame}
+                        onEditGame={handleOpenEditForm}
+                        onOpenGameEstimateModal={handleEstimateForGame}
+                        onOpenZoom={handleOpenZoomForGame}
+                      />
+                    ))}
+                  </AnimatePresence>
+                </div>
+
+                {/* Loading Indicator for Infinite Scroll */}
+                {filteredGames.length > visibleCount && (
+                  <div className="flex justify-center items-center py-10">
+                    <span className="text-xs text-zinc-500 font-mono flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-cyan-500 animate-ping"></span>
+                      Carregando mais jogos...
+                    </span>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Empty State Fallback */}
@@ -1611,11 +2405,16 @@ export default function App() {
       <GameDetailDrawer
         game={activeGameDetail}
         isOpen={detailGameId !== null}
-        onClose={() => setDetailGameId(null)}
+        onClose={() => {
+          setDetailGameId(null);
+          setSelectedSearchDiaryId(null);
+          setSelectedSearchOpenDictionary(false);
+        }}
         onEditClick={handleOpenEditForm}
         onDeleteGame={handleDeleteGame}
         onSaveDiaryEntry={handleSaveDiaryEntry}
         onDeleteDiaryEntry={handleDeleteDiaryEntry}
+        onDeleteMultipleDiaryEntries={handleDeleteMultipleDiaryEntries}
         triggerAlert={triggerAlert}
         triggerConfirm={triggerConfirm}
         isAdmin={isAdmin}
@@ -1624,6 +2423,24 @@ export default function App() {
         onSendEmailClick={(game) => {
           setGmailTargetGame(game);
           setGmailModalOpen(true);
+        }}
+        onDeepBackupDrive={handleDeepBackupSingleGameDrive}
+        onOpenStorytelling={(g) => setStorytellingGame(g)}
+        onOpenSocialCard={(g) => setSocialCardGame(g)}
+        onRestoreGame={handleRestoreGameFromTrash}
+        initialSelectedDiaryId={selectedSearchDiaryId}
+        initialOpenDictionary={selectedSearchOpenDictionary}
+      />
+
+      {/* Global Deep Search Modal */}
+      <GlobalSearchModal
+        isOpen={isGlobalSearchOpen}
+        onClose={() => setIsGlobalSearchOpen(false)}
+        games={games}
+        onSelectResult={(gameId, options) => {
+          setSelectedSearchDiaryId(options?.diaryId || null);
+          setSelectedSearchOpenDictionary(!!options?.openDictionary);
+          setDetailGameId(gameId);
         }}
       />
 
@@ -1646,7 +2463,10 @@ export default function App() {
         isOpen={confirmState.isOpen}
         title={confirmState.title}
         message={confirmState.message}
-        onConfirm={confirmState.onConfirm}
+        onConfirm={() => {
+          setConfirmState((prev) => ({ ...prev, isOpen: false }));
+          confirmState.onConfirm();
+        }}
         onCancel={() => setConfirmState((prev) => ({ ...prev, isOpen: false }))}
       />
 
@@ -1700,6 +2520,49 @@ export default function App() {
           setIsGmailConnected(false);
           triggerAlert("Gmail Desconectado", "Sua sessão do Gmail foi desconectada.");
         }}
+        onRunDiagnostic={handleRunDiagnostic}
+        onOpenTrash={() => setIsTrashOpen(true)}
+        games={games}
+        onBatchSyncSteam={handleBatchSyncSteam}
+        isSyncingSteamBatch={isBatchSyncingSteam}
+        onBatchSyncGog={handleBatchSyncGog}
+        isSyncingGogBatch={isBatchSyncingGog}
+        triggerAlert={triggerAlert}
+      />
+
+      {/* Trash / Soft Delete Modal */}
+      <TrashModal
+        isOpen={isTrashOpen}
+        onClose={() => setIsTrashOpen(false)}
+        onRestoreGame={handleRestoreGameFromTrash}
+        onRestoreDiaryEntry={handleRestoreDiaryEntryFromTrash}
+        onRestoreMedia={handleRestoreMediaFromTrash}
+      />
+
+      {/* Social Media Card Generator Modal */}
+      {socialCardGame && (
+        <SocialCardModal
+          game={socialCardGame}
+          isOpen={!!socialCardGame}
+          onClose={() => setSocialCardGame(null)}
+        />
+      )}
+
+      {/* Storytelling Slides Modal */}
+      {storytellingGame && (
+        <StorytellingModal
+          game={storytellingGame}
+          isOpen={!!storytellingGame}
+          onClose={() => setStorytellingGame(null)}
+        />
+      )}
+
+      <SyncDiagnosticModal
+        isOpen={isDiagnosticModalOpen}
+        onClose={() => setIsDiagnosticModalOpen(false)}
+        result={diagnosticResult}
+        isLoading={isDiagnosticLoading}
+        onReRun={handleRunDiagnostic}
       />
 
       <CustomDriveConnectPrompt
@@ -1715,6 +2578,7 @@ export default function App() {
       <ImgBBModal
         isOpen={imgBBModalOpen}
         onClose={() => setImgBBModalOpen(false)}
+        onRepairMedias={handleRepairAllMedias}
       />
 
       {/* Global Image Zoom Lightbox */}
@@ -1729,6 +2593,20 @@ export default function App() {
 
       {/* Global Custom Tooltip Portal */}
       <GlobalTooltip />
+
+      {/* Floating Live Session Widget */}
+      <LiveSessionWidget games={games} onUpdateGame={handleUpdateGame} />
+
+      {/* Gamer Retrospective Modal */}
+      {isRetrospectiveOpen && (
+        <GamerRetrospectiveModal games={games} onClose={() => setIsRetrospectiveOpen(false)} />
+      )}
+
+      {/* Global Upload Progress Widget */}
+      <GlobalUploadProgressWidget />
+
+      {/* Global Toast Popup Notifications */}
+      <ToastContainer />
 
       {/* Scroll to Top Button */}
       {showScrollTop && (

@@ -4,6 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { X, Clock, Calculator, Globe, RotateCcw, CheckCircle2, Sparkles } from "lucide-react";
 import { parsePlaytimeHours, formatHoursAndMinutes, getTotalGamePlaytimeHours } from "../utils/playtime";
 import { formatHltbTime } from "../utils/hltbFormatter";
+import { useBodyScrollLock } from "../lib/bodyScrollLock";
 
 interface GameEstimateModalProps {
   isOpen?: boolean;
@@ -12,6 +13,8 @@ interface GameEstimateModalProps {
 }
 
 export default function GameEstimateModal({ isOpen = true, game, onClose }: GameEstimateModalProps) {
+  useBodyScrollLock(!!isOpen && !!game);
+
   const [dailyPlayHours, setDailyPlayHours] = useState<number>(2);
   const [deductPlayedTime, setDeductPlayedTime] = useState<boolean>(true);
   const [customPlaytimeInput, setCustomPlaytimeInput] = useState<string>("");

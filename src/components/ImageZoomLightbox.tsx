@@ -13,7 +13,11 @@ import {
   Copy,
   Check,
   ImageIcon,
+  Film,
+  Tv,
 } from "lucide-react";
+import { useBodyScrollLock } from "../lib/bodyScrollLock";
+import { getYoutubeEmbedUrl } from "../utils/youtube";
 
 interface ImageZoomLightboxProps {
   isOpen: boolean;
@@ -32,6 +36,8 @@ export default function ImageZoomLightbox({
   onSelectImage,
   title,
 }: ImageZoomLightboxProps) {
+  useBodyScrollLock(isOpen);
+
   const [zoomScale, setZoomScale] = useState(1);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [copied, setCopied] = useState(false);
@@ -43,15 +49,64 @@ export default function ImageZoomLightbox({
   const initialScaleRef = useRef<number>(1);
   const lastTapRef = useRef<number>(0);
 
+  const youtubeEmbedUrl = currentSrc ? getYoutubeEmbedUrl(currentSrc) : null;
+  const isVideo = React.useMemo(() => {
+    if (!currentSrc) return false;
+    if (youtubeEmbedUrl) return true;
+    if (currentSrc.startsWith("data:video")) return true;
+    return (
+      /\.(mp4|webm|mov|mkv|avi|m4v|3gp|flv|wmv)(\?.*)?$/i.test(currentSrc) ||
+      currentSrc.includes("video_anexo_") ||
+      currentSrc.includes("video_youtube_")
+    );
+  }, [currentSrc, youtubeEmbedUrl]);
+
+  // Helper to normalize and ensure direct image URLs
+  const cleanDirectUrl = (rawUrl: string): string => {
+    if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
+    let url = rawUrl.trim();
+    if (url.includes("drive.google.com")) {
+      const fileIdMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || url.match(/id=([a-zA-Z0-9_-]+)/);
+      if (fileIdMatch && fileIdMatch[1]) {
+        return `https://lh3.googleusercontent.com/d/${fileIdMatch[1]}`;
+      }
+    }
+    return url;
+  };
+
   // Filter valid images list
   const validImages = React.useMemo(() => {
+    let rawList: string[] = [];
     if (allImages && allImages.length > 0) {
-      return Array.from(new Set(allImages.filter(Boolean)));
+      rawList = allImages.filter(Boolean).map(cleanDirectUrl);
+    } else if (currentSrc) {
+      rawList = [cleanDirectUrl(currentSrc)];
     }
-    return currentSrc ? [currentSrc] : [];
+    const unique = Array.from(new Set(rawList));
+    const activeClean = currentSrc ? cleanDirectUrl(currentSrc) : null;
+    if (activeClean && !unique.includes(activeClean)) {
+      unique.unshift(activeClean);
+    }
+    return unique;
   }, [allImages, currentSrc]);
 
-  const currentIndex = currentSrc ? validImages.indexOf(currentSrc) : -1;
+  const currentIndex = React.useMemo(() => {
+    if (!currentSrc || validImages.length === 0) return -1;
+    const directIdx = validImages.indexOf(currentSrc);
+    if (directIdx !== -1) return directIdx;
+
+    const normCurrent = currentSrc.trim();
+    const foundIdx = validImages.findIndex((img) => {
+      const normImg = img.trim();
+      if (normImg === normCurrent) return true;
+      try {
+        return decodeURIComponent(normImg) === decodeURIComponent(normCurrent);
+      } catch {
+        return false;
+      }
+    });
+    return foundIdx !== -1 ? foundIdx : 0;
+  }, [currentSrc, validImages]);
 
   // Reset states when opening a new image
   useEffect(() => {
@@ -140,7 +195,7 @@ export default function ImageZoomLightbox({
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
         setControlsVisible(false);
-      }, 3500);
+      }, 6000);
     };
 
     resetTimer();
@@ -247,21 +302,32 @@ export default function ImageZoomLightbox({
 
         {/* Top Header Bar */}
         <div
-          className={`absolute top-0 left-0 right-0 p-4 sm:p-6 flex items-center justify-between z-30 transition-all duration-500 bg-gradient-to-b from-black/80 via-black/40 to-transparent ${
+          className={`absolute top-0 left-0 right-0 p-4 sm:p-6 flex items-center justify-between z-30 transition-all duration-500 bg-gradient-to-b from-black/90 via-black/50 to-transparent ${
             controlsVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"
           }`}
         >
-          <div className="flex items-center gap-2 max-w-[60%] sm:max-w-[80%]">
-            <div className="p-2 rounded-xl bg-zinc-900/90 border border-zinc-800 text-cyan-400 shrink-0">
-              <ImageIcon size={18} />
+          <div className="flex items-center gap-2.5 max-w-[60%] sm:max-w-[80%]">
+            <div className={`p-2 rounded-xl border shrink-0 ${
+              isVideo
+                ? "bg-cyan-950/90 border-cyan-500/50 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+                : "bg-zinc-900/90 border-zinc-800 text-cyan-400"
+            }`}>
+              {isVideo ? <Film size={18} className="animate-pulse" /> : <ImageIcon size={18} />}
             </div>
             <div>
-              <h3 className="text-sm sm:text-base font-bold text-white tracking-wide truncate">
-                {title || "Visualizador de Imagem"}
-              </h3>
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm sm:text-base font-bold text-white tracking-wide truncate">
+                  {title || (isVideo ? "Modo Teatro" : "Visualizador de Imagem")}
+                </h3>
+                {isVideo && (
+                  <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-widest bg-cyan-950 border border-cyan-500/40 text-cyan-300">
+                    Modo Teatro
+                  </span>
+                )}
+              </div>
               {validImages.length > 1 && (
                 <p className="text-[11px] font-mono text-zinc-400">
-                  Imagem {currentIndex + 1} de {validImages.length}
+                  Mídia {currentIndex + 1} de {validImages.length}
                 </p>
               )}
             </div>
@@ -272,25 +338,27 @@ export default function ImageZoomLightbox({
               type="button"
               onClick={handleCopyLink}
               className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
-              title="Copiar Link da Imagem"
+              title="Copiar Link da Mídia"
             >
               {copied ? <Check size={18} className="text-emerald-400" /> : <Copy size={18} />}
             </button>
 
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
-              title="Baixar Imagem"
-            >
-              <Download size={18} />
-            </button>
+            {!isVideo && (
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
+                title="Baixar Imagem"
+              >
+                <Download size={18} />
+              </button>
+            )}
 
             <button
               type="button"
               onClick={toggleFullscreen}
               className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg hidden sm:flex items-center justify-center"
-              title={isFullscreen ? "Sair da Tela Cheia (F)" : "Tela Cheia (F)"}
+              title={isFullscreen ? "Sair da Tela Cheia (F)" : "Tela Cheia Nativa (F)"}
             >
               {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
             </button>
@@ -306,7 +374,7 @@ export default function ImageZoomLightbox({
           </div>
         </div>
 
-        {/* Main Image Stage */}
+        {/* Main Stage */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -315,7 +383,26 @@ export default function ImageZoomLightbox({
           className="relative w-full max-w-7xl h-full max-h-[88vh] z-10 flex flex-col items-center justify-center overflow-hidden my-auto"
         >
           <div className="w-full h-full flex items-center justify-center p-2 sm:p-4 select-none">
-            {imgError ? (
+            {isVideo ? (
+              <div className="w-full max-w-5xl aspect-video rounded-2xl overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 bg-black relative flex items-center justify-center my-auto ring-1 ring-cyan-500/20">
+                {youtubeEmbedUrl ? (
+                  <iframe
+                    src={`${youtubeEmbedUrl}?autoplay=1&rel=0&modestbranding=1`}
+                    title={title || "Vídeo em Modo Teatro"}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                    allowFullScreen
+                    className="w-full h-full border-0"
+                  />
+                ) : (
+                  <video
+                    src={currentSrc}
+                    controls
+                    autoPlay
+                    className="w-full h-full object-contain bg-black"
+                  />
+                )}
+              </div>
+            ) : imgError ? (
               <div className="flex flex-col items-center justify-center p-8 bg-zinc-900/80 border border-zinc-800 rounded-2xl text-center max-w-md gap-3">
                 <ImageIcon size={48} className="text-zinc-600" />
                 <h4 className="text-sm font-bold text-zinc-300">Não foi possível carregar esta imagem</h4>
@@ -366,7 +453,7 @@ export default function ImageZoomLightbox({
                 className={`absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 p-3 sm:p-4 rounded-full bg-zinc-950/90 hover:bg-zinc-850 text-white transition-all cursor-pointer border border-zinc-800 shadow-2xl z-30 flex items-center justify-center hover:scale-110 active:scale-95 duration-300 ${
                   controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
                 }`}
-                title="Imagem anterior (Seta esquerda)"
+                title="Mídia anterior (Seta esquerda)"
               >
                 <ChevronLeft size={24} />
               </button>
@@ -380,7 +467,7 @@ export default function ImageZoomLightbox({
                 className={`absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 p-3 sm:p-4 rounded-full bg-zinc-950/90 hover:bg-zinc-850 text-white transition-all cursor-pointer border border-zinc-800 shadow-2xl z-30 flex items-center justify-center hover:scale-110 active:scale-95 duration-300 ${
                   controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
                 }`}
-                title="Próxima imagem (Seta direita)"
+                title="Próxima mídia (Seta direita)"
               >
                 <ChevronRight size={24} />
               </button>
@@ -393,59 +480,86 @@ export default function ImageZoomLightbox({
               controlsVisible ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"
             }`}
           >
-            <button
-              type="button"
-              onClick={() => setZoomScale((prev) => Math.max(prev - 0.25, 0.5))}
-              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-              title="Diminuir Zoom (-)"
-            >
-              <ZoomOut size={16} />
-            </button>
-
-            {/* Quick Presets */}
-            <div className="flex items-center gap-1">
-              {[1, 1.5, 2].map((preset) => (
-                <button
-                  key={preset}
-                  type="button"
-                  onClick={() => setZoomScale(preset)}
-                  className={`px-2 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
-                    Math.abs(zoomScale - preset) < 0.05
-                      ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
-                      : "bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-800/80"
-                  }`}
-                >
-                  {preset * 100}%
-                </button>
-              ))}
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setZoomScale((prev) => Math.min(prev + 0.25, 6))}
-              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-              title="Aumentar Zoom (+)"
-            >
-              <ZoomIn size={16} />
-            </button>
-
-            <div className="w-px h-5 bg-zinc-800 mx-0.5" />
-
-            <button
-              type="button"
-              onClick={() => setZoomScale(1)}
-              className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
-              title="Redefinir Zoom (0 ou R)"
-            >
-              <RotateCcw size={16} />
-            </button>
-
-            {validImages.length > 1 && (
-              <>
-                <div className="w-px h-5 bg-zinc-800 mx-0.5" />
-                <span className="text-xs font-mono font-bold text-cyan-400 whitespace-nowrap">
-                  {currentIndex + 1} / {validImages.length}
+            {isVideo ? (
+              /* Video Theater Controls */
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-cyan-300 flex items-center gap-1.5 font-mono">
+                  <Tv size={14} className="text-cyan-400 animate-pulse" />
+                  <span>Modo Teatro Exclusivo</span>
                 </span>
+                <div className="w-px h-4 bg-zinc-800" />
+                {validImages.length > 1 && (
+                  <span className="text-xs font-mono font-bold text-zinc-400">
+                    Mídia {currentIndex + 1} de {validImages.length}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={toggleFullscreen}
+                  className="px-2.5 py-1 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer text-xs flex items-center gap-1 font-bold"
+                  title="Tela Cheia Nativa (F)"
+                >
+                  <Maximize2 size={13} />
+                  <span>Tela Cheia</span>
+                </button>
+              </div>
+            ) : (
+              /* Image Controls */
+              <>
+                <button
+                  type="button"
+                  onClick={() => setZoomScale((prev) => Math.max(prev - 0.25, 0.5))}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
+                  title="Diminuir Zoom (-)"
+                >
+                  <ZoomOut size={16} />
+                </button>
+
+                <div className="flex items-center gap-1">
+                  {[1, 1.5, 2].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setZoomScale(preset)}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
+                        Math.abs(zoomScale - preset) < 0.05
+                          ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                          : "bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200 border border-zinc-800/80"
+                      }`}
+                    >
+                      {preset * 100}%
+                    </button>
+                  ))}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setZoomScale((prev) => Math.min(prev + 0.25, 6))}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
+                  title="Aumentar Zoom (+)"
+                >
+                  <ZoomIn size={16} />
+                </button>
+
+                <div className="w-px h-5 bg-zinc-800 mx-0.5" />
+
+                <button
+                  type="button"
+                  onClick={() => setZoomScale(1)}
+                  className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
+                  title="Redefinir Zoom (0 ou R)"
+                >
+                  <RotateCcw size={16} />
+                </button>
+
+                {validImages.length > 1 && (
+                  <>
+                    <div className="w-px h-5 bg-zinc-800 mx-0.5" />
+                    <span className="text-xs font-mono font-bold text-cyan-400 whitespace-nowrap">
+                      {currentIndex + 1} / {validImages.length}
+                    </span>
+                  </>
+                )}
               </>
             )}
           </div>

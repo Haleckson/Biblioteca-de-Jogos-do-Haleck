@@ -6,6 +6,7 @@
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Eye, ShieldCheck, Lock, ArrowRight, Gamepad2, CheckCircle2, AlertCircle } from "lucide-react";
+import { useBodyScrollLock } from "../lib/bodyScrollLock";
 
 interface WelcomeRoleModalProps {
   isOpen: boolean;
@@ -14,6 +15,8 @@ interface WelcomeRoleModalProps {
 }
 
 export default function WelcomeRoleModal({ isOpen, onSelectViewer, onSelectEditor }: WelcomeRoleModalProps) {
+  useBodyScrollLock(isOpen);
+
   const [selectedRole, setSelectedRole] = useState<"none" | "editor">("none");
   const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");

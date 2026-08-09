@@ -142,10 +142,13 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 .prose {
   font-size: 0.875rem; /* text-sm equivalent */
   line-height: 1.75;
+  white-space: pre-wrap;
+  tab-size: 4;
+  -moz-tab-size: 4;
 }
 
 .prose p, .prose > div {
-  margin-bottom: 1.125rem !important;
+  margin-bottom: 0.75rem;
 }
 
 .prose p:last-child, .prose > div:last-child {
@@ -155,6 +158,8 @@ input[type="date"]::-webkit-calendar-picker-indicator {
 /* Preserve whitespace, newlines, and tab stops */
 .prose-content {
   white-space: pre-wrap;
+  tab-size: 4;
+  -moz-tab-size: 4;
   word-wrap: break-word;
 }
 
@@ -183,80 +188,12 @@ input[type="date"]::-webkit-calendar-picker-indicator {
   color: #67e8f9 !important; /* cyan-300 */
 }
 
-/* Reset background styling and text colors for pasted text inside prose elements, unless it matches our explicit rich text highlighter colors */
-.prose *, .prose-content * {
-  background-color: transparent !important;
-  background: transparent !important;
-  color: inherit !important;
+/* Rich text content inline styles override default prose colors */
+.prose [data-dict-term],
+.prose-content [data-dict-term] {
+  display: inline;
+  border-radius: 0.25rem;
+  padding: 0 0.125rem;
 }
 
-/* Allow our exact user-applied highlight background colors */
-.prose [style*="background-color: #991b1b"],
-.prose [style*="background-color: rgb(153, 27, 27)"],
-.prose-content [style*="background-color: #991b1b"],
-.prose-content [style*="background-color: rgb(153, 27, 27)"] {
-  background-color: #991b1b !important;
-}
-.prose [style*="background-color: #78350f"],
-.prose [style*="background-color: rgb(120, 53, 15)"],
-.prose-content [style*="background-color: #78350f"],
-.prose-content [style*="background-color: rgb(120, 53, 15)"] {
-  background-color: #78350f !important;
-}
-.prose [style*="background-color: #064e3b"],
-.prose [style*="background-color: rgb(6, 78, 59)"],
-.prose-content [style*="background-color: #064e3b"],
-.prose-content [style*="background-color: rgb(6, 78, 59)"] {
-  background-color: #064e3b !important;
-}
-.prose [style*="background-color: #1e3a8a"],
-.prose [style*="background-color: rgb(30, 58, 138)"],
-.prose-content [style*="background-color: #1e3a8a"],
-.prose-content [style*="background-color: rgb(30, 58, 138)"] {
-  background-color: #1e3a8a !important;
-}
-.prose [style*="background-color: #581c87"],
-.prose [style*="background-color: rgb(88, 28, 135)"],
-.prose-content [style*="background-color: #581c87"],
-.prose-content [style*="background-color: rgb(88, 28, 135)"] {
-  background-color: #581c87 !important;
-}
-
-/* Allow our exact user-applied text colors */
-.prose [style*="color: #22d3ee"],
-.prose [style*="color: rgb(34, 211, 238)"],
-.prose-content [style*="color: #22d3ee"],
-.prose-content [style*="color: rgb(34, 211, 238)"] {
-  color: #22d3ee !important;
-}
-.prose [style*="color: #34d399"],
-.prose [style*="color: rgb(52, 211, 153)"],
-.prose-content [style*="color: #34d399"],
-.prose-content [style*="color: rgb(52, 211, 153)"] {
-  color: #34d399 !important;
-}
-.prose [style*="color: #fbbf24"],
-.prose [style*="color: rgb(251, 191, 36)"],
-.prose-content [style*="color: #fbbf24"],
-.prose-content [style*="color: rgb(251, 191, 36)"] {
-  color: #fbbf24 !important;
-}
-.prose [style*="color: #f43f5e"],
-.prose [style*="color: rgb(244, 63, 94)"],
-.prose-content [style*="color: #f43f5e"],
-.prose-content [style*="color: rgb(244, 63, 94)"] {
-  color: #f43f5e !important;
-}
-.prose [style*="color: #c084fc"],
-.prose [style*="color: rgb(192, 132, 252)"],
-.prose-content [style*="color: #c084fc"],
-.prose-content [style*="color: rgb(192, 132, 252)"] {
-  color: #c084fc !important;
-}
-.prose [style*="color: #ffffff"],
-.prose [style*="color: rgb(255, 255, 255)"],
-.prose-content [style*="color: #ffffff"],
-.prose-content [style*="color: rgb(255, 255, 255)"] {
-  color: #ffffff !important;
-}
 

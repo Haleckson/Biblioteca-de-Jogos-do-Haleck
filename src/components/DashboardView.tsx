@@ -1,5 +1,18 @@
 import React, { useMemo, useState } from "react";
 import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  CartesianGrid,
+} from "recharts";
+import {
   Trophy,
   Clock,
   Gamepad2,
@@ -20,15 +33,22 @@ import {
   Calendar,
   Zap,
   Shield,
+  DollarSign,
+  Coins,
+  BarChart3,
+  PieChart as PieChartIcon,
+  TrendingDown,
 } from "lucide-react";
 import { Game, getDlcMode, formatDateDisplay, splitEntities, getGameHighestTrophy, parseContextNote } from "../types";
 import TrophyBadge from "./TrophyBadge";
+import { formatSteamPlaytime } from "../utils/steamApi";
 
 interface DashboardViewProps {
   games: Game[];
   onSelectGame?: (gameId: string) => void;
   onNavigateToLibraryWithStatus?: (status: string) => void;
   onUpdateGame?: (game: Game) => void;
+  onOpenRetrospective?: () => void;
   isAdmin?: boolean;
 }
 
@@ -193,6 +213,7 @@ function RecentlyFinishedGameCard({
   };
 
   const handleSavePosition = () => {
+    if (!isAdmin) return;
     if (onUpdateGame) {
       onUpdateGame({
         ...game,
@@ -327,7 +348,7 @@ function RecentlyFinishedGameCard({
         {/* Adjusting overlay - Clean & non-blocking */}
         {isAdjusting && (
           <div 
-            className="absolute inset-0 bg-black/30 backdrop-blur-[0.5px] pointer-events-none flex flex-col justify-between p-2 z-30"
+            className="absolute inset-0 bg-black/60 pointer-events-none flex flex-col justify-between p-2 z-30"
           >
             <div className="flex items-center justify-between gap-1">
               <span className="text-[9px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1 bg-black/80 px-1.5 py-0.5 rounded border border-cyan-500/20">
@@ -411,6 +432,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onSelectGame,
   onNavigateToLibraryWithStatus,
   onUpdateGame,
+  onOpenRetrospective,
   isAdmin = true,
 }) => {
   const [activeModal, setActiveModal] = useState<DetailModalData | null>(null);
@@ -466,6 +488,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     let totalPlaytimeHours = 0;
     let totalJogatinaHours = 0;
     let totalExtraHours = 0;
+
+    let finitePlaytimeHours = 0;
+    let finiteJogatinaHours = 0;
+    let finiteExtraHours = 0;
 
     let backlogMainHours = 0;
     let backlogExtraHours = 0;
@@ -526,6 +552,17 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       totalJogatinaHours += jogatinaH;
       totalExtraHours += extraH;
       totalPlaytimeHours += hours;
+
+      if (game.isGaaS) {
+        // Para jogos Game as a Service (GaaS), contabiliza apenas o tempo principal de jogo (jogatinaH), ignorando o tempo extra
+        finitePlaytimeHours += jogatinaH;
+        finiteJogatinaHours += jogatinaH;
+      } else {
+        // Para jogos finitos/normais, contabiliza tanto tempo normal quanto tempo extra
+        finitePlaytimeHours += hours;
+        finiteJogatinaHours += jogatinaH;
+        finiteExtraHours += extraH;
+      }
 
       // Backlog estimated hours calculation (only for games marked as Backlog)
       if (statusList.includes("Backlog")) {
@@ -619,6 +656,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       .sort((a, b) => b.count - a.count)
       .slice(0, 8);
 
+    // Steam Stats
+    const steamGames = games.filter(g => g.steamAppId || (g.steamPlaytimeMinutes && g.steamPlaytimeMinutes > 0));
+    const totalSteamPlaytimeMinutes = steamGames.reduce((acc, g) => acc + (g.steamPlaytimeMinutes || 0), 0);
+    const topSteamGames = [...steamGames]
+      .filter(g => (g.steamPlaytimeMinutes || 0) > 0)
+      .sort((a, b) => (b.steamPlaytimeMinutes || 0) - (a.steamPlaytimeMinutes || 0));
+
+    const gamesWithAchievements = steamGames.filter(g => typeof g.steamAchievementsCount === "number" && typeof g.steamAchievementsTotal === "number" && g.steamAchievementsTotal > 0);
+    let avgSteamAchievementRate = 0;
+    if (gamesWithAchievements.length > 0) {
+      const sumRates = gamesWithAchievements.reduce((acc, g) => acc + ((g.steamAchievementsCount! / g.steamAchievementsTotal!) * 100), 0);
+      avgSteamAchievementRate = Math.round(sumRates / gamesWithAchievements.length);
+    }
+
     // Top Playtime Games
     const topPlaytimeGames = [...games]
       .map((g) => ({ game: g, hours: getTotalGamePlaytimeHours(g) }))
@@ -645,6 +696,36 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       })
       .slice(0, 6);
 
+    // Financial & Cost-per-hour metrics
+    let totalSpent = 0;
+    let gamesWithPriceCount = 0;
+    let totalHoursOfPaidGames = 0;
+
+    const gamesCostList = games
+      .map((g) => {
+        const price = typeof g.pricePaid === "number" && g.pricePaid > 0 ? g.pricePaid : 0;
+        const hours = getTotalGamePlaytimeHours(g);
+        const costPerHour = hours > 0 && price > 0 ? price / hours : null;
+        if (price > 0) {
+          totalSpent += price;
+          gamesWithPriceCount++;
+          totalHoursOfPaidGames += hours;
+        }
+        return {
+          game: g,
+          price,
+          hours,
+          costPerHour,
+        };
+      })
+      .filter((item) => item.price > 0 || item.hours > 0);
+
+    const avgCostPerHour = totalHoursOfPaidGames > 0 && totalSpent > 0 ? totalSpent / totalHoursOfPaidGames : 0;
+
+    const topCostBenefitGames = [...gamesCostList]
+      .filter((item) => item.costPerHour !== null && item.costPerHour > 0)
+      .sort((a, b) => (a.costPerHour!) - (b.costPerHour!));
+
     return {
       totalGames,
       completedGames,
@@ -656,6 +737,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       totalPlaytimeHours,
       totalJogatinaHours,
       totalExtraHours,
+      finitePlaytimeHours,
+      finiteJogatinaHours,
+      finiteExtraHours,
       estimatedBacklogHours: backlogMainHours,
       backlogMainHours,
       backlogExtraHours,
@@ -677,6 +761,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       topMetacriticGames,
       topUserRatedGames,
       recentlyFinishedGames,
+      steamLinkedCount: steamGames.length,
+      totalSteamPlaytimeMinutes,
+      topSteamGames,
+      avgSteamAchievementRate,
+      gamesWithAchievementsCount: gamesWithAchievements.length,
+      totalSpent,
+      gamesWithPriceCount,
+      avgCostPerHour,
+      topCostBenefitGames,
+      gamesCostList,
     };
   }, [games]);
 
@@ -702,6 +796,21 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-3 self-start md:self-auto shrink-0">
+            {/* Botão Retrospectiva Gamer */}
+            {onOpenRetrospective && (
+              <button
+                type="button"
+                onClick={onOpenRetrospective}
+                className="bg-gradient-to-r from-purple-600 via-pink-600 to-amber-500 hover:from-purple-500 hover:to-amber-400 text-white font-extrabold text-xs px-4 py-2.5 rounded-2xl flex items-center gap-2 cursor-pointer transition-all shadow-lg hover:shadow-purple-500/25 hover:scale-105 active:scale-95 group border border-purple-400/40"
+                data-tooltip="Abrir Retrospectiva Gamer com slides dinâmicos do seu ano/período"
+                data-tooltip-title="Retrospectiva Gamer 🎆"
+                data-tooltip-theme="purple"
+              >
+                <Sparkles size={18} className="animate-spin text-amber-300" />
+                <span>Retrospectiva Gamer</span>
+              </button>
+            )}
+
             {/* Metascore Média */}
             <div 
               onClick={() => {
@@ -756,7 +865,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* KPI Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
         {/* Total Games */}
         <div 
           onClick={() => {
@@ -785,13 +894,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <p className="text-[11px] text-zinc-500 mt-1">Clique para ver lista detalhada ➔</p>
         </div>
 
-        {/* Total Playtime */}
+        {/* Total Playtime (Geral) */}
         <div 
           onClick={() => {
             setActiveModal({
-              title: "Tempo Investido",
-              subtitle: `Total de ${formatHoursAndMinutes(stats.totalPlaytimeHours)} investidas no seu acervo`,
-              explanation: "Estatística dividida em 3 partes: Tempo da Jogatina (campanhas e jogatinas ativas), Tempo Extra (atividades secundárias e adicionais) e o Tempo Total (somatório de tudo).",
+              title: "Tempo Investido (Geral / Total)",
+              subtitle: `Total de ${formatHoursAndMinutes(stats.totalPlaytimeHours)} investidas no acervo`,
+              explanation: "Tempo total acumulado de todos os jogos cadastrados (contabilizando tanto jogos normais/finitos quanto todas as horas extras e sessões de jogos Game as a Service).",
               icon: <Clock className="text-purple-400" size={20} />,
               gamesList: games.filter(g => getTotalGamePlaytimeHours(g) > 0).sort((a,b) => getTotalGamePlaytimeHours(b) - getTotalGamePlaytimeHours(a)),
               metricType: "playtime",
@@ -801,7 +910,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         >
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400 group-hover:text-purple-400 transition-colors">
-              Tempo Investido (Total)
+              Tempo Geral Total
             </span>
             <div className="p-2 rounded-xl bg-purple-950/50 text-purple-400 border border-purple-500/20">
               <Clock size={16} />
@@ -811,8 +920,47 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {formatHoursAndMinutes(stats.totalPlaytimeHours)}
           </div>
           <div className="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[10px] text-zinc-400 font-mono">
-            <span title="Tempo de Jogatina (Campanha/Ativa)">🎮 Jogatina: <strong className="text-purple-300 font-bold">{formatHoursAndMinutes(stats.totalJogatinaHours)}</strong></span>
-            <span title="Tempo Extra (Outras Jogatinas)">➕ Extra: <strong className="text-cyan-300 font-bold">{formatHoursAndMinutes(stats.totalExtraHours)}</strong></span>
+            <span title="Tempo de Jogatina (Principal/Ativa)">🎮 Jogatina: <strong className="text-purple-300 font-bold">{formatHoursAndMinutes(stats.totalJogatinaHours)}</strong></span>
+            <span title="Tempo Extra (Todas as Mídias/GaaS)">➕ Extra: <strong className="text-cyan-300 font-bold">{formatHoursAndMinutes(stats.totalExtraHours)}</strong></span>
+          </div>
+        </div>
+
+        {/* Playtime Jogos Finitos */}
+        <div 
+          onClick={() => {
+            setActiveModal({
+              title: "Tempo em Jogos Finitos (Campanhas)",
+              subtitle: `Total de ${formatHoursAndMinutes(stats.finitePlaytimeHours)} investidas em campanhas/finitos`,
+              explanation: "Tempo de jogo focado em campanhas e jogos finitos. Para títulos marcados como Game as a Service (GaaS), contabiliza apenas o tempo principal de jogo, ignorando o tempo extra acumulado.",
+              icon: <Clock className="text-pink-400" size={20} />,
+              gamesList: games.filter(g => {
+                const mainH = parsePlaytimeHours(g.playtime);
+                const extraH = parsePlaytimeHours(g.additionalPlaytime);
+                return g.isGaaS ? mainH > 0 : (mainH + extraH) > 0;
+              }).sort((a,b) => {
+                const hA = a.isGaaS ? parsePlaytimeHours(a.playtime) : getTotalGamePlaytimeHours(a);
+                const hB = b.isGaaS ? parsePlaytimeHours(b.playtime) : getTotalGamePlaytimeHours(b);
+                return hB - hA;
+              }),
+              metricType: "playtime",
+            });
+          }}
+          className="bg-zinc-900/90 hover:bg-zinc-850 border border-zinc-800 hover:border-pink-500/40 rounded-2xl p-4 transition-all group cursor-pointer shadow-lg"
+        >
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] font-black uppercase tracking-wider text-zinc-400 group-hover:text-pink-400 transition-colors">
+              Tempo Jogos Finitos
+            </span>
+            <div className="p-2 rounded-xl bg-pink-950/50 text-pink-400 border border-pink-500/20">
+              <Clock size={16} />
+            </div>
+          </div>
+          <div className="text-2xl sm:text-3xl font-black font-orbitron text-pink-300">
+            {formatHoursAndMinutes(stats.finitePlaytimeHours)}
+          </div>
+          <div className="mt-2 pt-2 border-t border-zinc-800/80 flex items-center justify-between text-[10px] text-zinc-400 font-mono">
+            <span title="Tempo de Jogatina Finitos">🎮 Finitos: <strong className="text-pink-300 font-bold">{formatHoursAndMinutes(stats.finiteJogatinaHours)}</strong></span>
+            <span title="Ignora tempo extra de jogos GaaS" className="text-pink-400/80 font-bold">♾️ Exclui GaaS Extra</span>
           </div>
         </div>
 
@@ -1145,6 +1293,316 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               ? `🏆 ${stats.platinumCount} jogos receberam o selo máximo de Platina Brilhante!` 
               : "Defina troféus ao editar as fichas dos seus jogos zerados."}
           </p>
+        </div>
+      </div>
+
+      {/* Visual Analytics Block 1: Backlog & Status Recharts Donut + Platforms & Genres BarCharts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Backlog & Status PieChart */}
+        <div className="bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <PieChartIcon className="text-cyan-400" size={18} />
+              <h3 className="text-base font-bold text-white uppercase font-orbitron tracking-wide">
+                Gráfico do Backlog
+              </h3>
+            </div>
+            <span className="text-xs text-zinc-400 font-mono font-bold bg-zinc-800/80 px-2.5 py-1 rounded-full">
+              {stats.totalGames} Jogos
+            </span>
+          </div>
+
+          {stats.totalGames > 0 ? (
+            <div className="h-64 w-full flex items-center justify-center relative">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={[
+                      { name: "Zerado", value: stats.completedGames, color: "#3b82f6" },
+                      { name: "Jogando", value: stats.playingGames, color: "#10b981" },
+                      { name: "Em Hiatus", value: stats.pausedGames, color: "#f97316" },
+                      { name: "Backlog", value: stats.backlogGames, color: "#71717a" },
+                      { name: "Desistido", value: stats.abandonedGames, color: "#ef4444" },
+                    ].filter((item) => item.value > 0)}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={85}
+                    paddingAngle={4}
+                    dataKey="value"
+                  >
+                    {[
+                      { name: "Zerado", value: stats.completedGames, color: "#3b82f6" },
+                      { name: "Jogando", value: stats.playingGames, color: "#10b981" },
+                      { name: "Em Hiatus", value: stats.pausedGames, color: "#f97316" },
+                      { name: "Backlog", value: stats.backlogGames, color: "#71717a" },
+                      { name: "Desistido", value: stats.abandonedGames, color: "#ef4444" },
+                    ]
+                      .filter((item) => item.value > 0)
+                      .map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} stroke="#18181b" strokeWidth={2} />
+                      ))}
+                  </Pie>
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#09090b",
+                      borderColor: "#27272a",
+                      borderRadius: "0.75rem",
+                      color: "#fff",
+                      fontSize: "12px",
+                      fontWeight: "bold",
+                    }}
+                    formatter={(val: number) => [`${val} jogo(s) (${Math.round((val / stats.totalGames) * 100)}%)`, "Qtd."]}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                <span className="text-2xl font-black font-orbitron text-white">{stats.completionRate}%</span>
+                <span className="text-[10px] font-bold text-cyan-400 uppercase tracking-widest">Concluídos</span>
+              </div>
+            </div>
+          ) : (
+            <div className="h-64 flex items-center justify-center text-xs text-zinc-500">
+              Nenhum jogo cadastrado na biblioteca.
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-2 text-xs font-mono pt-2 border-t border-zinc-800">
+            <div className="flex items-center justify-between text-blue-400">
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-blue-500" /> Zerados</span>
+              <strong>{stats.completedGames} ({stats.totalGames > 0 ? Math.round((stats.completedGames / stats.totalGames) * 100) : 0}%)</strong>
+            </div>
+            <div className="flex items-center justify-between text-emerald-400">
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Jogando</span>
+              <strong>{stats.playingGames} ({stats.totalGames > 0 ? Math.round((stats.playingGames / stats.totalGames) * 100) : 0}%)</strong>
+            </div>
+            <div className="flex items-center justify-between text-orange-400">
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-orange-500" /> Em Hiatus</span>
+              <strong>{stats.pausedGames} ({stats.totalGames > 0 ? Math.round((stats.pausedGames / stats.totalGames) * 100) : 0}%)</strong>
+            </div>
+            <div className="flex items-center justify-between text-zinc-400">
+              <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-zinc-500" /> Backlog</span>
+              <strong>{stats.backlogGames} ({stats.totalGames > 0 ? Math.round((stats.backlogGames / stats.totalGames) * 100) : 0}%)</strong>
+            </div>
+          </div>
+        </div>
+
+        {/* Platforms BarChart */}
+        <div className="bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="text-purple-400" size={18} />
+              <h3 className="text-base font-bold text-white uppercase font-orbitron tracking-wide">
+                Distribuição por Plataforma
+              </h3>
+            </div>
+            <span className="text-xs text-purple-400 font-mono font-bold bg-purple-950/40 px-2.5 py-1 rounded-full border border-purple-800/30">
+              {stats.platforms.length} Plataformas
+            </span>
+          </div>
+
+          {stats.platforms.length > 0 ? (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  data={stats.platforms.slice(0, 6).map((p) => ({
+                    name: p.name,
+                    jogos: p.count,
+                    horas: Math.round(p.hours),
+                  }))}
+                  margin={{ top: 10, right: 10, left: -20, bottom: 0 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" vertical={false} />
+                  <XAxis dataKey="name" stroke="#71717a" fontSize={10} tickLine={false} />
+                  <YAxis stroke="#71717a" fontSize={10} tickLine={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#09090b",
+                      borderColor: "#27272a",
+                      borderRadius: "0.75rem",
+                      color: "#fff",
+                      fontSize: "12px",
+                    }}
+                    formatter={(val: number, name: string) => [
+                      name === "jogos" ? `${val} jogo(s)` : `${val}h jogadas`,
+                      name === "jogos" ? "Títulos" : "Horas",
+                    ]}
+                  />
+                  <Bar dataKey="jogos" fill="#a855f7" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="h-64 flex items-center justify-center text-xs text-zinc-500">
+              Nenhuma plataforma cadastrada.
+            </div>
+          )}
+
+          <p className="text-[10px] text-zinc-500 text-center">
+            Plataformas com maior número de títulos na sua biblioteca
+          </p>
+        </div>
+
+        {/* Genres BarChart */}
+        <div className="bg-zinc-900/90 border border-zinc-800 rounded-3xl p-6 shadow-xl space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <BarChart3 className="text-emerald-400" size={18} />
+              <h3 className="text-base font-bold text-white uppercase font-orbitron tracking-wide">
+                Gêneros Mais Jogados
+              </h3>
+            </div>
+            <span className="text-xs text-emerald-400 font-mono font-bold bg-emerald-950/40 px-2.5 py-1 rounded-full border border-emerald-800/30">
+              {stats.genres.length} Gêneros
+            </span>
+          </div>
+
+          {stats.genres.length > 0 ? (
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart
+                  layout="vertical"
+                  data={stats.genres.slice(0, 5).map((g) => ({
+                    name: g.name.length > 12 ? `${g.name.slice(0, 12)}…` : g.name,
+                    fullName: g.name,
+                    jogos: g.count,
+                    horas: Math.round(g.hours),
+                  }))}
+                  margin={{ top: 5, right: 10, left: 10, bottom: 5 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#27272a" horizontal={false} />
+                  <XAxis type="number" stroke="#71717a" fontSize={10} tickLine={false} />
+                  <YAxis dataKey="name" type="category" stroke="#71717a" fontSize={10} tickLine={false} width={80} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: "#09090b",
+                      borderColor: "#27272a",
+                      borderRadius: "0.75rem",
+                      color: "#fff",
+                      fontSize: "12px",
+                    }}
+                    formatter={(val: number) => [`${val} jogo(s)`, "Qtd."]}
+                  />
+                  <Bar dataKey="jogos" fill="#10b981" radius={[0, 6, 6, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          ) : (
+            <div className="h-64 flex items-center justify-center text-xs text-zinc-500">
+              Nenhum gênero cadastrado.
+            </div>
+          )}
+
+          <p className="text-[10px] text-zinc-500 text-center">
+            Gêneros predominantes no acervo do jogador
+          </p>
+        </div>
+      </div>
+
+      {/* Visual Analytics Block 2: Custo por Hora Jogada (Financial Analytics Matrix) */}
+      <div className="bg-gradient-to-br from-zinc-900 via-emerald-950/20 to-zinc-900 border border-emerald-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-800/80 pb-4">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-bold uppercase tracking-widest mb-2">
+              <Coins size={14} className="text-emerald-400" />
+              <span>Análise Financeira & Custo-Benefício</span>
+            </div>
+            <h3 className="text-xl sm:text-2xl font-black font-orbitron text-white">
+              Custo por Hora Jogada (R$ / h)
+            </h3>
+            <p className="text-xs sm:text-sm text-zinc-400 mt-1">
+              Calcula quanto você "pagou por hora de diversão" com base no valor de compra e no tempo total investido em cada jogo.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3 flex-wrap">
+            <div className="bg-zinc-950/90 border border-emerald-500/30 px-4 py-3 rounded-2xl flex items-center gap-3 shadow-lg">
+              <DollarSign className="text-emerald-400 shrink-0" size={22} />
+              <div>
+                <span className="block text-[9px] text-zinc-400 font-extrabold uppercase tracking-widest">
+                  Total Investido
+                </span>
+                <span className="text-lg font-black font-mono text-emerald-400">
+                  R$ {stats.totalSpent.toFixed(2).replace(".", ",")}
+                </span>
+              </div>
+            </div>
+
+            <div className="bg-zinc-950/90 border border-cyan-500/30 px-4 py-3 rounded-2xl flex items-center gap-3 shadow-lg">
+              <TrendingDown className="text-cyan-400 shrink-0" size={22} />
+              <div>
+                <span className="block text-[9px] text-zinc-400 font-extrabold uppercase tracking-widest">
+                  Custo Médio / Hora
+                </span>
+                <span className="text-lg font-black font-mono text-cyan-300">
+                  {stats.avgCostPerHour > 0 ? `R$ ${stats.avgCostPerHour.toFixed(2).replace(".", ",")}/h` : "N/D"}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Top Cost-Benefit Ranking */}
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs sm:text-sm font-extrabold uppercase tracking-wider text-white font-orbitron flex items-center gap-2">
+              <Sparkles size={16} className="text-emerald-400" />
+              <span>Top Jogos com Melhor Custo-Benefício (Menor R$/h)</span>
+            </h4>
+            <span className="text-xs text-zinc-400 font-mono">
+              {stats.topCostBenefitGames.length} jogos cadastrados com valor
+            </span>
+          </div>
+
+          {stats.topCostBenefitGames.length > 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {stats.topCostBenefitGames.slice(0, 8).map(({ game, price, hours, costPerHour }, idx) => (
+                <div
+                  key={game.id}
+                  onClick={() => onSelectGame && onSelectGame(game.id)}
+                  className="bg-zinc-950/80 hover:bg-zinc-850 border border-zinc-800 hover:border-emerald-500/50 rounded-2xl p-3.5 transition-all cursor-pointer group shadow-md relative overflow-hidden"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-12 rounded-xl overflow-hidden shrink-0 bg-zinc-900 border border-zinc-800">
+                      <img
+                        src={game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800"}
+                        alt={game.name}
+                        style={{
+                          objectPosition: `${game.coverPositionX ?? 50}% ${game.coverPosition ?? 50}%`,
+                          transform: `scale(${(game.coverZoom ?? 100) / 100})`,
+                        }}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1 mb-0.5">
+                        <span className="text-[9px] font-black font-mono text-emerald-400 bg-emerald-950/60 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                          #{idx + 1}
+                        </span>
+                        <h5 className="text-xs font-bold text-white truncate group-hover:text-emerald-300 transition-colors">
+                          {game.name}
+                        </h5>
+                      </div>
+                      <div className="text-[10px] text-zinc-400 font-mono">
+                        Pago: R$ {price.toFixed(2).replace(".", ",")} • {formatHoursAndMinutes(hours)}
+                      </div>
+                      <div className="mt-1 text-sm font-black font-mono text-emerald-400">
+                        R$ {costPerHour!.toFixed(2).replace(".", ",")}<span className="text-[10px] font-normal text-zinc-400">/hora</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="bg-zinc-950/60 border border-zinc-800 rounded-2xl p-6 text-center text-xs text-zinc-400 space-y-2">
+              <Coins className="mx-auto text-zinc-600" size={32} />
+              <p className="font-semibold text-zinc-300">Nenhum jogo possui valor pago (R$) cadastrado ainda.</p>
+              <p className="text-zinc-500 max-w-md mx-auto">
+                Edite a ficha dos seus jogos no botão de lápis e preencha o campo <strong className="text-emerald-400">"Valor Pago (R$)"</strong> nas informações básicas para gerar as estatísticas de custo por hora!
+              </p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -1512,6 +1970,112 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           )}
         </div>
       </div>
+
+      {/* Global Steam Statistics Dashboard Section */}
+      {stats.steamLinkedCount > 0 && (
+        <div className="bg-gradient-to-r from-zinc-950 via-blue-950/40 to-zinc-950 border border-blue-500/30 rounded-3xl p-6 shadow-2xl space-y-5">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 rounded-2xl bg-blue-950/80 border border-blue-500/40 text-blue-400">
+                <Gamepad2 size={20} />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white uppercase font-orbitron tracking-wide flex items-center gap-2">
+                  <span>Estatísticas da Steam</span>
+                  <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-mono font-normal">
+                    {stats.steamLinkedCount} {stats.steamLinkedCount === 1 ? "jogo vinculado" : "jogos vinculados"}
+                  </span>
+                </h3>
+                <p className="text-xs text-zinc-400 font-sans">
+                  Sincronização de horas e conquistas via Steam Web API
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 font-mono">
+              <div className="px-3.5 py-2 rounded-2xl bg-zinc-900/90 border border-blue-500/30 text-right">
+                <span className="block text-[10px] uppercase text-zinc-400 font-bold">Tempo Total Steam</span>
+                <span className="text-sm sm:text-base font-black text-blue-300">
+                  {formatSteamPlaytime(stats.totalSteamPlaytimeMinutes)}
+                </span>
+              </div>
+              {stats.gamesWithAchievementsCount > 0 && (
+                <div className="px-3.5 py-2 rounded-2xl bg-zinc-900/90 border border-amber-500/30 text-right">
+                  <span className="block text-[10px] uppercase text-zinc-400 font-bold">Média Conquistas</span>
+                  <span className="text-sm sm:text-base font-black text-amber-300">
+                    {stats.avgSteamAchievementRate}%
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Ranking of Most Played Steam Games */}
+          {stats.topSteamGames.length > 0 && (
+            <div className="space-y-3 pt-2">
+              <h4 className="text-xs font-bold uppercase text-blue-300 tracking-wider flex items-center gap-2 font-mono">
+                <TrendingUp size={14} className="text-blue-400" />
+                <span>Ranking de Horas na Steam (Mais Jogados)</span>
+              </h4>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {stats.topSteamGames.slice(0, 6).map((game, index) => {
+                  const pct = stats.totalSteamPlaytimeMinutes > 0
+                    ? Math.round(((game.steamPlaytimeMinutes || 0) / stats.totalSteamPlaytimeMinutes) * 100)
+                    : 0;
+                  return (
+                    <div
+                      key={game.id}
+                      onClick={() => onSelectGame && onSelectGame(game.id)}
+                      className="p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800 hover:border-blue-500/40 transition-all cursor-pointer flex items-center gap-3 group shadow-sm"
+                    >
+                      <div className="text-xs font-black font-mono text-blue-400 shrink-0 w-5 text-center">
+                        #{index + 1}
+                      </div>
+
+                      <div className="w-10 h-12 rounded-xl overflow-hidden bg-zinc-950 shrink-0 border border-zinc-800">
+                        <img
+                          src={game.cover}
+                          alt={game.name}
+                          style={{
+                            objectPosition: `${game.coverPositionX ?? 50}% ${game.coverPosition ?? 50}%`,
+                            transform: `scale(${(game.coverZoom ?? 100) / 100})`,
+                          }}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-xs font-bold text-white truncate group-hover:text-blue-300 transition-colors">
+                            {game.name}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
+                          <span className="text-blue-300 font-bold">
+                            {formatSteamPlaytime(game.steamPlaytimeMinutes || 0)}
+                          </span>
+                          <span className="text-zinc-500 text-[10px]">
+                            {pct}% do total
+                          </span>
+                        </div>
+
+                        <div className="w-full h-1.5 bg-zinc-950 rounded-full overflow-hidden border border-zinc-900">
+                          <div
+                            className="h-full bg-blue-500 rounded-full"
+                            style={{ width: `${Math.min(100, Math.max(5, pct))}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Platform & Genre Breakdown Grid */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

@@ -3,7 +3,17 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+export interface ActiveLiveSession {
+  gameId: string;
+  startTimestamp: number; // Date.now() when started
+  accumulatedMs: number; // Elapsed ms prior to last pause
+  isPaused: boolean;
+  pausedTimestamp?: number;
+  sessionNotes?: string;
+}
+
 export interface MediaItem {
+  id?: string;
   src: string;
   isVideo: boolean;
   deleteUrl?: string;
@@ -14,11 +24,40 @@ export interface DiaryEntry {
   period: string; // e.g. "10/05/2026 ~ 18/05/2026"
   medias: MediaItem[];
   text: string;
+  keyMoments?: string[]; // e.g. ["Boss Fight", "Platina", "Plot Twist", "Review Final", "Momento Épico"]
+}
+
+export interface TrashItem {
+  id: string;
+  deletedAt: number; // Date.now()
+  type: "game" | "diary_entry" | "media";
+  title: string;
+  gameId?: string;
+  gameTitle?: string;
+  diaryEntryId?: string;
+  data: any; // Original deleted payload
 }
 
 export interface TrophyItem {
   type: "silver" | "gold" | "platinum";
   note?: string;
+}
+
+export interface DictionaryFormat {
+  textColor?: string;
+  bgColor?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+}
+
+export interface DictionaryItem {
+  id: string;
+  term: string; // Word or phrase, e.g. "Korok Seed" or "Term 1, Term 2"
+  variants?: string[]; // Optional variations, plurals, or synonyms, e.g. ["Korok Seeds", "Sementes Korok"] or ["Kakariko Village"]
+  group?: string; // Optional group/conjunto name, e.g. "Itens", "Personagens"
+  format: DictionaryFormat;
 }
 
 export interface Game {
@@ -42,6 +81,7 @@ export interface Game {
   endDate: string; // YYYY-MM-DD or empty
   releaseDate: string; // YYYY-MM-DD
   diary: DiaryEntry[];
+  dictionary?: DictionaryItem[];
   coverPosition?: number;
   coverPositionX?: number;
   coverZoom?: number;
@@ -63,6 +103,19 @@ export interface Game {
   trophies?: (("silver" | "gold" | "platinum") | TrophyItem)[];
   pros?: string;
   cons?: string;
+  isGaaS?: boolean;
+  pricePaid?: number;
+  integrationPlatform?: "steam" | "gog" | "none";
+  steamAppId?: number | string;
+  steamPlaytimeMinutes?: number;
+  steamLastPlayedTimestamp?: number;
+  steamAchievementsCount?: number;
+  steamAchievementsTotal?: number;
+  gogGameId?: number | string;
+  gogPlaytimeMinutes?: number;
+  gogLastPlayedTimestamp?: number;
+  gogAchievementsCount?: number;
+  gogAchievementsTotal?: number;
 }
 
 export function getGameTrophyItems(game: Partial<Game>): TrophyItem[] {
