@@ -368,6 +368,81 @@ export async function deleteFileOrFolder(id: string): Promise<void> {
 }
 
 /**
+ * Renames an existing file or folder in Google Drive.
+ */
+export async function renameFileOrFolder(fileId: string, newName: string): Promise<void> {
+  await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}`, {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: newName,
+    }),
+  });
+}
+
+/**
+ * Gets or creates a diary entry folder, automatically migrating and renaming any existing folder
+ * that belongs to this entryId (e.g. if it had [0000-00-00] or an older date format), completely preventing duplicate folders.
+ */
+export async function getOrCreateDiaryEntryFolder(
+  targetFolderName: string,
+  entryId: string,
+  parentGameFolderId: string
+): Promise<string> {
+  const existingItems = await listFilesAndFoldersInParent(parentGameFolderId);
+
+  // 1. Check if the exact folder name already exists
+  const exactMatch = existingItems.find(
+    (item) => item.mimeType === "application/vnd.google-apps.folder" && item.name === targetFolderName
+  );
+  if (exactMatch) {
+    return exactMatch.id;
+  }
+
+  // 2. Check if a folder for this entryId exists under an older or temporary name (e.g. [0000-00-00]... or previous date range)
+  if (entryId) {
+    const legacyMatches = existingItems.filter(
+      (item) =>
+        item.mimeType === "application/vnd.google-apps.folder" &&
+        (item.name.endsWith(`- ${entryId}`) || item.name.includes(entryId))
+    );
+
+    if (legacyMatches.length > 0) {
+      const primaryFolder = legacyMatches[0];
+      try {
+        console.log(`[GoogleDrive Auto-Rename] Renomeando pasta de diário de "${primaryFolder.name}" para "${targetFolderName}"...`);
+        await renameFileOrFolder(primaryFolder.id, targetFolderName);
+        addBackupLog({
+          provider: "Google Drive",
+          action: "Renomeação de Pasta de Diário",
+          status: "success",
+          details: `Pasta renomeada de "${primaryFolder.name}" para "${targetFolderName}".`,
+        });
+
+        // Clean up any other duplicate folders with the same entryId if any
+        for (let i = 1; i < legacyMatches.length; i++) {
+          try {
+            await deleteFileOrFolder(legacyMatches[i].id);
+          } catch (delErr) {
+            console.warn("Aviso ao remover pasta duplicada:", delErr);
+          }
+        }
+
+        return primaryFolder.id;
+      } catch (renameErr) {
+        console.warn(`Erro ao renomear pasta (${primaryFolder.name}):`, renameErr);
+        return primaryFolder.id;
+      }
+    }
+  }
+
+  // 3. If no folder existed for this entry, create a new one
+  return await getOrCreateFolder(targetFolderName, parentGameFolderId);
+}
+
+/**
  * Utility to fetch a remote image or video URL (or parse base64 data URI) and convert it to a Blob.
  */
 async function urlToBlob(url: string, retries = 2): Promise<Blob | null> {
@@ -623,17 +698,43 @@ function getVideoDetails(blob: Blob, srcUrl: string): { extension: string; mimeT
 }
 
 /**
- * Helper to parse start date from period string (e.g., "10/05/2026 ~ 18/05/2026")
+ * Helper to parse start date timestamp from period string (e.g., "10/05/2026 ~ 18/05/2026", "2026-05-10 até 2026-05-18")
  */
 function parsePeriodStartDate(period: string): number {
   try {
-    const firstPart = period.split("~")[0].trim();
-    const parts = firstPart.split("/");
-    if (parts.length === 3) {
-      const day = parseInt(parts[0], 10);
-      const month = parseInt(parts[1], 10) - 1;
-      const year = parseInt(parts[2], 10);
+    if (!period || typeof period !== "string") return 0;
+    const cleanStr = period.trim();
+    const separator = cleanStr.includes("~")
+      ? "~"
+      : cleanStr.toLowerCase().includes(" até ")
+      ? " até "
+      : cleanStr.toLowerCase().includes(" to ")
+      ? " to "
+      : null;
+
+    const firstPart = (separator ? cleanStr.split(separator)[0] : cleanStr).trim();
+
+    // Check for DD/MM/YYYY
+    const brMatch = firstPart.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+    if (brMatch) {
+      const day = parseInt(brMatch[1], 10);
+      const month = parseInt(brMatch[2], 10) - 1;
+      const year = parseInt(brMatch[3], 10);
       return new Date(year, month, day).getTime();
+    }
+
+    // Check for YYYY-MM-DD
+    const isoMatch = firstPart.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+    if (isoMatch) {
+      const year = parseInt(isoMatch[1], 10);
+      const month = parseInt(isoMatch[2], 10) - 1;
+      const day = parseInt(isoMatch[3], 10);
+      return new Date(year, month, day).getTime();
+    }
+
+    const parsed = Date.parse(firstPart);
+    if (!isNaN(parsed)) {
+      return parsed;
     }
   } catch (err) {
     console.error("Error parsing period date:", err);
@@ -642,48 +743,102 @@ function parsePeriodStartDate(period: string): number {
 }
 
 /**
- * Parses and formats period string to standard YYYY-MM-DD and secure range representation for filenames/folders.
+ * Parses and formats period string to standard YYYY-MM-DD and clean range representation for filenames/folders.
+ * Robust to formats like "DD/MM/AAAA ~ DD/MM/AAAA", "YYYY-MM-DD", "YYYY-MM-DD até YYYY-MM-DD", etc.
  */
 function getFormattedPeriodAndDate(period: string): { startDateYMD: string; formattedRange: string } {
   try {
-    if (!period || typeof period !== "string" || !period.trim()) {
-      return { startDateYMD: "0000-00-00", formattedRange: "Sem_Data" };
-    }
-    const parts = period.split("~");
-    const firstPart = parts[0]?.trim() || "";
-    const secondPart = parts[1]?.trim() || firstPart;
+    const parseSingleDate = (str: string): { ymd: string; dmy: string; timestamp: number } | null => {
+      if (!str || typeof str !== "string") return null;
+      const clean = str.trim();
 
-    const partsStart = firstPart.split("/");
-    const partsEnd = secondPart.split("/");
-
-    let startDateYMD = "0000-00-00";
-    let formattedRange = "Sem_Data";
-
-    if (partsStart.length === 3) {
-      const day = partsStart[0].padStart(2, "0");
-      const month = partsStart[1].padStart(2, "0");
-      const year = partsStart[2];
-      startDateYMD = `${year}-${month}-${day}`;
-    }
-
-    const cleanPart = (p: string[]) => {
-      if (p.length === 3) {
-        return `${p[0].padStart(2, "0")}-${p[1].padStart(2, "0")}-${p[2]}`;
+      // Check for YYYY-MM-DD
+      const isoMatch = clean.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
+      if (isoMatch) {
+        const y = isoMatch[1];
+        const m = isoMatch[2].padStart(2, "0");
+        const d = isoMatch[3].padStart(2, "0");
+        return {
+          ymd: `${y}-${m}-${d}`,
+          dmy: `${d}-${m}-${y}`,
+          timestamp: new Date(Number(y), Number(m) - 1, Number(d)).getTime(),
+        };
       }
-      return p.join("-");
+
+      // Check for DD/MM/YYYY or DD-MM-YYYY
+      const brMatch = clean.match(/^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})/);
+      if (brMatch) {
+        const d = brMatch[1].padStart(2, "0");
+        const m = brMatch[2].padStart(2, "0");
+        const y = brMatch[3];
+        return {
+          ymd: `${y}-${m}-${d}`,
+          dmy: `${d}-${m}-${y}`,
+          timestamp: new Date(Number(y), Number(m) - 1, Number(d)).getTime(),
+        };
+      }
+
+      // Try Date.parse
+      const parsed = Date.parse(clean);
+      if (!isNaN(parsed)) {
+        const dt = new Date(parsed);
+        const y = String(dt.getFullYear());
+        const m = String(dt.getMonth() + 1).padStart(2, "0");
+        const d = String(dt.getDate()).padStart(2, "0");
+        return {
+          ymd: `${y}-${m}-${d}`,
+          dmy: `${d}-${m}-${y}`,
+          timestamp: dt.getTime(),
+        };
+      }
+
+      return null;
     };
 
-    if (firstPart && secondPart) {
-      formattedRange = `${cleanPart(partsStart)} a ${cleanPart(partsEnd)}`;
-    } else if (firstPart) {
-      formattedRange = cleanPart(partsStart);
-    }
+    if (period && typeof period === "string" && period.trim()) {
+      const cleanStr = period.trim();
+      const separator = cleanStr.includes("~")
+        ? "~"
+        : cleanStr.toLowerCase().includes(" até ")
+        ? " até "
+        : cleanStr.toLowerCase().includes(" to ")
+        ? " to "
+        : null;
 
-    return { startDateYMD, formattedRange };
+      const parts = separator ? cleanStr.split(separator) : [cleanStr];
+      const firstRaw = (parts[0] || "").trim();
+      const secondRaw = (parts[1] || "").trim();
+
+      const firstParsed = parseSingleDate(firstRaw);
+      const secondParsed = parseSingleDate(secondRaw);
+
+      if (firstParsed && secondParsed) {
+        return {
+          startDateYMD: firstParsed.ymd,
+          formattedRange: `${firstParsed.dmy} a ${secondParsed.dmy}`,
+        };
+      } else if (firstParsed) {
+        return {
+          startDateYMD: firstParsed.ymd,
+          formattedRange: firstParsed.dmy,
+        };
+      } else if (secondParsed) {
+        return {
+          startDateYMD: secondParsed.ymd,
+          formattedRange: secondParsed.dmy,
+        };
+      }
+    }
   } catch (err) {
     console.error("Error formatting period:", err);
   }
-  return { startDateYMD: "0000-00-00", formattedRange: "Sem_Data" };
+
+  // Fallback: If no date could be parsed, use current timestamp date rather than "0000-00-00" to avoid corrupt folders
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return { startDateYMD: `${year}-${month}-${day}`, formattedRange: `${day}-${month}-${year}` };
 }
 
 function isValidMediaUrl(url?: string | null): boolean {
@@ -776,7 +931,7 @@ export async function backupLibraryToDrive(
     for (const g of games) {
       totalSteps += 1; // game metadata json
       if (isValidMediaUrl(g.cover)) totalSteps += 1;
-      if (isValidMediaUrl(g.icon) && g.iconType === "upload") totalSteps += 1;
+      if (isValidMediaUrl(g.icon) && (g.iconType === "upload" || g.iconType === "url")) totalSteps += 1;
       if (g.diary) {
         totalSteps += g.diary.length; // text for each diary entry
         for (const entry of g.diary) {
@@ -922,7 +1077,7 @@ export async function backupLibraryToDrive(
       const isIdentical = previousGame ? areGamesEqual(gameToSave, previousGame) : false;
       if (existingFolderId && isIdentical && totalMediaCount === 0) {
         skippedCount++;
-        const gameSteps = 1 + (isValidMediaUrl(game.cover) ? 1 : 0) + (isValidMediaUrl(game.icon) && game.iconType === "upload" ? 1 : 0);
+        const gameSteps = 1 + (isValidMediaUrl(game.cover) ? 1 : 0) + (isValidMediaUrl(game.icon) && (game.iconType === "upload" || game.iconType === "url") ? 1 : 0);
         report(`Verificando (${i + 1}/${games.length}): ${game.name} [Sem alterações]`, gameSteps);
         continue;
       }
@@ -975,7 +1130,7 @@ export async function backupLibraryToDrive(
       checkAbort();
       // Back up custom icon directly inside the game folder
       const iconeItem = gameFolderItems.find((item) => item.name === "icone.webp");
-      if (isValidMediaUrl(game.icon) && game.iconType === "upload") {
+      if (isValidMediaUrl(game.icon) && (game.iconType === "upload" || game.iconType === "url")) {
         const iconChanged = !previousGame || previousGame.icon !== game.icon || previousGame.iconType !== game.iconType;
         if (!iconeItem || iconChanged) {
           report(`Fazendo backup do ícone de ${game.name}...`);
@@ -993,7 +1148,7 @@ export async function backupLibraryToDrive(
         } else {
           report(`Ícone de ${game.name} já está salvo no Drive.`);
         }
-      } else if ((!game.icon || game.iconType !== "upload") && iconeItem) {
+      } else if ((!game.icon || (game.iconType !== "upload" && game.iconType !== "url")) && iconeItem) {
         obsoleteItemsForManualDelete.push({ gameName: game.name, itemName: "icone.webp", itemType: "Mídia Desassociada" });
       }
 
@@ -1021,6 +1176,26 @@ export async function backupLibraryToDrive(
               await deleteFileOrFolder(item.id);
             } catch (e) {
               console.warn(`Erro ao remover pasta legada 9999 (${item.name}):`, e);
+            }
+            continue;
+          }
+
+          // Automatically delete legacy 0000-00-00 temporary folders if obsolete
+          const is0000Folder = item.name.includes("0000-00-00") || item.name.startsWith("[0000");
+          if (is0000Folder && !activeFolderNames.includes(item.name)) {
+            report(`[GoogleDrive Cleanup] Limpando pasta temporária duplicada '0000' em ${game.name}: "${item.name}"...`);
+            console.log(`[GoogleDrive Backup Path] Biblioteca_Jogos_Backup > ${game.name} > Limpeza automatica -> Removendo ${item.name}`);
+            addBackupLog({
+              provider: "Google Drive",
+              action: "Limpeza de Pasta Duplicada 0000",
+              status: "success",
+              gameName: game.name,
+              details: `Pasta duplicada '0000-00-00' (${item.name}) removida de ${game.name}.`,
+            });
+            try {
+              await deleteFileOrFolder(item.id);
+            } catch (del0000Err) {
+              console.warn(`Erro ao remover pasta duplicada 0000 (${item.name}):`, del0000Err);
             }
             continue;
           }
@@ -1057,7 +1232,7 @@ export async function backupLibraryToDrive(
           details: `Caminho da pasta no Drive: ${fullPath}`,
         });
 
-        const entryFolderId = await getOrCreateFolder(entryFolderName, gameFolderId);
+        const entryFolderId = await getOrCreateDiaryEntryFolder(entryFolderName, entry.id, gameFolderId);
         const entryFolderItems = await listFilesAndFoldersInParent(entryFolderId);
 
         checkAbort();
@@ -1271,7 +1446,7 @@ export async function uploadSingleMediaBackup(
       if (folderType === "diary" && entryDetails?.entryId) {
         const { startDateYMD, formattedRange } = getFormattedPeriodAndDate(entryDetails.period || "");
         const entryFolderName = `[${startDateYMD}] Diário (${formattedRange}) - ${entryDetails.entryId}`;
-        targetFolderId = await getOrCreateFolder(entryFolderName, gameFolderId);
+        targetFolderId = await getOrCreateDiaryEntryFolder(entryFolderName, entryDetails.entryId, gameFolderId);
       } else {
         targetFolderId = gameFolderId;
       }
@@ -1371,7 +1546,7 @@ export async function backupSingleGameToDriveDeep(
 
     let totalSteps = 4; // 1: Session check, 2: Folders check, 3: Read previous json, 4: dados_jogo.json update
     if (isValidMediaUrl(game.cover)) totalSteps += 1;
-    if (isValidMediaUrl(game.icon) && game.iconType === "upload") totalSteps += 1;
+    if (isValidMediaUrl(game.icon) && (game.iconType === "upload" || game.iconType === "url")) totalSteps += 1;
     totalSteps += sortedDiary.length; // diary text files
     totalSteps += totalDiaryMedias; // diary media attachments
     totalSteps += 1; // master dados_biblioteca.json update
@@ -1460,7 +1635,7 @@ export async function backupSingleGameToDriveDeep(
     // 3. Deep check icon
     checkAbort();
     const iconeItem = gameFolderItems.find((item) => item.name === "icone.webp");
-    if (isValidMediaUrl(game.icon) && game.iconType === "upload") {
+    if (isValidMediaUrl(game.icon) && (game.iconType === "upload" || game.iconType === "url")) {
       const iconChanged = !drivePreviousGame || drivePreviousGame.icon !== game.icon || drivePreviousGame.iconType !== game.iconType;
       if (!iconeItem || iconChanged) {
         report(`Enviando ícone de "${game.name}" para o Drive...`);
@@ -1478,7 +1653,7 @@ export async function backupSingleGameToDriveDeep(
       } else {
         report(`Ícone de "${game.name}" já está salvo no Drive.`);
       }
-    } else if ((!game.icon || game.iconType !== "upload") && iconeItem) {
+    } else if ((!game.icon || (game.iconType !== "upload" && game.iconType !== "url")) && iconeItem) {
       obsoleteItemsForManualDelete.push({ gameName: game.name, itemName: "icone.webp", itemType: "Mídia Desassociada" });
     }
 
@@ -1507,6 +1682,26 @@ export async function backupSingleGameToDriveDeep(
             await deleteFileOrFolder(item.id);
           } catch (e) {
             console.warn(`Erro ao remover pasta legada 9999 (${item.name}):`, e);
+          }
+          continue;
+        }
+
+        // Clean up obsolete 0000-00-00 temporary duplicate folders
+        const is0000Folder = item.name.includes("0000-00-00") || item.name.startsWith("[0000");
+        if (is0000Folder && !activeFolderNames.includes(item.name)) {
+          report(`[GoogleDrive Cleanup] Limpando pasta temporária duplicada '0000' em ${game.name}: "${item.name}"...`);
+          console.log(`[GoogleDrive Backup Path] Biblioteca_Jogos_Backup > ${game.name} > Limpeza automatica -> Removendo ${item.name}`);
+          addBackupLog({
+            provider: "Google Drive",
+            action: "Limpeza de Pasta Duplicada 0000",
+            status: "success",
+            gameName: game.name,
+            details: `Pasta temporária duplicada '0000-00-00' (${item.name}) removida de ${game.name}.`,
+          });
+          try {
+            await deleteFileOrFolder(item.id);
+          } catch (del0000Err) {
+            console.warn(`Erro ao remover pasta duplicada 0000 (${item.name}):`, del0000Err);
           }
           continue;
         }
@@ -1541,7 +1736,7 @@ export async function backupSingleGameToDriveDeep(
         details: `Caminho da pasta no Drive: ${fullPath}`,
       });
 
-      const entryFolderId = await getOrCreateFolder(entryFolderName, gameFolderId);
+      const entryFolderId = await getOrCreateDiaryEntryFolder(entryFolderName, entry.id, gameFolderId);
       const entryFolderItems = await listFilesAndFoldersInParent(entryFolderId);
 
       checkAbort();

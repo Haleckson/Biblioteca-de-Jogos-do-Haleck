@@ -122,6 +122,7 @@ setInterval(() => {
     gameMetadataCache.pruneExpired();
     mediaUrlCache.pruneExpired();
     imageProxyCache.pruneExpired();
+    steamGridCache.pruneExpired();
   } catch (err) {
     console.warn("Aviso na limpeza automática de cache:", err);
   }
@@ -135,6 +136,7 @@ const gameMetadataCache = new SimpleTTLCache<any>(6 * 60 * 60 * 1000, 200); // 6
 const mediaUrlCache = new SimpleTTLCache<any>(24 * 60 * 60 * 1000, 500); // 24h
 const imageProxyCache = new SimpleTTLCache<{ contentType: string; buffer: Buffer }>(7 * 24 * 60 * 60 * 1000, 100); // 7d
 const steamCache = new SimpleTTLCache<any>(30 * 60 * 1000, 300); // 30m cache for Steam API
+const steamGridCache = new SimpleTTLCache<any>(24 * 60 * 60 * 1000, 500); // 24h cache for SteamGridDB
 
 // Resilient HTTP fetch helper with configurable request timeout
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 10000): Promise<Response> {
@@ -2116,6 +2118,748 @@ app.get("/api/gog/achievements", async (req, res) => {
   }
 });
 
+// --- IGDB (INTERNET GAME DATABASE) API INTEGRATION PROXY ENDPOINTS ---
+const DEFAULT_IGDB_CLIENT_ID = "q7t22adru470b0ok1n0w1diijs94r1";
+const DEFAULT_IGDB_CLIENT_SECRET = "nddpy82x7pink6ayhjmi1j7u2f9dzb";
+
+const igdbCache = new SimpleTTLCache<any>(60 * 60 * 1000, 500); // 1h cache
+let igdbCachedToken: string | null = null;
+let igdbTokenExpiresAt: number = 0;
+
+interface IgdbRateLimitInfo {
+  limit: number;
+  remaining: number;
+  resetSeconds: number;
+  requestsUsed: number;
+}
+
+let igdbRateLimitState: IgdbRateLimitInfo = {
+  limit: 800,
+  remaining: 800,
+  resetSeconds: 60,
+  requestsUsed: 0,
+};
+let igdbWindowStart = Date.now();
+
+function updateIgdbRateLimit(headers?: Headers) {
+  const now = Date.now();
+  const elapsedSeconds = Math.floor((now - igdbWindowStart) / 1000);
+  
+  if (elapsedSeconds >= 60) {
+    igdbWindowStart = now;
+    igdbRateLimitState.remaining = igdbRateLimitState.limit;
+    igdbRateLimitState.resetSeconds = 60;
+  } else {
+    igdbRateLimitState.resetSeconds = Math.max(1, 60 - elapsedSeconds);
+  }
+
+  if (headers) {
+    const rem = headers.get("ratelimit-remaining") || headers.get("x-ratelimit-remaining") || headers.get("twitch-ratelimit-remaining");
+    const lim = headers.get("ratelimit-limit") || headers.get("x-ratelimit-limit");
+    const rst = headers.get("ratelimit-reset");
+
+    if (rem !== null && rem !== undefined && !isNaN(Number(rem))) {
+      igdbRateLimitState.remaining = Number(rem);
+    }
+    if (lim !== null && lim !== undefined && !isNaN(Number(lim))) {
+      igdbRateLimitState.limit = Number(lim);
+    }
+    if (rst !== null && rst !== undefined && !isNaN(Number(rst))) {
+      const resetTime = Number(rst);
+      if (resetTime > 1000000000) {
+        igdbRateLimitState.resetSeconds = Math.max(1, resetTime - Math.floor(now / 1000));
+      } else {
+        igdbRateLimitState.resetSeconds = Math.max(1, resetTime);
+      }
+    }
+  }
+
+  igdbRateLimitState.requestsUsed++;
+  if (igdbRateLimitState.remaining > 0 && !headers?.get("ratelimit-remaining")) {
+    igdbRateLimitState.remaining = Math.max(0, igdbRateLimitState.remaining - 1);
+  }
+}
+
+function getIgdbCurrentRateLimit(): IgdbRateLimitInfo {
+  const now = Date.now();
+  const elapsedSeconds = Math.floor((now - igdbWindowStart) / 1000);
+  if (elapsedSeconds >= 60) {
+    igdbWindowStart = now;
+    igdbRateLimitState.remaining = igdbRateLimitState.limit;
+    igdbRateLimitState.resetSeconds = 60;
+  } else {
+    igdbRateLimitState.resetSeconds = Math.max(1, 60 - elapsedSeconds);
+  }
+  return { ...igdbRateLimitState };
+}
+
+async function getIgdbAuth(customClientId?: string, customSecret?: string): Promise<{ token: string; clientId: string }> {
+  const clientId = (customClientId || process.env.IGDB_CLIENT_ID || process.env.TWITCH_CLIENT_ID || DEFAULT_IGDB_CLIENT_ID).trim();
+  const clientSecret = (customSecret || process.env.IGDB_CLIENT_SECRET || process.env.TWITCH_CLIENT_SECRET || DEFAULT_IGDB_CLIENT_SECRET).trim();
+
+  if (!clientId || !clientSecret) {
+    throw new Error("Credenciais do IGDB / Twitch não configuradas.");
+  }
+
+  const now = Date.now();
+  const isDefaultCredentials = !customClientId && !customSecret;
+
+  if (isDefaultCredentials && igdbCachedToken && igdbTokenExpiresAt > now + 60000) {
+    return { token: igdbCachedToken, clientId };
+  }
+
+  const tokenUrl = `https://id.twitch.tv/oauth2/token?client_id=${encodeURIComponent(clientId)}&client_secret=${encodeURIComponent(clientSecret)}&grant_type=client_credentials`;
+  const res = await fetchWithTimeout(tokenUrl, { method: "POST" }, 8000);
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`Falha na autenticação do IGDB na Twitch (HTTP ${res.status}): ${errText}`);
+  }
+
+  const tokenData = await res.json();
+  if (!tokenData.access_token) {
+    throw new Error("Token de acesso não retornado pela Twitch.");
+  }
+
+  if (isDefaultCredentials) {
+    igdbCachedToken = tokenData.access_token;
+    igdbTokenExpiresAt = now + (tokenData.expires_in || 3600) * 1000;
+  }
+
+  return { token: tokenData.access_token, clientId };
+}
+
+const GENRE_TRANSLATIONS: Record<string, string> = {
+  "Shooter": "Tiro / Shooter",
+  "Adventure": "Aventura",
+  "Role-playing (RPG)": "RPG",
+  "Platform": "Plataforma",
+  "Strategy": "Estratégia",
+  "Action": "Ação",
+  "Indie": "Indie",
+  "Racing": "Corrida",
+  "Fighting": "Luta",
+  "Simulator": "Simulação",
+  "Puzzle": "Puzzle",
+  "Sport": "Esportes",
+  "Music": "Música / Ritmo",
+  "Arcade": "Arcade",
+  "Visual Novel": "Visual Novel",
+  "Hack and slash/Beat 'em up": "Hack and Slash",
+  "Turn-based strategy (TBS)": "Estratégia por Turnos",
+  "Real Time Strategy (RTS)": "Estratégia em Tempo Real",
+  "Card & Board Game": "Cartas e Tabuleiro",
+  "MOBA": "MOBA",
+  "Point-and-click": "Point and Click",
+  "Tactical": "Tático",
+  "Quiz/Trivia": "Quiz / Trivia",
+  "Pinball": "Pinball",
+};
+
+function formatIgdbGame(item: any) {
+  const releaseDate = item.first_release_date
+    ? new Date(item.first_release_date * 1000).toISOString().split("T")[0]
+    : "";
+
+  let developer = "";
+  let publisher = "";
+  if (Array.isArray(item.involved_companies)) {
+    const devs = item.involved_companies.filter((c: any) => c.developer && c.company?.name).map((c: any) => c.company.name);
+    const pubs = item.involved_companies.filter((c: any) => c.publisher && c.company?.name).map((c: any) => c.company.name);
+    developer = devs.join(" / ");
+    publisher = pubs.join(" / ");
+  }
+
+  const series = item.collection?.name || (item.franchises && item.franchises[0]?.name) || "";
+
+  const genres = Array.isArray(item.genres)
+    ? item.genres.map((g: any) => GENRE_TRANSLATIONS[g.name] || g.name)
+    : [];
+
+  const platforms = Array.isArray(item.platforms)
+    ? item.platforms.map((p: any) => {
+        if (p.name === "PC (Microsoft Windows)") return "PC";
+        return p.name;
+      })
+    : [];
+
+  const coverId = item.cover?.image_id;
+  const coverUrl = coverId ? `https://images.igdb.com/igdb/image/upload/t_cover_big/${coverId}.jpg` : "";
+  const coverHdUrl = coverId ? `https://images.igdb.com/igdb/image/upload/t_720p/${coverId}.jpg` : "";
+  const iconUrl = coverId ? `https://images.igdb.com/igdb/image/upload/t_thumb/${coverId}.jpg` : "";
+
+  const artworks = Array.isArray(item.artworks)
+    ? item.artworks.map((a: any) => ({
+        id: a.id,
+        url: `https://images.igdb.com/igdb/image/upload/t_720p/${a.image_id}.jpg`,
+        hdUrl: `https://images.igdb.com/igdb/image/upload/t_1080p/${a.image_id}.jpg`,
+      }))
+    : [];
+
+  const screenshots = Array.isArray(item.screenshots)
+    ? item.screenshots.map((s: any) => ({
+        id: s.id,
+        url: `https://images.igdb.com/igdb/image/upload/t_720p/${s.image_id}.jpg`,
+        hdUrl: `https://images.igdb.com/igdb/image/upload/t_1080p/${s.image_id}.jpg`,
+      }))
+    : [];
+
+  const videos = Array.isArray(item.videos)
+    ? item.videos.map((v: any) => ({
+        id: v.id,
+        videoId: v.video_id,
+        title: v.name || "Trailer Oficial",
+        youtubeUrl: `https://www.youtube.com/watch?v=${v.video_id}`,
+      }))
+    : [];
+
+  return {
+    id: item.id,
+    name: item.name,
+    slug: item.slug,
+    series,
+    summary: item.summary || item.storyline || "",
+    storyline: item.storyline || "",
+    releaseDate,
+    developer,
+    publisher,
+    genres,
+    platforms,
+    rating: item.rating ? Math.round(item.rating) : undefined,
+    aggregatedRating: item.aggregated_rating ? Math.round(item.aggregated_rating) : undefined,
+    totalRating: item.total_rating ? Math.round(item.total_rating) : undefined,
+    coverUrl,
+    coverHdUrl,
+    iconUrl,
+    artworks,
+    screenshots,
+    videos,
+    igdbUrl: item.url || (item.slug ? `https://www.igdb.com/games/${item.slug}` : undefined),
+    source: "igdb" as const,
+  };
+}
+
+// 1. Status and Credential Verification Endpoint
+app.get("/api/igdb/status", async (req, res) => {
+  try {
+    const customClientId = req.query.clientId as string | undefined;
+    const customSecret = req.query.clientSecret as string | undefined;
+    const auth = await getIgdbAuth(customClientId, customSecret);
+
+    const isCustomKey = !!(customClientId && customSecret);
+    const masked = auth.clientId ? `${auth.clientId.slice(0, 4)}...${auth.clientId.slice(-4)}` : "Configurado";
+    const rateLimit = getIgdbCurrentRateLimit();
+
+    res.json({
+      connected: true,
+      message: "Conexão com a API do IGDB / Twitch estabelecida com sucesso!",
+      clientIdMasked: masked,
+      isCustomKey,
+      rateLimit,
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      connected: false,
+      error: err?.message || "Falha ao verificar credenciais do IGDB.",
+      rateLimit: getIgdbCurrentRateLimit(),
+    });
+  }
+});
+
+// 2. Search Games via IGDB
+app.get("/api/igdb/search", async (req, res) => {
+  try {
+    const query = (req.query.q as string) || "";
+    const cleanQuery = query.trim();
+    if (!cleanQuery) {
+      res.status(400).json({ error: "Parâmetro 'q' contendo o nome do jogo é obrigatório." });
+      return;
+    }
+
+    const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 8, 1), 20);
+    const customClientId = req.query.clientId as string | undefined;
+    const customSecret = req.query.clientSecret as string | undefined;
+
+    const cacheKey = `igdb:search:${cleanQuery.toLowerCase()}:${limit}`;
+    const cached = igdbCache.get(cacheKey);
+    if (cached) {
+      res.json({ ...cached, cached: true, rateLimit: getIgdbCurrentRateLimit() });
+      return;
+    }
+
+    const auth = await getIgdbAuth(customClientId, customSecret);
+
+    const apicalypseBody = `search "${cleanQuery.replace(/"/g, '\\"')}"; fields id, name, slug, summary, storyline, first_release_date, cover.image_id, cover.url, artworks.image_id, artworks.url, screenshots.image_id, screenshots.url, genres.name, platforms.name, platforms.abbreviation, involved_companies.company.name, involved_companies.developer, involved_companies.publisher, total_rating, rating, aggregated_rating, rating_count, aggregated_rating_count, collection.name, franchises.name, videos.video_id, videos.name, url; limit ${limit};`;
+
+    const igdbRes = await fetchWithTimeout("https://api.igdb.com/v4/games", {
+      method: "POST",
+      headers: {
+        "Client-ID": auth.clientId,
+        "Authorization": `Bearer ${auth.token}`,
+        "Accept": "application/json",
+        "Content-Type": "text/plain",
+      },
+      body: apicalypseBody,
+    }, 10000);
+
+    updateIgdbRateLimit(igdbRes.headers);
+
+    if (!igdbRes.ok) {
+      const errText = await igdbRes.text().catch(() => "");
+      throw new Error(`Erro na busca IGDB (HTTP ${igdbRes.status}): ${errText}`);
+    }
+
+    const rawGames = await igdbRes.json();
+    const games = Array.isArray(rawGames) ? rawGames.map(formatIgdbGame) : [];
+
+    const result = { success: true, count: games.length, games };
+    igdbCache.set(cacheKey, result, 60 * 60 * 1000);
+    res.json({ ...result, rateLimit: getIgdbCurrentRateLimit() });
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/igdb/search:", err?.message || err);
+    res.status(500).json({ error: err?.message || "Erro interno ao buscar jogos no IGDB.", rateLimit: getIgdbCurrentRateLimit() });
+  }
+});
+
+// 3. Get Game Details by ID
+app.get("/api/igdb/game-details", async (req, res) => {
+  try {
+    const gameId = req.query.id as string;
+    if (!gameId) {
+      res.status(400).json({ error: "Parâmetro 'id' do jogo no IGDB é obrigatório." });
+      return;
+    }
+
+    const customClientId = req.query.clientId as string | undefined;
+    const customSecret = req.query.clientSecret as string | undefined;
+
+    const cacheKey = `igdb:game:${gameId}`;
+    const cached = igdbCache.get(cacheKey);
+    if (cached) {
+      res.json({ ...cached, cached: true, rateLimit: getIgdbCurrentRateLimit() });
+      return;
+    }
+
+    const auth = await getIgdbAuth(customClientId, customSecret);
+
+    const apicalypseBody = `where id = ${parseInt(gameId, 10)}; fields id, name, slug, summary, storyline, first_release_date, cover.image_id, cover.url, artworks.image_id, artworks.url, screenshots.image_id, screenshots.url, genres.name, platforms.name, platforms.abbreviation, involved_companies.company.name, involved_companies.developer, involved_companies.publisher, total_rating, rating, aggregated_rating, rating_count, aggregated_rating_count, collection.name, franchises.name, videos.video_id, videos.name, url; limit 1;`;
+
+    const igdbRes = await fetchWithTimeout("https://api.igdb.com/v4/games", {
+      method: "POST",
+      headers: {
+        "Client-ID": auth.clientId,
+        "Authorization": `Bearer ${auth.token}`,
+        "Accept": "application/json",
+        "Content-Type": "text/plain",
+      },
+      body: apicalypseBody,
+    }, 10000);
+
+    updateIgdbRateLimit(igdbRes.headers);
+
+    if (!igdbRes.ok) {
+      const errText = await igdbRes.text().catch(() => "");
+      throw new Error(`Erro ao obter detalhes no IGDB (HTTP ${igdbRes.status}): ${errText}`);
+    }
+
+    const rawList = await igdbRes.json();
+    const rawGame = Array.isArray(rawList) && rawList.length > 0 ? rawList[0] : null;
+
+    if (!rawGame) {
+      res.status(404).json({ error: "Jogo não encontrado no IGDB." });
+      return;
+    }
+
+    const game = formatIgdbGame(rawGame);
+    const result = { success: true, game };
+    igdbCache.set(cacheKey, result, 60 * 60 * 1000);
+    res.json({ ...result, rateLimit: getIgdbCurrentRateLimit() });
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/igdb/game-details:", err?.message || err);
+    res.status(500).json({ error: err?.message || "Erro interno ao obter detalhes no IGDB.", rateLimit: getIgdbCurrentRateLimit() });
+  }
+});
+
+// =============================================================
+// STEAMGRIDDB API INTEGRATION (Covers, Heroes, Logos, Icons)
+// =============================================================
+
+function getSteamGridApiKey(req: express.Request): { key: string | null; isCustomKey: boolean } {
+  const queryKey = (req.query.apiKey as string)?.trim();
+  const headerKey = (req.headers["x-steamgriddb-key"] as string)?.trim();
+  const authHeader = (req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+
+  const customKey = queryKey || headerKey || (authHeader && !authHeader.startsWith("ey") ? authHeader : "");
+  if (customKey) {
+    return { key: customKey, isCustomKey: true };
+  }
+
+  const envKey = process.env.STEAMGRIDDB_API_KEY?.trim();
+  if (envKey) {
+    return { key: envKey, isCustomKey: false };
+  }
+
+  return { key: null, isCustomKey: false };
+}
+
+async function fetchSteamGrid(endpoint: string, apiKey: string, timeoutMs = 12000): Promise<any> {
+  const url = endpoint.startsWith("http") ? endpoint : `https://www.steamgriddb.com/api/v2${endpoint.startsWith("/") ? "" : "/"}${endpoint}`;
+  const res = await fetchWithTimeout(url, {
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Accept": "application/json",
+      "User-Agent": "HaleckGameLog/1.0"
+    }
+  }, timeoutMs);
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    if (res.status === 401 || res.status === 403) {
+      throw new Error("Chave de API do SteamGridDB inválida ou não autorizada. Verifique sua chave nas configurações.");
+    }
+    if (res.status === 404) {
+      return { success: false, data: [] };
+    }
+    throw new Error(`Erro na API SteamGridDB (HTTP ${res.status}): ${errText || res.statusText}`);
+  }
+
+  return res.json();
+}
+
+// 1. SteamGridDB Connection Status
+app.get("/api/steamgriddb/status", async (req, res) => {
+  try {
+    const { key, isCustomKey } = getSteamGridApiKey(req);
+    if (!key) {
+      res.json({
+        connected: false,
+        isCustomKey: false,
+        message: "Nenhuma chave de API do SteamGridDB configurada. Gere sua chave gratuita em steamgriddb.com/profile/preferences/api."
+      });
+      return;
+    }
+
+    const testRes = await fetchSteamGrid("/games/id/1", key, 8000);
+    const masked = key.length > 8 ? `${key.substring(0, 4)}...${key.substring(key.length - 4)}` : "••••••••";
+
+    if (testRes && (testRes.success || testRes.data)) {
+      res.json({
+        connected: true,
+        isCustomKey,
+        keyMasked: masked,
+        message: "Conexão com a API do SteamGridDB validada com sucesso!"
+      });
+    } else {
+      res.json({
+        connected: false,
+        isCustomKey,
+        keyMasked: masked,
+        message: "Não foi possível validar a chave com o SteamGridDB."
+      });
+    }
+  } catch (err: any) {
+    res.status(500).json({
+      connected: false,
+      isCustomKey: false,
+      error: err?.message || "Falha ao verificar status da API do SteamGridDB."
+    });
+  }
+});
+
+// 2. SteamGridDB Search Autocomplete Games
+app.get("/api/steamgriddb/search", async (req, res) => {
+  try {
+    const query = ((req.query.q as string) || "").trim();
+    if (!query) {
+      res.status(400).json({ error: "Parâmetro 'q' contendo o termo de busca é obrigatório." });
+      return;
+    }
+
+    const { key } = getSteamGridApiKey(req);
+    if (!key) {
+      res.status(401).json({ error: "Chave do SteamGridDB não configurada. Insira sua chave nas Configurações." });
+      return;
+    }
+
+    const cacheKey = `sgdb:search:${query.toLowerCase()}`;
+    const cached = steamGridCache.get(cacheKey);
+    if (cached) {
+      res.json({ ...cached, cached: true });
+      return;
+    }
+
+    const data = await fetchSteamGrid(`/search/autocomplete/${encodeURIComponent(query)}`, key);
+    const games = Array.isArray(data?.data) ? data.data : [];
+
+    const result = { success: true, count: games.length, games };
+    steamGridCache.set(cacheKey, result, 2 * 60 * 60 * 1000); // 2 hours
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/steamgriddb/search:", err?.message || err);
+    res.status(500).json({ error: err?.message || "Erro interno ao buscar jogos no SteamGridDB." });
+  }
+});
+
+// 3. SteamGridDB Unified Media Gallery (Grids, Heroes, Logos, Icons)
+app.get("/api/steamgriddb/media", async (req, res) => {
+  try {
+    const query = ((req.query.q as string) || "").trim();
+    let gameId = req.query.gameId as string | undefined;
+    const steamAppId = req.query.steamAppId as string | undefined;
+    const typesParam = (req.query.types as string) || "grid,hero,logo,icon";
+    const nsfw = req.query.nsfw === "true" ? "true" : req.query.nsfw === "any" ? "any" : "false";
+    const humor = req.query.humor === "true" ? "true" : req.query.humor === "any" ? "any" : "false";
+
+    if (!gameId && !query && !steamAppId) {
+      res.status(400).json({ error: "Informe 'gameId', 'q' ou 'steamAppId' para buscar mídias no SteamGridDB." });
+      return;
+    }
+
+    const { key } = getSteamGridApiKey(req);
+    if (!key) {
+      res.status(401).json({ error: "Chave do SteamGridDB não configurada. Insira sua chave gratuita nas Configurações." });
+      return;
+    }
+
+    const cacheKey = `sgdb:media:${gameId || (query ? query.toLowerCase() : steamAppId)}:${typesParam}:${nsfw}:${humor}`;
+    const cached = steamGridCache.get(cacheKey);
+    if (cached) {
+      res.json({ ...cached, cached: true });
+      return;
+    }
+
+    let targetGameName = query || "";
+    let candidateGames: any[] = [];
+    let targetGameId = gameId ? parseInt(gameId, 10) : undefined;
+
+    // If query is provided, search autocomplete first to get candidates and primary targetGameId
+    if (!targetGameId && query) {
+      const searchRes = await fetchSteamGrid(`/search/autocomplete/${encodeURIComponent(query)}`, key);
+      if (searchRes && Array.isArray(searchRes.data) && searchRes.data.length > 0) {
+        candidateGames = searchRes.data;
+        targetGameId = searchRes.data[0].id;
+        targetGameName = searchRes.data[0].name;
+      }
+    }
+
+    // If not found by query, but steamAppId was provided, attempt resolution via Steam App ID
+    if (!targetGameId && steamAppId) {
+      try {
+        const steamGameRes = await fetchSteamGrid(`/games/steam/${steamAppId}`, key);
+        if (steamGameRes && steamGameRes.data?.id) {
+          targetGameId = steamGameRes.data.id;
+          targetGameName = steamGameRes.data.name || targetGameName;
+          candidateGames = [steamGameRes.data];
+        }
+      } catch (err) {
+        // Continue to /steam/ endpoints
+      }
+    }
+
+    if (!targetGameId && !steamAppId) {
+      res.json({ success: true, count: 0, media: [], candidates: [] });
+      return;
+    }
+
+    const requestedTypes = typesParam.split(",").map((t) => t.trim().toLowerCase());
+    const tasks: Promise<any>[] = [];
+
+    // Helper to determine media endpoint prefix (by gameId or by steamAppId)
+    const getEndpoint = (category: string) => {
+      if (targetGameId) {
+        return `/${category}/game/${targetGameId}?nsfw=${nsfw}&humor=${humor}`;
+      } else if (steamAppId) {
+        return `/${category}/steam/${steamAppId}?nsfw=${nsfw}&humor=${humor}`;
+      }
+      return null;
+    };
+
+    if (requestedTypes.includes("grid")) {
+      const ep = getEndpoint("grids");
+      if (ep) tasks.push(fetchSteamGrid(ep, key).then((r) => ({ type: "grid", data: r?.data || [] })).catch(() => ({ type: "grid", data: [] })));
+    }
+    if (requestedTypes.includes("hero")) {
+      const ep = getEndpoint("heroes");
+      if (ep) tasks.push(fetchSteamGrid(ep, key).then((r) => ({ type: "hero", data: r?.data || [] })).catch(() => ({ type: "hero", data: [] })));
+    }
+    if (requestedTypes.includes("logo")) {
+      const ep = getEndpoint("logos");
+      if (ep) tasks.push(fetchSteamGrid(ep, key).then((r) => ({ type: "logo", data: r?.data || [] })).catch(() => ({ type: "logo", data: [] })));
+    }
+    if (requestedTypes.includes("icon")) {
+      const ep = getEndpoint("icons");
+      if (ep) tasks.push(fetchSteamGrid(ep, key).then((r) => ({ type: "icon", data: r?.data || [] })).catch(() => ({ type: "icon", data: [] })));
+    }
+
+    const responses = await Promise.all(tasks);
+    const media: any[] = [];
+
+    responses.forEach((resp) => {
+      const type = resp.type;
+      const items = Array.isArray(resp.data) ? resp.data : [];
+
+      items.forEach((item: any) => {
+        const width = item.width || (type === "hero" ? 1920 : type === "grid" ? 600 : 256);
+        const height = item.height || (type === "hero" ? 620 : type === "grid" ? 900 : 256);
+
+        let orientation: "vertical" | "horizontal" | "square" | "panoramic" = "vertical";
+        if (type === "hero") {
+          orientation = "panoramic";
+        } else if (type === "icon") {
+          orientation = "square";
+        } else if (type === "logo") {
+          orientation = width > height * 1.6 ? "horizontal" : "square";
+        } else if (type === "grid") {
+          orientation = height > width ? "vertical" : "horizontal";
+        }
+
+        media.push({
+          id: `${type}_${item.id}`,
+          rawId: item.id,
+          type,
+          style: item.style || "alternate",
+          width,
+          height,
+          orientation,
+          url: item.url,
+          thumbUrl: item.thumb || item.url,
+          mime: item.mime || "image/jpeg",
+          score: item.score ?? 0,
+          nsfw: !!item.nsfw,
+          humor: !!item.humor,
+          notes: item.notes || "",
+          language: item.language || "en",
+          author: item.author ? {
+            name: item.author.name,
+            steam64: item.author.steam64,
+            avatar: item.author.avatar,
+          } : undefined,
+          gameId: targetGameId,
+          gameName: targetGameName,
+        });
+      });
+    });
+
+    // Sort media by score descending, then by id
+    media.sort((a, b) => (b.score || 0) - (a.score || 0));
+
+    const result = {
+      success: true,
+      count: media.length,
+      media,
+      game: targetGameId ? { id: targetGameId, name: targetGameName } : undefined,
+      candidates: candidateGames,
+    };
+
+    steamGridCache.set(cacheKey, result, 60 * 60 * 1000); // 1 hour
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/steamgriddb/media:", err?.message || err);
+    res.status(500).json({ error: err?.message || "Erro interno ao buscar mídias no SteamGridDB." });
+  }
+});
+
+// 4. SteamGridDB Icons Dedicated Endpoint
+app.get("/api/steamgriddb/icons", async (req, res) => {
+  try {
+    const query = ((req.query.q as string) || "").trim();
+    let gameId = req.query.gameId as string | undefined;
+    const steamAppId = req.query.steamAppId as string | undefined;
+
+    if (!gameId && !query && !steamAppId) {
+      res.status(400).json({ error: "Informe 'gameId', 'q' ou 'steamAppId' para buscar ícones no SteamGridDB." });
+      return;
+    }
+
+    const { key } = getSteamGridApiKey(req);
+    if (!key) {
+      res.status(401).json({ error: "Chave do SteamGridDB não configurada. Insira sua chave nas Configurações." });
+      return;
+    }
+
+    const cacheKey = `sgdb:icons:${gameId || (query ? query.toLowerCase() : steamAppId)}`;
+    const cached = steamGridCache.get(cacheKey);
+    if (cached) {
+      res.json({ ...cached, cached: true });
+      return;
+    }
+
+    let targetGameName = query || "";
+    let candidateGames: any[] = [];
+    let targetGameId = gameId ? parseInt(gameId, 10) : undefined;
+
+    if (!targetGameId && query) {
+      const searchRes = await fetchSteamGrid(`/search/autocomplete/${encodeURIComponent(query)}`, key);
+      if (searchRes && Array.isArray(searchRes.data) && searchRes.data.length > 0) {
+        candidateGames = searchRes.data;
+        targetGameId = searchRes.data[0].id;
+        targetGameName = searchRes.data[0].name;
+      }
+    }
+
+    if (!targetGameId && steamAppId) {
+      try {
+        const steamGameRes = await fetchSteamGrid(`/games/steam/${steamAppId}`, key);
+        if (steamGameRes && steamGameRes.data?.id) {
+          targetGameId = steamGameRes.data.id;
+          targetGameName = steamGameRes.data.name || targetGameName;
+          candidateGames = [steamGameRes.data];
+        }
+      } catch (err) {
+        // Continue
+      }
+    }
+
+    if (!targetGameId && !steamAppId) {
+      res.json({ success: true, count: 0, icons: [], candidates: [] });
+      return;
+    }
+
+    const endpoint = targetGameId ? `/icons/game/${targetGameId}` : `/icons/steam/${steamAppId}`;
+    const rawRes = await fetchSteamGrid(endpoint, key);
+    const items = Array.isArray(rawRes?.data) ? rawRes.data : [];
+
+    const icons = items.map((item: any) => ({
+      id: `icon_${item.id}`,
+      rawId: item.id,
+      type: "icon",
+      style: item.style || "official",
+      width: item.width || 256,
+      height: item.height || 256,
+      orientation: "square",
+      url: item.url,
+      thumbUrl: item.thumb || item.url,
+      mime: item.mime || "image/png",
+      score: item.score ?? 0,
+      nsfw: !!item.nsfw,
+      humor: !!item.humor,
+      notes: item.notes || "",
+      author: item.author ? {
+        name: item.author.name,
+        steam64: item.author.steam64,
+        avatar: item.author.avatar,
+      } : undefined,
+      gameId: targetGameId,
+      gameName: targetGameName,
+    }));
+
+    icons.sort((a: any, b: any) => (b.score || 0) - (a.score || 0));
+
+    const result = {
+      success: true,
+      count: icons.length,
+      icons,
+      game: targetGameId ? { id: targetGameId, name: targetGameName } : undefined,
+      candidates: candidateGames,
+    };
+
+    steamGridCache.set(cacheKey, result, 60 * 60 * 1000);
+    res.json(result);
+  } catch (err: any) {
+    console.warn("Erro no proxy /api/steamgriddb/icons:", err?.message || err);
+    res.status(500).json({ error: err?.message || "Erro interno ao buscar ícones no SteamGridDB." });
+  }
+});
+
 // System Health & Performance Monitoring Endpoint
 app.get("/api/health", (req, res) => {
   const memoryUsage = process.memoryUsage();
@@ -2130,6 +2874,8 @@ app.get("/api/health", (req, res) => {
       heapUsedMb: Math.round(memoryUsage.heapUsed / (1024 * 1024)),
     },
     cacheStats: {
+      steamGrid: { hits: steamGridCache.hits, misses: steamGridCache.misses, size: steamGridCache.size },
+      igdb: { hits: igdbCache.hits, misses: igdbCache.misses, size: igdbCache.size },
       hltb: { hits: hltbCache.hits, misses: hltbCache.misses, size: hltbCache.size },
       metacritic: { hits: metacriticCache.hits, misses: metacriticCache.misses, size: metacriticCache.size },
       wikipedia: { hits: wikiCache.hits, misses: wikiCache.misses, size: wikiCache.size },

@@ -1,6 +1,6 @@
 {
   "name": "Haleck GameLog",
-  "description": "Biblioteca e diário de jogos do Haleck offline-first com diário de bordo, estatísticas detalhadas e backups locais.",
+  "description": "Biblioteca e diário de jogos do Haleck offline-first com diário de bordo, busca de capas e ícones via SteamGridDB, estatísticas detalhadas e backups locais.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

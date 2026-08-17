@@ -32,6 +32,7 @@ import { moveToTrash } from "../utils/trashService";
 import { exportGameDiaryToMarkdown, exportGameDiaryToPrintPDF } from "../utils/exportService";
 import { addTrashItem } from "../utils/trashService";
 import { playRetroSound } from "../utils/audioEffects";
+import CachedImage from "./CachedImage";
 
 const parsePeriodStartDate = (period: string): number => {
   try {
@@ -221,6 +222,19 @@ const ReadingModeResizableRow: React.FC<ReadingModeResizableRowProps> = ({
             {isExpanded ? "Leitura Fixa" : "Jornada"}
           </span>
         </div>
+        {entry.keyMoments && entry.keyMoments.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 mb-3">
+            {entry.keyMoments.map((km) => (
+              <span
+                key={km}
+                className="px-2.5 py-0.5 rounded-lg bg-cyan-500/20 border border-cyan-400/50 text-cyan-200 text-xs font-black shadow-sm flex items-center gap-1"
+              >
+                <Sparkles size={11} className="text-cyan-400" />
+                <span>{km}</span>
+              </span>
+            ))}
+          </div>
+        )}
         <div
           className="text-sm sm:text-base text-zinc-100 leading-relaxed prose prose-invert prose-sm max-w-none break-words"
           dangerouslySetInnerHTML={{ __html: cleanHTMLText(entry.text) }}
@@ -376,6 +390,8 @@ export default function GameDetailDrawer({
   const [diaryEnd, setDiaryEnd] = useState("");
   const [diaryText, setDiaryText] = useState("");
   const [diaryKeyMoments, setDiaryKeyMoments] = useState<string[]>([]);
+  const [newKeyMomentInput, setNewKeyMomentInput] = useState("");
+  const [showCustomMomentInput, setShowCustomMomentInput] = useState(false);
   const [diaryScreenshotUrl, setDiaryScreenshotUrl] = useState("");
   const [tempDiaryMedias, setTempDiaryMedias] = useState<MediaItem[]>([]);
   const [isFormSelectionMode, setIsFormSelectionMode] = useState(false);
@@ -433,13 +449,30 @@ export default function GameDetailDrawer({
       setExpandedMediaEntries({});
       setIsAchievementsGalleryOpen(false);
       if (initialSelectedDiaryId) {
-        setCollapsedEntries((prev) => ({ ...prev, [initialSelectedDiaryId]: false }));
+        const initialMap: Record<string, boolean> = {};
+        if (game?.diary) {
+          game.diary.forEach((e) => {
+            initialMap[e.id] = e.id !== initialSelectedDiaryId;
+          });
+        }
+        initialMap[initialSelectedDiaryId] = false;
+        setCollapsedEntries(initialMap);
         setTimeout(() => {
           const el = document.getElementById(`diary-entry-${initialSelectedDiaryId}`);
           if (el) {
             el.scrollIntoView({ behavior: "smooth", block: "center" });
           }
         }, 200);
+      } else {
+        if (game?.diary) {
+          const collapsedMap: Record<string, boolean> = {};
+          game.diary.forEach((e) => {
+            collapsedMap[e.id] = true;
+          });
+          setCollapsedEntries(collapsedMap);
+        } else {
+          setCollapsedEntries({});
+        }
       }
       if (initialOpenDictionary) {
         setIsDictionaryModalOpen(true);
@@ -447,7 +480,7 @@ export default function GameDetailDrawer({
     } else {
       setIsReadingMode(false);
     }
-  }, [isOpen, initialSelectedDiaryId, initialOpenDictionary]);
+  }, [isOpen, initialSelectedDiaryId, initialOpenDictionary, game?.id]);
 
   useEffect(() => {
     const unsubscribe = mediaUploadQueueManager.onItemCompleted((_entryId, tempMediaId, finalUrl, deleteUrl) => {
@@ -1218,6 +1251,9 @@ export default function GameDetailDrawer({
       setDiaryStart("");
       setDiaryEnd("");
       setDiaryText("");
+      setDiaryKeyMoments([]);
+      setNewKeyMomentInput("");
+      setShowCustomMomentInput(false);
       setDiaryScreenshotUrl("");
       setTempDiaryMedias([]);
       setShowAddDiary(true);
@@ -1235,6 +1271,9 @@ export default function GameDetailDrawer({
     setDiaryStart("");
     setDiaryEnd("");
     setDiaryText("");
+    setDiaryKeyMoments([]);
+    setNewKeyMomentInput("");
+    setShowCustomMomentInput(false);
     setDiaryScreenshotUrl("");
     setTempDiaryMedias([]);
     setShowAddDiary(false);
@@ -1267,12 +1306,22 @@ export default function GameDetailDrawer({
     const entryId = editingDiaryId || currentFormEntryId.current || `diary_${Date.now()}`;
     currentFormEntryId.current = entryId;
 
+    const formatDateBr = (d: string) => {
+      if (!d) return "";
+      if (d.includes("/")) return d;
+      const parts = d.split("-");
+      if (parts.length === 3) {
+        return `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+      return d;
+    };
+
     const entryTitle =
       diaryStart && diaryEnd
-        ? `${diaryStart} até ${diaryEnd}`
+        ? `${formatDateBr(diaryStart)} ~ ${formatDateBr(diaryEnd)}`
         : diaryStart
-        ? diaryStart
-        : `Entrada do Diário (${new Date().toLocaleDateString("pt-BR")})`;
+        ? `${formatDateBr(diaryStart)} ~ ${formatDateBr(diaryStart)}`
+        : `${new Date().toLocaleDateString("pt-BR")} ~ ${new Date().toLocaleDateString("pt-BR")}`;
 
     const currentMediaCount = tempDiaryMedias.length;
     const batchFiles: Array<{ file: File; tempMediaId: string; isVideo: boolean; gridPosition: number }> = [];
@@ -1495,7 +1544,9 @@ export default function GameDetailDrawer({
       period,
       medias,
       text: diaryText.trim(),
-      keyMoments: diaryKeyMoments,
+      keyMoments: diaryKeyMoments && diaryKeyMoments.length > 0
+        ? diaryKeyMoments.map((k) => k.trim()).filter(Boolean)
+        : undefined,
     };
 
     playRetroSound("save");
@@ -1676,13 +1727,83 @@ export default function GameDetailDrawer({
         </div>
 
         {/* Key Moments Tag Picker */}
-        <div>
-          <label className="block text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-bold mb-1.5 flex items-center gap-1">
-            <Tag size={12} />
-            Momentos Chave / Destaques da Entrada
-          </label>
-          <div className="flex flex-wrap gap-1.5">
-            {["Boss Fight ⚔️", "Platina 🏆", "Plot Twist 🎭", "Review Final ⭐", "Momento Épico ⚡", "Segredo 🔑", "SPOILER ⚠️"].map((tag) => {
+        <div className="p-3.5 rounded-2xl bg-zinc-900/60 border border-cyan-500/20 space-y-2.5">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-1.5">
+              <Sparkles size={13} className="text-cyan-400" />
+              <label className="text-[10px] uppercase tracking-[0.25em] text-cyan-400 font-bold">
+                Momentos Chave / Destaques da Entrada
+              </label>
+            </div>
+            <div className="flex items-center gap-2">
+              {diaryKeyMoments.length > 0 && (
+                <span className="text-[10px] text-cyan-300 font-mono font-bold bg-cyan-950/80 px-2 py-0.5 rounded-md border border-cyan-500/30">
+                  {diaryKeyMoments.length} selecionado(s)
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => setShowCustomMomentInput((prev) => !prev)}
+                className="text-[10px] font-bold text-purple-300 hover:text-white bg-purple-950/50 hover:bg-purple-900/60 border border-purple-500/30 px-2 py-0.5 rounded-md transition-all cursor-pointer flex items-center gap-1"
+              >
+                <Plus size={10} />
+                <span>{showCustomMomentInput ? "Fechar Campo" : "+ Criar Tag Personalizada"}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Custom Tag Input Field */}
+          {showCustomMomentInput && (
+            <div className="flex items-center gap-2 p-2 rounded-xl bg-zinc-950 border border-purple-500/40 animate-fadeIn">
+              <input
+                type="text"
+                value={newKeyMomentInput}
+                onChange={(e) => setNewKeyMomentInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    const trimmed = newKeyMomentInput.trim();
+                    if (trimmed && !diaryKeyMoments.includes(trimmed)) {
+                      setDiaryKeyMoments([...diaryKeyMoments, trimmed]);
+                      setNewKeyMomentInput("");
+                    }
+                  }
+                }}
+                placeholder="Nome do momento chave (ex: Desafio Lendário, DLC 100%, Sidequest Secreta)..."
+                className="flex-1 px-3 py-1.5 rounded-lg bg-zinc-900 border border-zinc-750 text-white text-xs placeholder-zinc-500 focus:outline-none focus:border-cyan-400"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const trimmed = newKeyMomentInput.trim();
+                  if (trimmed && !diaryKeyMoments.includes(trimmed)) {
+                    setDiaryKeyMoments([...diaryKeyMoments, trimmed]);
+                    setNewKeyMomentInput("");
+                  }
+                }}
+                disabled={!newKeyMomentInput.trim()}
+                className="px-3 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer shrink-0"
+              >
+                Adicionar Tag
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-1.5 items-center">
+            {Array.from(
+              new Set([
+                "Boss Fight ⚔️",
+                "Platina 🏆",
+                "Plot Twist 🎭",
+                "Review Final ⭐",
+                "Momento Épico ⚡",
+                "Segredo 🔑",
+                "SPOILER ⚠️",
+                "DLC Concluída 🎮",
+                "Zeramento 100% 🎯",
+                ...diaryKeyMoments,
+              ])
+            ).map((tag) => {
               const selected = diaryKeyMoments.includes(tag);
               return (
                 <button
@@ -1695,13 +1816,17 @@ export default function GameDetailDrawer({
                       setDiaryKeyMoments([...diaryKeyMoments, tag]);
                     }
                   }}
-                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border ${
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer border flex items-center gap-1.5 ${
                     selected
-                      ? "bg-cyan-500 text-zinc-950 border-cyan-400 shadow-md shadow-cyan-500/20"
-                      : "bg-zinc-900 text-zinc-400 border-zinc-800 hover:border-zinc-700 hover:text-zinc-300"
+                      ? "bg-cyan-500 text-zinc-950 border-cyan-400 shadow-md shadow-cyan-500/25 font-black scale-[1.02]"
+                      : "bg-zinc-900 text-zinc-300 border-zinc-800 hover:border-zinc-700 hover:text-white hover:bg-zinc-850"
                   }`}
                 >
-                  {tag}
+                  <Sparkles size={11} className={selected ? "text-zinc-950" : "text-cyan-400"} />
+                  <span>{tag}</span>
+                  {selected && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-zinc-950" />
+                  )}
                 </button>
               );
             })}
@@ -2330,11 +2455,13 @@ export default function GameDetailDrawer({
                         setSelectedEntryIds(new Set());
                         setExpandedMediaEntries({});
                         if (game?.diary) {
-                          const expandedCollapsedMap: Record<string, boolean> = {};
+                          const collapsedMap: Record<string, boolean> = {};
                           game.diary.forEach((e) => {
-                            expandedCollapsedMap[e.id] = false;
+                            collapsedMap[e.id] = true;
                           });
-                          setCollapsedEntries(expandedCollapsedMap);
+                          setCollapsedEntries(collapsedMap);
+                        } else {
+                          setCollapsedEntries({});
                         }
                       }
                     }}
@@ -2593,16 +2720,15 @@ export default function GameDetailDrawer({
                     </div>
                   )}
                   {/* Background blurred cover to prevent cutoffs when zoom < 100% */}
-                  <img
+                  <CachedImage
                     src={game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200"}
                     alt=""
                     className="absolute inset-0 w-full h-full object-cover blur-xl scale-110 opacity-50 select-none pointer-events-none"
                   />
-                  <img
+                  <CachedImage
                     className="w-full h-full object-cover pointer-events-none select-none transform relative z-10"
                     src={game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=1200"}
                     alt={game.name}
-                    referrerPolicy="no-referrer"
                     style={{
                       objectPosition: `${coverPosX}% ${coverPos}%`,
                       transformOrigin: `${coverPosX}% ${coverPos}%`,
@@ -2612,9 +2738,7 @@ export default function GameDetailDrawer({
                       transition: isDragging ? "none" : "transform 0.3s ease-out",
                     }}
                     draggable={false}
-                    onError={(e: any) => {
-                      (e.target as HTMLImageElement).src = "https://placehold.co/1200x400/040406/ffffff?text=Sem+Capa";
-                    }}
+                    fallbackSrc="https://placehold.co/1200x400/040406/ffffff?text=Sem+Capa"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-[#080a10] via-zinc-900/40 to-transparent pointer-events-none" />
                   
@@ -2848,8 +2972,10 @@ export default function GameDetailDrawer({
                           })()}
                         </div>
                       </div>
-                      <div title="Plataforma de jogo">
-                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1">Plataforma</div>
+                      <div title="Plataforma de escolha (onde joguei)">
+                        <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1 flex items-center gap-1.5">
+                          <span>Plataforma de Escolha</span>
+                        </div>
                         <div className="flex flex-wrap gap-1.5">
                           {splitEntities(game.platform || "PC").map((p, pIdx) => {
                             const parsedP = parseContextNote(p);
@@ -2858,8 +2984,8 @@ export default function GameDetailDrawer({
                               <span 
                                 key={`${p}-${pIdx}`}
                                 className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-bold uppercase tracking-wider border backdrop-blur-md cursor-help shadow-sm ${style.text} ${style.border} ${style.bg}`}
-                                data-tooltip={parsedP.note || `Plataforma: ${parsedP.main}`}
-                                data-tooltip-title={parsedP.note ? `Plataforma: ${parsedP.main}` : undefined}
+                                data-tooltip={parsedP.note || `Plataforma escolhida: ${parsedP.main}`}
+                                data-tooltip-title={parsedP.note ? `Plataforma de Escolha: ${parsedP.main}` : undefined}
                                 data-tooltip-theme="cyan"
                               >
                                 <span>{parsedP.main}</span>
@@ -2882,6 +3008,40 @@ export default function GameDetailDrawer({
                           )}
                         </div>
                       </div>
+
+                      {(() => {
+                        const rawAvailable = game.availablePlatforms;
+                        const availableList = Array.isArray(rawAvailable) 
+                          ? rawAvailable 
+                          : (typeof rawAvailable === "string" && rawAvailable.trim() ? splitEntities(rawAvailable) : []);
+                        
+                        if (availableList.length === 0) return null;
+
+                        return (
+                          <div title="Plataformas em que este jogo foi lançado ou está disponível">
+                            <div className="text-zinc-400 text-xs uppercase tracking-wider font-bold mb-1 flex items-center gap-1.5">
+                              <span>Plataformas Disponíveis</span>
+                            </div>
+                            <div className="flex flex-wrap gap-1.5">
+                              {availableList.map((p, pIdx) => {
+                                const parsedP = parseContextNote(p);
+                                const style = getPlatformBadgeStyle(parsedP.main);
+                                return (
+                                  <span 
+                                    key={`avail-${p}-${pIdx}`}
+                                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium uppercase tracking-wider border backdrop-blur-md shadow-sm ${style.text} ${style.border} ${style.bg}`}
+                                    data-tooltip={parsedP.note || `Disponível em: ${parsedP.main}`}
+                                    data-tooltip-title={parsedP.note ? `Plataforma: ${parsedP.main}` : undefined}
+                                    data-tooltip-theme="cyan"
+                                  >
+                                    <span>{parsedP.main}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                       {game.difficulty && (
                         <div title="Dificuldade selecionada ou jogada">
@@ -4039,7 +4199,7 @@ export default function GameDetailDrawer({
                             <div key={entryKey} id={`diary-entry-${entry.id || idx}`} className="relative pl-6 border-l-2 border-cyan-500/20 pb-4 scroll-mt-10">
                               <div className="absolute -left-[7px] top-1.5 w-3 h-3 rounded-full bg-cyan-400 ring-4 ring-[#080a10]" />
                               <div className="flex items-center justify-between gap-2 flex-wrap">
-                                <div className="flex items-center gap-2">
+                                <div className="flex items-center gap-2 flex-wrap min-w-0">
                                   {isEntrySelectionMode && (
                                     <button
                                       type="button"
@@ -4063,13 +4223,29 @@ export default function GameDetailDrawer({
                                   )}
 
                                   <span
-                                    className="px-3 py-1.5 rounded-xl chip-pink text-xs sm:text-sm font-bold uppercase tracking-wider font-mono cursor-pointer hover:bg-pink-950/40 hover:border-pink-500/40 transition-all flex items-center gap-1.5 select-none"
+                                    className="px-3 py-1.5 rounded-xl chip-pink text-xs sm:text-sm font-bold uppercase tracking-wider font-mono cursor-pointer hover:bg-pink-950/40 hover:border-pink-500/40 transition-all flex items-center gap-1.5 select-none shrink-0"
                                     onClick={() => setCollapsedEntries((prev) => ({ ...prev, [entry.id]: prev[entry.id] === false }))}
                                     title="Clique para expandir ou colapsar esta entrada"
                                   >
-                                    {entry.period}
+                                    <Calendar size={13} className="text-pink-400" />
+                                    <span>{entry.period}</span>
                                     {isCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                                   </span>
+
+                                  {entry.keyMoments && entry.keyMoments.length > 0 && (
+                                    <div className="flex flex-wrap items-center gap-1.5">
+                                      {entry.keyMoments.map((km) => (
+                                        <span
+                                          key={km}
+                                          className="px-2.5 py-1 rounded-xl bg-cyan-500/15 border border-cyan-400/60 text-cyan-200 text-xs font-extrabold shadow-sm flex items-center gap-1.5 tracking-tight hover:bg-cyan-500/25 transition-all"
+                                          title={`Momento Chave: ${km}`}
+                                        >
+                                          <Sparkles size={12} className="text-cyan-400 shrink-0" />
+                                          <span>{km}</span>
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
                                 </div>
                                 
                                 {!isReadingMode && (
@@ -4243,11 +4419,20 @@ export default function GameDetailDrawer({
                                   document.getElementById(`diary-entry-${entry.id || idx}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
                                   setIsIndexOpen(false); // Close after clicking
                                 }}
-                                className="w-full text-left px-3 py-2 rounded-xl bg-zinc-900/40 hover:bg-cyan-950/20 border border-zinc-800/60 hover:border-cyan-500/40 transition-all group flex items-center justify-between cursor-pointer"
+                                className="w-full text-left px-3 py-2 rounded-xl bg-zinc-900/40 hover:bg-cyan-950/20 border border-zinc-800/60 hover:border-cyan-500/40 transition-all group flex flex-col gap-1 cursor-pointer"
                               >
                                 <span className="text-xs font-mono font-bold text-pink-400 group-hover:text-pink-300 truncate">
                                   {entry.period}
                                 </span>
+                                {entry.keyMoments && entry.keyMoments.length > 0 && (
+                                  <div className="flex flex-wrap gap-1">
+                                    {entry.keyMoments.map((km) => (
+                                      <span key={km} className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 font-bold flex items-center gap-0.5">
+                                        <Sparkles size={8} /> {km}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
                               </button>
                             );
                           })}

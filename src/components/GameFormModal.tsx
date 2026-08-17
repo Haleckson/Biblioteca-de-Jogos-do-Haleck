@@ -4,14 +4,15 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
-import { Game, TrophyItem, getDlcMode, getGameTrophyItems, parseProConTopic } from "../types";
+import { Game, TrophyItem, getDlcMode, getGameTrophyItems, getGameHighestTrophy, parseProConTopic, splitEntities, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star } from "lucide-react";
 import { COVER_BANK } from "../data";
 import { uploadToImgBB } from "../utils/imgbb";
 import { formatHltbTime } from "../utils/hltbFormatter";
 import { formatHoursAndMinutes, parsePlaytimeHours } from "../utils/playtime";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
+import { getPlatformBadgeStyle } from "./GameCard";
 import {
   fetchSteamOwnedGames,
   fetchSteamAchievements,
@@ -28,12 +29,29 @@ import {
   GogOwnedGame,
   GogAchievementsResult,
 } from "../utils/gogApi";
+import {
+  searchIgdbGames,
+  fetchIgdbGameDetails
+} from "../utils/igdbApi";
+import {
+  searchSteamGridGames,
+  fetchSteamGridMedia,
+  fetchSteamGridIcons,
+  getStoredSteamGridApiKey
+} from "../utils/steamGridDbApi";
+import {
+  IgdbGameCandidate,
+  SteamGridGameCandidate,
+  SteamGridMediaItem,
+  SteamGridAssetType
+} from "../types";
 
 interface GameFormModalProps {
   isOpen: boolean;
   onClose: () => void;
   game: Game | null;
   onSave: (gameData: Omit<Game, "id" | "diary"> & { id?: string; diary?: any[] }) => void;
+  onBulkSaveGames?: (games: Array<Omit<Game, "id" | "diary"> & { id?: string; diary?: any[] }>) => void;
   globalTags: string[];
   globalGenres: string[];
   onAddGlobalTag: (tag: string) => void;
@@ -50,6 +68,7 @@ export default function GameFormModal({
   onClose,
   game,
   onSave,
+  onBulkSaveGames,
   globalTags,
   globalGenres,
   onAddGlobalTag,
@@ -70,14 +89,14 @@ export default function GameFormModal({
   const [pricePaid, setPricePaid] = useState<string>("");
   const [playtime, setPlaytime] = useState("");
   const [additionalPlaytime, setAdditionalPlaytime] = useState("");
-  const [trophy, setTrophy] = useState<"none" | "silver" | "gold" | "platinum">("none");
+  const [trophy, setTrophy] = useState<"none" | "bronze" | "silver" | "gold" | "platinum">("none");
   const [selectedTrophyItems, setSelectedTrophyItems] = useState<TrophyItem[]>([]);
 
-  const addTrophy = (type: "silver" | "gold" | "platinum") => {
+  const addTrophy = (type: "bronze" | "silver" | "gold" | "platinum") => {
     setSelectedTrophyItems((prev) => [...prev, { type, note: "" }]);
   };
 
-  const removeTrophy = (type: "silver" | "gold" | "platinum") => {
+  const removeTrophy = (type: "bronze" | "silver" | "gold" | "platinum") => {
     setSelectedTrophyItems((prev) => {
       const idx = prev.map((t) => t.type).lastIndexOf(type);
       if (idx === -1) return prev;
@@ -101,6 +120,7 @@ export default function GameFormModal({
     setSelectedTrophyItems((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const bronzeCount = selectedTrophyItems.filter((t) => t.type === "bronze").length;
   const silverCount = selectedTrophyItems.filter((t) => t.type === "silver").length;
   const goldCount = selectedTrophyItems.filter((t) => t.type === "gold").length;
   const platinumCount = selectedTrophyItems.filter((t) => t.type === "platinum").length;
@@ -113,6 +133,9 @@ export default function GameFormModal({
   const [dlcMode, setDlcMode] = useState<"none" | "dlc" | "plus_dlc">("none");
   const [dlcNames, setDlcNames] = useState("");
   const [platform, setPlatform] = useState("");
+  const [availablePlatforms, setAvailablePlatforms] = useState<string[]>([]);
+  const [showNewAvailablePlatform, setShowNewAvailablePlatform] = useState(false);
+  const [newAvailablePlatformVal, setNewAvailablePlatformVal] = useState("");
   const [difficulty, setDifficulty] = useState("");
   const [rating, setRating] = useState(0);
   const [startDate, setStartDate] = useState("");
@@ -120,7 +143,23 @@ export default function GameFormModal({
   const [releaseDate, setReleaseDate] = useState("");
   const [coverUrl, setCoverUrl] = useState("");
 
-  const [activeIconTab, setActiveIconTab] = useState<"emoji" | "upload" | "url">("emoji");
+  const toggleAvailablePlatform = (plat: string) => {
+    setAvailablePlatforms((prev) =>
+      prev.includes(plat) ? prev.filter((p) => p !== plat) : [...prev, plat]
+    );
+  };
+
+  const addCustomAvailablePlatform = () => {
+    const trimmed = newAvailablePlatformVal.trim();
+    if (!trimmed) return;
+    if (!availablePlatforms.includes(trimmed)) {
+      setAvailablePlatforms((prev) => [...prev, trimmed]);
+    }
+    setNewAvailablePlatformVal("");
+    setShowNewAvailablePlatform(false);
+  };
+
+  const [activeIconTab, setActiveIconTab] = useState<"emoji" | "upload" | "url" | "steamgriddb">("emoji");
   const [iconEmoji, setIconEmoji] = useState("🎮");
   const [tempUploadedIcon, setTempUploadedIcon] = useState("");
   const [iconUrl, setIconUrl] = useState("");
@@ -197,43 +236,122 @@ export default function GameFormModal({
   const [isLoadingGogGames, setIsLoadingGogGames] = useState(false);
   const [gogAchieveData, setGogAchieveData] = useState<GogAchievementsResult | null>(null);
 
-  const [isFetchingAIMetadata, setIsFetchingAIMetadata] = useState(false);
   const [gameCandidates, setGameCandidates] = useState<any[]>([]);
   const [isSelectingCandidate, setIsSelectingCandidate] = useState(false);
+  const [igdbSearchQuery, setIgdbSearchQuery] = useState("");
+  const [hasSearchedIgdb, setHasSearchedIgdb] = useState(false);
+  const [selectedBulkCandidateIds, setSelectedBulkCandidateIds] = useState<number[]>([]);
+  const [isBulkImporting, setIsBulkImporting] = useState(false);
+
+  // IGDB Preview Comparison State
+  const [showMetadataPreviewModal, setShowMetadataPreviewModal] = useState(false);
+  const [previewCandidateData, setPreviewCandidateData] = useState<any | null>(null);
+  const [selectedPreviewFields, setSelectedPreviewFields] = useState<Record<string, boolean>>({
+    title: true,
+    cover: true,
+    developer: true,
+    publisher: true,
+    series: true,
+    releaseDate: true,
+    platforms: true,
+    genres: true,
+    metacritic: true,
+    igdbRating: true,
+    hltb: true,
+    synopsis: true,
+  });
+
+  // IGDB States
+  const [isFetchingIgdb, setIsFetchingIgdb] = useState(false);
+  const [igdbId, setIgdbId] = useState<number | undefined>(game?.igdbId);
+  const [igdbRating, setIgdbRating] = useState<number | undefined>(game?.igdbRating);
+  const [igdbSlug, setIgdbSlug] = useState<string | undefined>(game?.igdbSlug);
+
+  // SteamGridDB Media Gallery States
+  const [showSteamGridModal, setShowSteamGridModal] = useState(false);
+  const [steamGridMediaList, setSteamGridMediaList] = useState<SteamGridMediaItem[]>([]);
+  const [isLoadingSteamGridMedia, setIsLoadingSteamGridMedia] = useState(false);
+  const [activeSteamGridFilter, setActiveSteamGridFilter] = useState<"all" | "grid" | "hero" | "logo" | "icon">("all");
+  const [steamGridGridOrientation, setSteamGridGridOrientation] = useState<"all" | "vertical" | "horizontal">("all");
+  const [steamGridSearchTerm, setSteamGridSearchTerm] = useState("");
+  const [steamGridCandidates, setSteamGridCandidates] = useState<SteamGridGameCandidate[]>([]);
+  const [selectedSteamGridGame, setSelectedSteamGridGame] = useState<{ id: number; name: string } | null>(null);
+  const [previewMediaItem, setPreviewMediaItem] = useState<SteamGridMediaItem | null>(null);
+  const [steamGridTargetMode, setSteamGridTargetMode] = useState<"cover" | "icon">("cover");
+
+  // Inline SteamGridDB Quick Icons (for Profile Icon Block)
+  const [quickSteamGridIcons, setQuickSteamGridIcons] = useState<SteamGridMediaItem[]>([]);
+  const [isLoadingQuickIcons, setIsLoadingQuickIcons] = useState(false);
+  const [quickIconsSearchTerm, setQuickIconsSearchTerm] = useState("");
 
   // Estado dos blocos colapsáveis (todos iniciam colapsados por padrão)
   const [openBlocks, setOpenBlocks] = useState<Record<string, boolean>>({});
   const [activeBlock, setActiveBlock] = useState<string>("basic");
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const chipsBarRef = useRef<HTMLDivElement>(null);
+  const isProgrammaticScrollRef = useRef(false);
+  const scrollTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const handleScrollModal = () => {
-    if (!scrollContainerRef.current) return;
+    if (isProgrammaticScrollRef.current || !scrollContainerRef.current) return;
     const containerTop = scrollContainerRef.current.getBoundingClientRect().top;
+    const targetLine = containerTop + 130;
+
     const blocks = [
       "basic",
-      "playtime",
-      "trophies",
-      "proscons",
-      "hltb",
-      "dates",
-      "platform",
       "status",
+      "platform",
+      "playtime",
+      "dates",
+      "trophies",
+      "replay",
+      "icon",
+      "cover",
+      "proscons",
       "genres",
-      "tags"
+      "tags",
+      "hltb",
+      "metacritic",
+      "steam",
     ];
 
-    let currentActive = "basic";
+    let bestBlock: string | null = null;
+    let minDistance = Infinity;
+
     for (const key of blocks) {
       const el = document.getElementById(`block-${key}`);
-      if (el) {
-        const rect = el.getBoundingClientRect();
-        if (rect.top - containerTop <= 160) {
-          currentActive = key;
+      if (!el) continue;
+
+      const rect = el.getBoundingClientRect();
+      const isOpen = !!openBlocks[key];
+
+      // If the block encompasses the reading line
+      if (rect.top <= targetLine && rect.bottom >= targetLine - 30) {
+        if (isOpen) {
+          bestBlock = key;
+          minDistance = 0;
+          break;
+        } else {
+          const dist = Math.abs(rect.top - targetLine);
+          if (dist < minDistance) {
+            minDistance = dist;
+            bestBlock = key;
+          }
+        }
+      } else {
+        let dist = Math.abs(rect.top - targetLine);
+        if (isOpen) dist -= 50; // Give priority to open blocks
+
+        if (dist < minDistance) {
+          minDistance = dist;
+          bestBlock = key;
         }
       }
     }
-    setActiveBlock(currentActive);
+
+    if (bestBlock) {
+      setActiveBlock(bestBlock);
+    }
   };
 
   useEffect(() => {
@@ -245,10 +363,16 @@ export default function GameFormModal({
   }, [activeBlock]);
 
   const toggleBlock = (blockKey: string) => {
-    setOpenBlocks((prev) => ({
-      ...prev,
-      [blockKey]: !prev[blockKey],
-    }));
+    setOpenBlocks((prev) => {
+      const willBeOpen = !prev[blockKey];
+      if (willBeOpen) {
+        setActiveBlock(blockKey);
+      }
+      return {
+        ...prev,
+        [blockKey]: willBeOpen,
+      };
+    });
   };
 
   const getCategoryBorderClass = (category: string, isOpen: boolean) => {
@@ -324,33 +448,103 @@ export default function GameFormModal({
     }
   };
 
-  const applyGameCandidate = (data: any) => {
-    if (data.name) setName(data.name);
-    if (data.developer) setStudio(data.developer);
-    if (data.publisher) setPublisher(data.publisher);
-    if (data.series) setSeries(data.series);
-    if (data.releaseDate) setReleaseDate(data.releaseDate);
-    if (data.platforms && data.platforms.length > 0) {
-      setPlatform(data.platforms.join(", "));
+  const openMetadataPreview = (data: any) => {
+    setPreviewCandidateData(data);
+    const currentTitle = name.trim();
+    const candidateTitle = (data.name || "").trim();
+    // Se o usuário já possui um título customizado que difere do IGDB, mantém o título do site desmarcado por padrão
+    const isDifferentTitle = currentTitle.length > 0 && currentTitle.toLowerCase() !== candidateTitle.toLowerCase();
+
+    setSelectedPreviewFields({
+      title: !isDifferentTitle,
+      cover: true,
+      developer: true,
+      publisher: true,
+      series: true,
+      releaseDate: true,
+      platforms: true,
+      genres: true,
+      metacritic: true,
+      igdbRating: true,
+      hltb: true,
+      synopsis: true,
+    });
+    setShowMetadataPreviewModal(true);
+  };
+
+  const togglePreviewField = (key: string) => {
+    setSelectedPreviewFields((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const toggleAllPreviewFields = (checked: boolean) => {
+    setSelectedPreviewFields({
+      title: checked,
+      cover: checked,
+      developer: checked,
+      publisher: checked,
+      series: checked,
+      releaseDate: checked,
+      platforms: checked,
+      genres: checked,
+      metacritic: checked,
+      igdbRating: checked,
+      hltb: checked,
+      synopsis: checked,
+    });
+  };
+
+  const applySelectedMetadataFields = () => {
+    if (!previewCandidateData) return;
+    const data = previewCandidateData;
+
+    if (selectedPreviewFields.title && data.name) setName(data.name);
+    if (selectedPreviewFields.developer && data.developer) setStudio(data.developer);
+    if (selectedPreviewFields.publisher && data.publisher) setPublisher(data.publisher);
+    if (selectedPreviewFields.series && data.series) setSeries(data.series);
+    if (selectedPreviewFields.releaseDate && data.releaseDate) setReleaseDate(data.releaseDate);
+    if (selectedPreviewFields.platforms && data.platforms && data.platforms.length > 0) {
+      setAvailablePlatforms(data.platforms);
     }
 
-    if (data.metacritic !== undefined && data.metacritic !== null) {
-      setMetacriticCritScore(data.metacritic);
+    if (data.id && typeof data.id === "number") {
+      setIgdbId(data.id);
+    }
+    if (data.slug) {
+      setIgdbSlug(data.slug);
+    }
+    if (selectedPreviewFields.igdbRating && data.rating !== undefined) {
+      setIgdbRating(data.rating);
     }
 
-    if (data.hltbMain !== undefined && data.hltbMain !== null) {
-      setHltbMain(formatHltbTime(data.hltbMain));
-    }
-    if (data.hltbMainExtra !== undefined && data.hltbMainExtra !== null) {
-      setHltbExtra(formatHltbTime(data.hltbMainExtra));
-    }
-    if (data.hltbCompletionist !== undefined && data.hltbCompletionist !== null) {
-      setHltbCompletionist(formatHltbTime(data.hltbCompletionist));
+    if (selectedPreviewFields.metacritic) {
+      if (data.aggregatedRating !== undefined && data.aggregatedRating !== null) {
+        setMetacriticCritScore(data.aggregatedRating);
+      } else if (data.metacritic !== undefined && data.metacritic !== null) {
+        setMetacriticCritScore(data.metacritic);
+      }
     }
 
-    if (data.coverUrl) {
-      setCoverUrl(data.coverUrl);
-      setTempUploadedCover(data.coverUrl);
+    if (selectedPreviewFields.hltb) {
+      if (data.hltbMain !== undefined && data.hltbMain !== null) {
+        setHltbMain(formatHltbTime(data.hltbMain));
+      }
+      if (data.hltbMainExtra !== undefined && data.hltbMainExtra !== null) {
+        setHltbExtra(formatHltbTime(data.hltbMainExtra));
+      }
+      if (data.hltbCompletionist !== undefined && data.hltbCompletionist !== null) {
+        setHltbCompletionist(formatHltbTime(data.hltbCompletionist));
+      }
+    }
+
+    if (selectedPreviewFields.cover) {
+      const finalCover = data.coverHdUrl || data.coverUrl;
+      if (finalCover) {
+        setCoverUrl(finalCover);
+        setTempUploadedCover(finalCover);
+      }
     }
 
     if (data.iconUrl) {
@@ -358,7 +552,7 @@ export default function GameFormModal({
       setIconUrl(data.iconUrl);
     }
 
-    if (data.genres && Array.isArray(data.genres)) {
+    if (selectedPreviewFields.genres && data.genres && Array.isArray(data.genres)) {
       data.genres.forEach((genreName: string) => {
         const capitalized = genreName.trim();
         if (capitalized) {
@@ -372,45 +566,251 @@ export default function GameFormModal({
         }
       });
     }
+
+    setShowMetadataPreviewModal(false);
+    setIsSelectingCandidate(false);
+    triggerAlert(
+      "Metadados Aplicados!",
+      `Os metadados selecionados de "${data.name}" foram aplicados à sua ficha técnica (Plataformas Disponíveis atualizadas).`
+    );
   };
 
-  const handleFetchAIMetadata = async () => {
-    const term = name.trim();
-    if (!term) {
-      triggerAlert("Título Vazio", "Por favor, digite o título do jogo para buscar os metadados com Inteligência Artificial.");
+  const applyCandidateDirectly = (cand: any) => {
+    if (!cand) return;
+    if (cand.name) setName(cand.name);
+    if (cand.developer) setStudio(cand.developer);
+    if (cand.publisher) setPublisher(cand.publisher);
+    if (cand.series) setSeries(cand.series);
+    if (cand.releaseDate) setReleaseDate(cand.releaseDate);
+    if (cand.platforms && Array.isArray(cand.platforms) && cand.platforms.length > 0) {
+      setAvailablePlatforms(cand.platforms);
+    }
+    if (cand.id && typeof cand.id === "number") setIgdbId(cand.id);
+    if (cand.slug) setIgdbSlug(cand.slug);
+    if (cand.rating !== undefined) setIgdbRating(cand.rating);
+    if (cand.aggregatedRating !== undefined && cand.aggregatedRating !== null) {
+      setMetacriticCritScore(cand.aggregatedRating);
+    } else if (cand.metacritic !== undefined && cand.metacritic !== null) {
+      setMetacriticCritScore(cand.metacritic);
+    }
+    if (cand.hltbMain !== undefined && cand.hltbMain !== null) setHltbMain(formatHltbTime(cand.hltbMain));
+    if (cand.hltbMainExtra !== undefined && cand.hltbMainExtra !== null) setHltbExtra(formatHltbTime(cand.hltbMainExtra));
+    if (cand.hltbCompletionist !== undefined && cand.hltbCompletionist !== null) setHltbCompletionist(formatHltbTime(cand.hltbCompletionist));
+    const finalCover = cand.coverHdUrl || cand.coverUrl;
+    if (finalCover) {
+      setCoverUrl(finalCover);
+      setTempUploadedCover(finalCover);
+    }
+    if (cand.iconUrl) {
+      setActiveIconTab("url");
+      setIconUrl(cand.iconUrl);
+    }
+    if (cand.genres && Array.isArray(cand.genres)) {
+      cand.genres.forEach((genreName: string) => {
+        const capitalized = genreName.trim();
+        if (capitalized) {
+          if (!globalGenres.includes(capitalized)) {
+            onAddGlobalGenre(capitalized);
+          }
+          setSelectedGenres((prev) => {
+            if (prev.includes(capitalized)) return prev;
+            return [...prev, capitalized];
+          });
+        }
+      });
+    }
+    setIsSelectingCandidate(false);
+    triggerAlert("Metadados Aplicados!", `Encontramos os detalhes de "${cand.name}" e preenchemos as Plataformas Disponíveis e a ficha técnica com sucesso.`);
+  };
+
+  const applyGameCandidate = (data: any) => {
+    openMetadataPreview(data);
+  };
+
+  const toggleBulkCandidateSelection = (candidateId: number) => {
+    setSelectedBulkCandidateIds((prev) =>
+      prev.includes(candidateId) ? prev.filter((id) => id !== candidateId) : [...prev, candidateId]
+    );
+  };
+
+  const toggleSelectAllBulkCandidates = () => {
+    if (selectedBulkCandidateIds.length === gameCandidates.length) {
+      setSelectedBulkCandidateIds([]);
+    } else {
+      setSelectedBulkCandidateIds(gameCandidates.map((c) => c.id).filter(Boolean));
+    }
+  };
+
+  const handleExecuteBulkImport = async () => {
+    if (selectedBulkCandidateIds.length === 0) {
+      triggerAlert("Nenhum Jogo Selecionado", "Selecione pelo menos um jogo nos checkboxes para importar em lote.");
       return;
     }
 
-    setIsFetchingAIMetadata(true);
+    const selectedGamesData = gameCandidates.filter((c) => selectedBulkCandidateIds.includes(c.id));
+    if (selectedGamesData.length === 0) return;
+
+    setIsBulkImporting(true);
     try {
-      const response = await fetch(`/api/game-metadata?q=${encodeURIComponent(term)}`);
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `Servidor retornou erro: ${response.status}`);
+      const mappedGames = selectedGamesData.map((cand) => {
+        const cover = cand.coverHdUrl || cand.coverUrl || "";
+        const genres = Array.isArray(cand.genres) && cand.genres.length > 0 ? cand.genres : ["Ação"];
+        genres.forEach((g: string) => {
+          if (!globalGenres.includes(g)) onAddGlobalGenre(g);
+        });
+
+        return {
+          name: cand.name || "Sem título",
+          coverUrl: cover,
+          studio: cand.developer || "",
+          publisher: cand.publisher || "",
+          series: cand.series || "",
+          releaseDate: cand.releaseDate || "",
+          platform: Array.isArray(cand.platforms) && cand.platforms.length > 0 ? cand.platforms[0] : "PC",
+          availablePlatforms: Array.isArray(cand.platforms) ? cand.platforms : [],
+          genre: genres,
+          status: ["Quero Jogar"],
+          rating: 0,
+          playtime: "00h 00m",
+          additionalPlaytime: "",
+          igdbId: cand.id,
+          igdbRating: cand.rating,
+          igdbSlug: cand.slug,
+          metacriticCritScore: cand.aggregatedRating || cand.metacritic || undefined,
+          hltbMain: cand.hltbMain ? formatHltbTime(cand.hltbMain) : undefined,
+          hltbExtra: cand.hltbMainExtra ? formatHltbTime(cand.hltbMainExtra) : undefined,
+          hltbCompletionist: cand.hltbCompletionist ? formatHltbTime(cand.hltbCompletionist) : undefined,
+          tags: ["IGDB Import"],
+        };
+      });
+
+      if (onBulkSaveGames) {
+        onBulkSaveGames(mappedGames);
+      } else {
+        // Fallback: apply the first one
+        applyGameCandidate(selectedGamesData[0]);
       }
 
-      const data = await response.json();
+      setIsSelectingCandidate(false);
+      setSelectedBulkCandidateIds([]);
+    } catch (err: any) {
+      triggerAlert("Erro na Importação em Lote", `Ocorreu um erro: ${err?.message || err}`);
+    } finally {
+      setIsBulkImporting(false);
+    }
+  };
 
-      if (data && Array.isArray(data.games)) {
-        if (data.games.length === 0) {
-          triggerAlert("Sem Resultados", `Não encontramos nenhuma sugestão para "${term}". Por favor, digite o título por extenso.`);
-        } else if (data.games.length === 1) {
-          applyGameCandidate(data.games[0]);
-          triggerAlert("Metadados Carregados!", `Encontramos os detalhes de "${data.games[0].name}" e preenchemos a ficha de jogo com dados de alta qualidade.`);
-        } else {
-          setGameCandidates(data.games);
-          setIsSelectingCandidate(true);
-        }
+  const handleOpenIgdbSearch = (initialTerm?: string) => {
+    const term = (initialTerm !== undefined ? initialTerm : (igdbSearchQuery || name)).trim();
+    setIgdbSearchQuery(term);
+    setIsSelectingCandidate(true);
+    if (term) {
+      handlePerformIgdbSearch(term);
+    }
+  };
+
+  const handlePerformIgdbSearch = async (termToSearch: string) => {
+    const term = termToSearch.trim();
+    if (!term) {
+      triggerAlert("Termo de Busca Vazio", "Por favor, digite o nome do jogo para pesquisar no catálogo do IGDB.");
+      return;
+    }
+
+    setIsFetchingIgdb(true);
+    setHasSearchedIgdb(true);
+    try {
+      const games = await searchIgdbGames(term, 12);
+      if (!games || games.length === 0) {
+        setGameCandidates([]);
+        triggerAlert("Sem Resultados no IGDB", `Nenhum jogo encontrado para "${term}". Tente pesquisar pelo nome original ou franquia em inglês.`);
       } else {
-        // Fallback for single object response format
-        applyGameCandidate(data);
-        triggerAlert("Metadados Carregados!", `Encontramos os detalhes de "${data.name || term}" e preenchemos a ficha de jogo com dados de alta qualidade.`);
+        setGameCandidates(games);
       }
     } catch (err: any) {
-      console.error("Erro ao carregar metadados via IA:", err);
-      triggerAlert("Busca por IA indisponível", `Não foi possível carregar os metadados automáticos: ${err.message || err}`);
+      console.error("Erro ao buscar no IGDB:", err);
+      triggerAlert("Busca IGDB Indisponível", `Não foi possível carregar os dados do IGDB: ${err?.message || err}`);
     } finally {
-      setIsFetchingAIMetadata(false);
+      setIsFetchingIgdb(false);
+    }
+  };
+
+  // SteamGridDB Gallery Handlers
+  const handleOpenSteamGridGallery = async (customTerm?: string, targetMode: "cover" | "icon" = "cover", customGameId?: number) => {
+    const term = (customTerm !== undefined ? customTerm : (steamGridSearchTerm || name)).trim();
+    if (!term && !customGameId && !steamAppId) {
+      triggerAlert("Título Necessário", "Digite o título do jogo antes de abrir a galeria do SteamGridDB.");
+      return;
+    }
+
+    setSteamGridTargetMode(targetMode);
+    setActiveSteamGridFilter(targetMode === "icon" ? "icon" : "all");
+    setSteamGridSearchTerm(term);
+    setShowSteamGridModal(true);
+    setIsLoadingSteamGridMedia(true);
+    try {
+      const res = await fetchSteamGridMedia({
+        query: term,
+        gameId: customGameId,
+        steamAppId: steamAppId,
+        types: ["grid", "hero", "logo", "icon"],
+      });
+      setSteamGridMediaList(res.media);
+      setSteamGridCandidates(res.candidates || []);
+      if (res.game) {
+        setSelectedSteamGridGame(res.game);
+      } else if (customGameId) {
+        setSelectedSteamGridGame({ id: customGameId, name: term });
+      }
+    } catch (err: any) {
+      console.error("Erro ao carregar mídias do SteamGridDB:", err);
+      triggerAlert("SteamGridDB Indisponível", err?.message || "Não foi possível carregar as imagens do jogo no SteamGridDB.");
+    } finally {
+      setIsLoadingSteamGridMedia(false);
+    }
+  };
+
+  const handleSelectSteamGridMediaAsCover = (item: SteamGridMediaItem) => {
+    const url = item.url || item.thumb;
+    setCoverUrl(url);
+    setTempUploadedCover(url);
+    setShowSteamGridModal(false);
+    setPreviewMediaItem(null);
+    triggerAlert("Capa SteamGridDB Atualizada!", `A imagem (${item.width}x${item.height} ${item.type.toUpperCase()}) foi definida como capa do jogo.`);
+  };
+
+  const handleSelectSteamGridMediaAsIcon = (item: SteamGridMediaItem) => {
+    const url = item.url || item.thumb;
+    setActiveIconTab("url");
+    setIconUrl(url);
+    setTempUploadedIcon(url);
+    setShowSteamGridModal(false);
+    setPreviewMediaItem(null);
+    triggerAlert("Ícone SteamGridDB Atualizado!", `O ícone (${item.width}x${item.height}) foi definido como ícone do jogo.`);
+  };
+
+  const handleFetchQuickSteamGridIcons = async (customQuery?: string) => {
+    const term = (customQuery !== undefined ? customQuery : (quickIconsSearchTerm || name)).trim();
+    if (!term && !steamAppId) {
+      triggerAlert("Título Necessário", "Digite o título do jogo para buscar ícones no SteamGridDB.");
+      return;
+    }
+
+    setQuickIconsSearchTerm(term);
+    setIsLoadingQuickIcons(true);
+    try {
+      const res = await fetchSteamGridIcons({
+        query: term,
+        steamAppId: steamAppId,
+      });
+      setQuickSteamGridIcons(res.icons);
+      if (res.icons.length === 0) {
+        triggerAlert("Nenhum Ícone Encontrado", `Não encontramos ícones específicos para "${term}" no SteamGridDB. Tente buscar na Galeria Completa.`);
+      }
+    } catch (err: any) {
+      console.error("Erro ao buscar ícones rápidos do SteamGridDB:", err);
+      triggerAlert("Erro ao Buscar Ícones", err?.message || "Não foi possível conectar com o SteamGridDB.");
+    } finally {
+      setIsLoadingQuickIcons(false);
     }
   };
 
@@ -857,6 +1257,16 @@ export default function GameFormModal({
       setPros(game.pros || "");
       setCons(game.cons || "");
       setPlatform(game.platform || "");
+
+      const rawAvail = game.availablePlatforms;
+      if (Array.isArray(rawAvail)) {
+        setAvailablePlatforms(rawAvail);
+      } else if (typeof rawAvail === "string" && rawAvail.trim()) {
+        setAvailablePlatforms(splitEntities(rawAvail));
+      } else {
+        setAvailablePlatforms([]);
+      }
+
       setDifficulty(game.difficulty || "");
       setRating(game.rating || 0);
       setStartDate(game.startDate || "");
@@ -891,6 +1301,11 @@ export default function GameFormModal({
       setMetacriticUrl(game.metacriticUrl || "");
       setMetacriticCritScore(game.metacriticCritScore !== undefined ? game.metacriticCritScore : undefined);
       setMetacriticUserScore(game.metacriticUserScore !== undefined ? game.metacriticUserScore : undefined);
+
+      // IGDB values
+      setIgdbId(game.igdbId);
+      setIgdbRating(game.igdbRating);
+      setIgdbSlug(game.igdbSlug);
 
       // Integration platform selection
       const activePlat = game.integrationPlatform || (game.gogGameId ? "gog" : game.steamAppId ? "steam" : "none");
@@ -975,6 +1390,9 @@ export default function GameFormModal({
       setPros("");
       setCons("");
       setPlatform("");
+      setAvailablePlatforms([]);
+      setShowNewAvailablePlatform(false);
+      setNewAvailablePlatformVal("");
       setDifficulty("");
       setRating(0);
       setStartDate("");
@@ -1021,6 +1439,11 @@ export default function GameFormModal({
       setGogAchieveData(null);
       setShowGogImport(false);
       setGogUrlInput("");
+
+      // IGDB values
+      setIgdbId(undefined);
+      setIgdbRating(undefined);
+      setIgdbSlug(undefined);
     }
     setShowNewGenre(false);
     setShowNewTag(false);
@@ -1230,6 +1653,7 @@ export default function GameFormModal({
     if (activeIconTab === "emoji") finalIcon = iconEmoji.trim() || "🎮";
     if (activeIconTab === "upload") finalIcon = tempUploadedIcon || "🎮";
     if (activeIconTab === "url") finalIcon = iconUrl.trim() || "🎮";
+    if (activeIconTab === "steamgriddb") finalIcon = tempUploadedIcon || iconUrl.trim() || "🎮";
 
     // Determine cover
     const finalCover = tempUploadedCover || coverUrl.trim() || COVER_BANK[0];
@@ -1248,10 +1672,7 @@ export default function GameFormModal({
       return items.join("; ");
     };
 
-    const trophyTypes = selectedTrophyItems.map((t) => t.type);
-    const highestTrophy = trophyTypes.length > 0
-      ? (trophyTypes.includes("platinum") ? "platinum" : trophyTypes.includes("gold") ? "gold" : "silver")
-      : "none";
+    const highestTrophy = getGameHighestTrophy({ trophies: selectedTrophyItems });
 
     const parsePriceInput = (val: string): number | undefined => {
       if (!val || !val.trim()) return undefined;
@@ -1280,7 +1701,7 @@ export default function GameFormModal({
       releaseDate,
       cover: finalCover,
       icon: finalIcon,
-      iconType: activeIconTab,
+      iconType: activeIconTab === "steamgriddb" ? "url" : activeIconTab,
       status: selectedStatus,
       replayed,
       replayCount: replayed ? Math.max(1, replayCount) : 0,
@@ -1293,6 +1714,7 @@ export default function GameFormModal({
       genre: selectedGenres,
       tags: selectedTags,
       platform: platform.trim() || "PC",
+      availablePlatforms: availablePlatforms.length > 0 ? availablePlatforms : undefined,
       hltbMain,
       hltbExtra,
       hltbCompletionist,
@@ -1319,28 +1741,39 @@ export default function GameFormModal({
       gogAchievementsTotal: integrationPlatform === "gog"
         ? (gogAchieveData ? gogAchieveData.totalCount : (gogAchievementsTotal !== undefined ? gogAchievementsTotal : game?.gogAchievementsTotal))
         : undefined,
+      igdbId,
+      igdbRating,
+      igdbSlug,
+      igdbUrl: igdbSlug ? `https://www.igdb.com/games/${igdbSlug}` : (igdbId ? `https://www.igdb.com/games/${igdbId}` : undefined),
       ...(game ? { diary: game.diary } : { diary: [] })
     });
   };
 
   const scrollToBlock = (blockKey: string) => {
-    setActiveBlock(blockKey);
-    setOpenBlocks((prev) => ({ ...prev, [blockKey]: true }));
-    if (blockKey === "genres" || blockKey === "tags") {
-      setOpenBlocks((prev) => ({ ...prev, genres: true, tags: true }));
+    isProgrammaticScrollRef.current = true;
+    if (scrollTimeoutRef.current) {
+      clearTimeout(scrollTimeoutRef.current);
     }
+
+    setActiveBlock(blockKey);
+    // Expand ONLY the clicked block and collapse all others
+    setOpenBlocks({ [blockKey]: true });
+
     setTimeout(() => {
       const el = document.getElementById(`block-${blockKey}`);
       if (el) {
         el.scrollIntoView({ behavior: "smooth", block: "start" });
       }
-    }, 60);
+      scrollTimeoutRef.current = setTimeout(() => {
+        isProgrammaticScrollRef.current = false;
+      }, 750);
+    }, 50);
   };
 
   return (
     <AnimatePresence>
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 overflow-hidden">
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -1349,14 +1782,12 @@ export default function GameFormModal({
             onClick={onClose}
           />
           <motion.div
-            ref={scrollContainerRef}
-            onScroll={handleScrollModal}
-            initial={{ opacity: 0, scale: 0.95, y: 15 }}
+            initial={{ opacity: 0, scale: 0.96, y: 15 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 15 }}
-            className="bg-zinc-950 rounded-2xl max-w-5xl lg:max-w-6xl xl:max-w-7xl w-full max-h-[92vh] overflow-y-auto shadow-2xl border border-purple-500/30 relative z-10"
+            exit={{ opacity: 0, scale: 0.96, y: 15 }}
+            className="bg-zinc-950 rounded-2xl sm:rounded-3xl w-[96vw] lg:w-[93vw] xl:w-[91vw] max-w-[1850px] h-[91vh] max-h-[94vh] flex flex-col shadow-2xl border border-purple-500/40 relative z-10 shadow-[0_0_60px_rgba(0,0,0,0.85)] overflow-hidden"
           >
-            <div className="p-4 sm:p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/95 sticky top-0 backdrop-blur-md z-30 shadow-md gap-3">
+            <div className="p-4 sm:p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/95 sticky top-0 backdrop-blur-md z-30 shadow-md gap-3 shrink-0">
               <h3 className="text-base sm:text-lg font-bold text-white truncate">
                 {game ? "Editar Ficha de Jogo" : "Adicionar Novo Jogo"}
               </h3>
@@ -1388,23 +1819,28 @@ export default function GameFormModal({
             </div>
 
             {/* Quick Navigation Chips Bar */}
-            <div className="sticky top-[61px] z-20 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800/80 px-4 sm:px-6 py-2 flex items-center gap-2 overflow-x-auto scrollbar-none shadow-sm">
+            <div className="sticky top-0 z-20 bg-zinc-950/95 backdrop-blur-md border-b border-zinc-800/80 px-4 sm:px-6 py-2 flex items-center gap-2 overflow-x-auto scrollbar-none shadow-sm shrink-0">
               <span className="text-[10px] font-mono text-cyan-400 font-bold uppercase tracking-wider shrink-0 flex items-center gap-1 mr-1">
                 <Sparkles size={11} className="text-purple-400" />
                 <span>Atalhos:</span>
               </span>
               <div ref={chipsBarRef} className="flex items-center gap-1.5 shrink-0">
                 {[
-                  { key: "basic", label: "Informações", icon: Gamepad2, activeClass: "bg-cyan-500/25 text-cyan-300 border-cyan-400 border-b-2 ring-2 ring-cyan-500/40 shadow-md shadow-cyan-500/20 font-extrabold scale-[1.03]" },
-                  { key: "playtime", label: "Tempo", icon: Clock, activeClass: "bg-teal-500/25 text-teal-300 border-teal-400 border-b-2 ring-2 ring-teal-500/40 shadow-md shadow-teal-500/20 font-extrabold scale-[1.03]" },
-                  { key: "trophies", label: "Troféus", icon: Trophy, activeClass: "bg-amber-500/25 text-amber-300 border-amber-400 border-b-2 ring-2 ring-amber-500/40 shadow-md shadow-amber-500/20 font-extrabold scale-[1.03]" },
-                  { key: "proscons", label: "Prós/Contras", icon: ThumbsUp, activeClass: "bg-emerald-500/25 text-emerald-300 border-emerald-400 border-b-2 ring-2 ring-emerald-500/40 shadow-md shadow-emerald-500/20 font-extrabold scale-[1.03]" },
-                  { key: "hltb", label: "HLTB", icon: Sparkles, activeClass: "bg-purple-500/25 text-purple-300 border-purple-400 border-b-2 ring-2 ring-purple-500/40 shadow-md shadow-purple-500/20 font-extrabold scale-[1.03]" },
-                  { key: "dates", label: "Datas", icon: Calendar, activeClass: "bg-sky-500/25 text-sky-300 border-sky-400 border-b-2 ring-2 ring-sky-500/40 shadow-md shadow-sky-500/20 font-extrabold scale-[1.03]" },
+                  { key: "basic", label: "Informações & GaaS", icon: Gamepad2, activeClass: "bg-cyan-500/25 text-cyan-300 border-cyan-400 border-b-2 ring-2 ring-cyan-500/40 shadow-md shadow-cyan-500/20 font-extrabold scale-[1.03]" },
+                  { key: "status", label: "Status & DLC", icon: CheckCircle, activeClass: "bg-emerald-500/25 text-emerald-300 border-emerald-400 border-b-2 ring-2 ring-emerald-500/40 shadow-md shadow-emerald-500/20 font-extrabold scale-[1.03]" },
                   { key: "platform", label: "Plataforma", icon: Monitor, activeClass: "bg-indigo-500/25 text-indigo-300 border-indigo-400 border-b-2 ring-2 ring-indigo-500/40 shadow-md shadow-indigo-500/20 font-extrabold scale-[1.03]" },
-                  { key: "status", label: "Progresso", icon: CheckCircle, activeClass: "bg-emerald-500/25 text-emerald-300 border-emerald-400 border-b-2 ring-2 ring-emerald-500/40 shadow-md shadow-emerald-500/20 font-extrabold scale-[1.03]" },
+                  { key: "playtime", label: "Tempo", icon: Clock, activeClass: "bg-teal-500/25 text-teal-300 border-teal-400 border-b-2 ring-2 ring-teal-500/40 shadow-md shadow-teal-500/20 font-extrabold scale-[1.03]" },
+                  { key: "dates", label: "Datas", icon: Calendar, activeClass: "bg-sky-500/25 text-sky-300 border-sky-400 border-b-2 ring-2 ring-sky-500/40 shadow-md shadow-sky-500/20 font-extrabold scale-[1.03]" },
+                  { key: "trophies", label: "Troféus", icon: Trophy, activeClass: "bg-amber-500/25 text-amber-300 border-amber-400 border-b-2 ring-2 ring-amber-500/40 shadow-md shadow-amber-500/20 font-extrabold scale-[1.03]" },
+                  { key: "replay", label: "Replay", icon: RotateCcw, activeClass: "bg-purple-500/25 text-purple-300 border-purple-400 border-b-2 ring-2 ring-purple-500/40 shadow-md shadow-purple-500/20 font-extrabold scale-[1.03]" },
+                  { key: "icon", label: "Ícone", icon: Smile, activeClass: "bg-sky-500/25 text-sky-300 border-sky-400 border-b-2 ring-2 ring-sky-500/40 shadow-md shadow-sky-500/20 font-extrabold scale-[1.03]" },
+                  { key: "cover", label: "Capa", icon: ImageIcon, activeClass: "bg-rose-500/25 text-rose-300 border-rose-400 border-b-2 ring-2 ring-rose-500/40 shadow-md shadow-rose-500/20 font-extrabold scale-[1.03]" },
+                  { key: "proscons", label: "Prós/Contras", icon: ThumbsUp, activeClass: "bg-emerald-500/25 text-emerald-300 border-emerald-400 border-b-2 ring-2 ring-emerald-500/40 shadow-md shadow-emerald-500/20 font-extrabold scale-[1.03]" },
                   { key: "genres", label: "Gêneros", icon: Gamepad2, activeClass: "bg-fuchsia-500/25 text-fuchsia-300 border-fuchsia-400 border-b-2 ring-2 ring-fuchsia-500/40 shadow-md shadow-fuchsia-500/20 font-extrabold scale-[1.03]" },
                   { key: "tags", label: "Tags", icon: Tag, activeClass: "bg-cyan-500/25 text-cyan-300 border-cyan-400 border-b-2 ring-2 ring-cyan-500/40 shadow-md shadow-cyan-500/20 font-extrabold scale-[1.03]" },
+                  { key: "hltb", label: "HLTB", icon: Sparkles, activeClass: "bg-purple-500/25 text-purple-300 border-purple-400 border-b-2 ring-2 ring-purple-500/40 shadow-md shadow-purple-500/20 font-extrabold scale-[1.03]" },
+                  { key: "metacritic", label: "Metacritic", icon: Star, activeClass: "bg-amber-500/25 text-amber-300 border-amber-400 border-b-2 ring-2 ring-amber-500/40 shadow-md shadow-amber-500/20 font-extrabold scale-[1.03]" },
+                  { key: "steam", label: "Loja / Sinc", icon: Globe, activeClass: "bg-blue-500/25 text-blue-300 border-blue-400 border-b-2 ring-2 ring-blue-500/40 shadow-md shadow-blue-500/20 font-extrabold scale-[1.03]" },
                 ].map((chip) => {
                   const IconComp = chip.icon;
                   const isOpen = !!openBlocks[chip.key];
@@ -1437,81 +1873,287 @@ export default function GameFormModal({
             </div>
 
             {isSelectingCandidate && (
-              <div className="absolute inset-x-0 bottom-0 top-[73px] bg-zinc-950 z-40 flex flex-col p-6 space-y-6">
-                <div className="text-center space-y-2 border-b border-zinc-900 pb-4 shrink-0">
-                  <h4 className="text-base font-black text-cyan-400 uppercase tracking-wider flex items-center justify-center gap-2">
-                    <Sparkles size={16} className="text-purple-400" />
-                    Qual é o jogo correto?
-                  </h4>
-                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
-                    Encontramos múltiplos resultados para sua busca. Selecione o jogo exato para preencher a Ficha Técnica com alta precisão:
-                  </p>
-                </div>
+              <div className="absolute inset-x-0 bottom-0 top-[73px] bg-zinc-950 z-40 flex flex-col p-6 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-zinc-900 pb-4 shrink-0">
+                  <div>
+                    <h4 className="text-base font-black text-cyan-400 uppercase tracking-wider flex items-center gap-2">
+                      <Search size={16} className="text-emerald-400" />
+                      Procurar e Importar do IGDB
+                    </h4>
+                    <p className="text-xs text-zinc-400 mt-0.5">
+                      Pesquise por qualquer jogo no catálogo oficial e escolha seletivamente o que importar para a ficha técnica:
+                    </p>
+                  </div>
 
-                <div className="flex-1 overflow-y-auto pr-1 space-y-3">
-                  {gameCandidates.map((cand, idx) => (
+                  <div className="flex items-center gap-2 shrink-0">
                     <button
-                      key={idx}
                       type="button"
-                      onClick={() => {
-                        applyGameCandidate(cand);
-                        setIsSelectingCandidate(false);
-                        triggerAlert("Metadados Carregados!", `Encontramos os detalhes de "${cand.name}" e preenchemos a ficha de jogo com sucesso.`);
-                      }}
-                      className="w-full group flex gap-4 text-left p-3.5 rounded-2xl bg-zinc-900/40 border border-zinc-850 hover:border-cyan-500/50 hover:bg-zinc-900/85 transition-all cursor-pointer focus:outline-none focus:ring-1 focus:ring-cyan-500/30"
+                      onClick={() => setIsSelectingCandidate(false)}
+                      className="p-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 transition-colors cursor-pointer"
+                      title="Fechar busca IGDB"
                     >
-                      <div className="w-16 h-24 bg-black rounded-xl overflow-hidden border border-zinc-800 shrink-0">
-                        <img
-                          src={cand.coverUrl || "https://images.unsplash.com/photo-1538481199705-c710c4e965fc?auto=format&fit=crop&q=80&w=150"}
-                          alt={cand.name}
-                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                          referrerPolicy="no-referrer"
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).src = `https://placehold.co/150x225/0c0a0f/ffffff?text=${encodeURIComponent(cand.name)}`;
-                          }}
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0 flex flex-col justify-between py-1">
-                        <div>
-                          <h5 className="text-sm font-black text-white group-hover:text-cyan-400 transition-colors line-clamp-1">
-                            {cand.name}
-                          </h5>
-                          {cand.releaseDate && (
-                            <span className="text-[10px] font-mono text-zinc-400 block mt-1">
-                              Lançamento: {cand.releaseDate.split("-")[0] || cand.releaseDate}
-                            </span>
-                          )}
-                          {cand.developer && (
-                            <span className="text-[10px] text-zinc-500 block mt-0.5 line-clamp-1">
-                              Estúdio: {cand.developer}
-                            </span>
-                          )}
-                        </div>
-                        {cand.platforms && cand.platforms.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-2">
-                            {cand.platforms.slice(0, 4).map((plat: string) => (
-                              <span key={plat} className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-750 text-zinc-300">
-                                {plat}
-                              </span>
-                            ))}
-                            {cand.platforms.length > 4 && (
-                              <span className="text-[8px] font-mono text-zinc-500">
-                                +{cand.platforms.length - 4}
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
+                      <X size={18} />
                     </button>
-                  ))}
+                  </div>
                 </div>
 
-                <div className="flex justify-between items-center pt-4 border-t border-zinc-900 shrink-0">
-                  <p className="text-[10px] text-zinc-500">Não encontrou o jogo? Volte e preencha manualmente.</p>
+                {/* Search Input Bar */}
+                <div className="flex flex-col sm:flex-row gap-2 shrink-0 bg-zinc-900/90 p-2.5 rounded-2xl border border-zinc-800 shadow-md">
+                  <div className="relative flex-1">
+                    <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-zinc-400" />
+                    <input
+                      type="text"
+                      value={igdbSearchQuery}
+                      onChange={(e) => setIgdbSearchQuery(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          handlePerformIgdbSearch(igdbSearchQuery);
+                        }
+                      }}
+                      placeholder="Digite o título do jogo no IGDB (ex: Resident Evil, Elden Ring, The Witcher 3)..."
+                      className="w-full pl-10 pr-9 py-2.5 rounded-xl bg-black/60 border border-zinc-750 text-white text-xs sm:text-sm placeholder-zinc-500 focus:outline-none focus:border-cyan-500 transition-colors"
+                      autoFocus
+                    />
+                    {igdbSearchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setIgdbSearchQuery("")}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 p-0.5 rounded cursor-pointer"
+                      >
+                        <X size={14} />
+                      </button>
+                    )}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handlePerformIgdbSearch(igdbSearchQuery)}
+                    disabled={isFetchingIgdb || !igdbSearchQuery.trim()}
+                    className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs sm:text-sm font-bold shadow-lg shadow-emerald-950/40 transition-all flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                  >
+                    {isFetchingIgdb ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin" />
+                        <span>Buscando...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Search size={15} />
+                        <span>Buscar no IGDB</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+
+                {/* Bulk & Count Bar (when results exist) */}
+                {gameCandidates.length > 0 && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 shrink-0 px-1">
+                    <span className="text-xs text-zinc-400 font-mono">
+                      {gameCandidates.length} {gameCandidates.length === 1 ? "resultado encontrado" : "resultados encontrados"}
+                    </span>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={toggleSelectAllBulkCandidates}
+                        className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-semibold text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
+                      >
+                        {selectedBulkCandidateIds.length === gameCandidates.length && gameCandidates.length > 0 ? (
+                          <>
+                            <CheckSquare size={13} className="text-cyan-400" />
+                            <span>Desmarcar Todos</span>
+                          </>
+                        ) : (
+                          <>
+                            <Square size={13} className="text-zinc-500" />
+                            <span>Selecionar Todos</span>
+                          </>
+                        )}
+                      </button>
+
+                      {selectedBulkCandidateIds.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleExecuteBulkImport}
+                          disabled={isBulkImporting}
+                          className="px-3 py-1 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-900/30 transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          {isBulkImporting ? (
+                            <>
+                              <Loader2 size={12} className="animate-spin" />
+                              <span>Importando...</span>
+                            </>
+                          ) : (
+                            <>
+                              <PackagePlus size={13} />
+                              <span>Importar {selectedBulkCandidateIds.length} em Lote</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Results list */}
+                <div className="flex-1 overflow-y-auto pr-1 min-h-[220px] custom-scrollbar">
+                  {isFetchingIgdb ? (
+                    <div className="h-full flex flex-col items-center justify-center p-8 text-center">
+                      <Loader2 size={32} className="animate-spin text-emerald-400 mb-3" />
+                      <p className="text-sm font-semibold text-zinc-200">Consultando catálogo oficial do IGDB...</p>
+                      <p className="text-xs text-zinc-500 mt-1">Buscando metadados, capas em alta resolução, gêneros e plataformas.</p>
+                    </div>
+                  ) : gameCandidates.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center p-8 text-center bg-zinc-900/20 border border-dashed border-zinc-800 rounded-2xl">
+                      <Globe size={36} className="text-zinc-600 mb-3" />
+                      <p className="text-sm font-semibold text-zinc-300">
+                        {hasSearchedIgdb ? "Nenhum jogo encontrado no IGDB" : "Pronto para buscar no IGDB"}
+                      </p>
+                      <p className="text-xs text-zinc-500 max-w-md mt-1">
+                        {hasSearchedIgdb
+                          ? "Tente digitar o nome original em inglês ou uma palavra-chave da franquia no campo acima."
+                          : "Digite o nome de qualquer jogo no campo de busca acima e clique em 'Buscar no IGDB'. Você poderá comparar e escolher seletivamente o que importar."}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 pb-2">
+                      {gameCandidates.map((cand, idx) => {
+                        const isSelected = selectedBulkCandidateIds.includes(cand.id);
+                        return (
+                          <div
+                            key={cand.id || idx}
+                            className={`w-full group flex flex-col min-[520px]:flex-row gap-3 p-3.5 rounded-2xl border transition-all ${
+                              isSelected
+                                ? "bg-cyan-950/25 border-cyan-500/60 shadow-lg shadow-cyan-950/30"
+                                : "bg-zinc-900/40 border-zinc-850 hover:border-zinc-700 hover:bg-zinc-900/70"
+                            }`}
+                          >
+                            {/* Checkbox for bulk import + Cover */}
+                            <div className="flex items-center gap-2.5 shrink-0">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleBulkCandidateSelection(cand.id);
+                                }}
+                                className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-400 hover:text-cyan-400 transition-colors cursor-pointer"
+                                title={isSelected ? "Desmarcar para importação em lote" : "Selecionar para importação em lote"}
+                              >
+                                {isSelected ? (
+                                  <CheckSquare size={18} className="text-cyan-400" />
+                                ) : (
+                                  <Square size={18} className="text-zinc-600" />
+                                )}
+                              </button>
+
+                              <div className="w-16 h-24 bg-black rounded-xl overflow-hidden border border-zinc-800 shrink-0">
+                                <img
+                                  src={cand.coverHdUrl || cand.coverUrl || "https://images.unsplash.com/photo-1538481199705-c710c4e965fc?auto=format&fit=crop&q=80&w=150"}
+                                  alt={cand.name}
+                                  className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                                  referrerPolicy="no-referrer"
+                                  onError={(e) => {
+                                    (e.target as HTMLImageElement).src = `https://placehold.co/150x225/0c0a0f/ffffff?text=${encodeURIComponent(cand.name)}`;
+                                  }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Info */}
+                            <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5 space-y-1">
+                              <div>
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <h5 className="text-xs sm:text-sm font-black text-white group-hover:text-cyan-400 transition-colors line-clamp-1">
+                                    {cand.name}
+                                  </h5>
+                                  {cand.source === "igdb" && (
+                                    <span className="text-[9px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-1.5 py-0.2 rounded shrink-0">
+                                      IGDB Oficial
+                                    </span>
+                                  )}
+                                  {(cand.rating !== undefined || cand.aggregatedRating !== undefined) && (
+                                    <span className="text-[9px] font-mono font-bold text-amber-400 bg-amber-950/40 border border-amber-500/30 px-1.5 py-0.2 rounded shrink-0">
+                                      ★ {cand.rating ? Math.round(cand.rating) : Math.round(cand.aggregatedRating)}%
+                                    </span>
+                                  )}
+                                </div>
+
+                                {cand.releaseDate && (
+                                  <span className="text-[10px] font-mono text-zinc-400 block mt-0.5">
+                                    Lançamento: {cand.releaseDate.split("-")[0] || cand.releaseDate}
+                                  </span>
+                                )}
+                                {(cand.developer || cand.publisher) && (
+                                  <span className="text-[10px] text-zinc-500 block mt-0.5 line-clamp-1">
+                                    {cand.developer ? `Dev: ${cand.developer}` : ""} {cand.publisher ? `| Pub: ${cand.publisher}` : ""}
+                                  </span>
+                                )}
+
+                                {cand.genres && cand.genres.length > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-1">
+                                    {cand.genres.slice(0, 2).map((g: string) => (
+                                      <span key={g} className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-300 border border-zinc-750 truncate max-w-[110px]">
+                                        {g}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {cand.platforms && cand.platforms.length > 0 && (
+                                <div className="flex flex-wrap gap-1 mt-1">
+                                  {cand.platforms.slice(0, 3).map((plat: string) => (
+                                    <span key={plat} className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-750 text-zinc-300">
+                                      {plat}
+                                    </span>
+                                  ))}
+                                  {cand.platforms.length > 3 && (
+                                    <span className="text-[8px] font-mono text-zinc-500">
+                                      +{cand.platforms.length - 3}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Actions for this specific candidate */}
+                            <div className="flex min-[520px]:flex-col justify-center gap-1.5 shrink-0 border-t min-[520px]:border-t-0 min-[520px]:border-l border-zinc-800/60 pt-2 min-[520px]:pt-0 min-[520px]:pl-2.5">
+                              <button
+                                type="button"
+                                onClick={() => openMetadataPreview(cand)}
+                                className="flex-1 min-[520px]:flex-none px-2.5 py-1.5 rounded-xl bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-[11px] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-sm hover:shadow-cyan-500/20 whitespace-nowrap"
+                                title="Visualizar e comparar os metadados campo a campo antes de aplicar (você pode manter o título do seu site)"
+                              >
+                                <Eye size={12} />
+                                <span>Comparar</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => applyCandidateDirectly(cand)}
+                                className="flex-1 min-[520px]:flex-none px-2.5 py-1.5 rounded-xl bg-zinc-850 hover:bg-zinc-800 border border-zinc-750 text-zinc-300 hover:text-white text-[11px] font-semibold transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap"
+                                title="Importar todos os dados oficiais deste jogo diretamente"
+                              >
+                                <ArrowRight size={12} />
+                                <span>Aplicar</span>
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-3 pt-3 border-t border-zinc-900 shrink-0">
+                  <p className="text-[11px] text-zinc-500">
+                    Clique em <strong className="text-cyan-400">Comparar & Importar</strong> para escolher quais campos deseja atualizar (título, capa, plataformas, etc).
+                  </p>
                   <button
                     type="button"
                     onClick={() => setIsSelectingCandidate(false)}
-                    className="px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all cursor-pointer"
+                    className="px-4 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs font-bold text-zinc-300 hover:text-white hover:bg-zinc-800 transition-all cursor-pointer shrink-0"
                   >
                     Voltar ao Formulário
                   </button>
@@ -1519,51 +2161,59 @@ export default function GameFormModal({
               </div>
             )}
 
-            <form id="game-form" onSubmit={handleSubmit} className="p-6 space-y-6">
-              {/* Controles Globais de Expansão/Colapso dos Blocos */}
-              <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-900/80 border border-zinc-800">
-                <span className="text-xs text-zinc-300 font-mono font-semibold">
-                  📂 Blocos do formulário (iniciam colapsados):
-                </span>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setOpenBlocks({
-                        basic: true,
-                        playtime: true,
-                        trophies: true,
-                        replay: true,
-                        gaas: true,
-                        dates: true,
-                        platform: true,
-                        proscons: true,
-                        status: true,
-                        genres: true,
-                        tags: true,
-                        hltb: true,
-                        metacritic: true,
-                        steam: true,
-                        icon: true,
-                        cover: true,
-                      });
-                    }}
-                    className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 px-3 py-1.5 bg-cyan-950/60 border border-cyan-500/40 rounded-xl transition-all cursor-pointer"
-                  >
-                    Expandir Todos
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setOpenBlocks({})}
-                    className="text-[11px] font-bold text-zinc-400 hover:text-zinc-200 px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-xl transition-all cursor-pointer"
-                  >
-                    Recolher Todos
-                  </button>
+            <div
+              ref={scrollContainerRef}
+              onScroll={handleScrollModal}
+              className="flex-1 overflow-y-auto custom-scrollbar p-4 sm:p-6"
+            >
+              <form id="game-form" onSubmit={handleSubmit} className="space-y-5">
+                {/* Controles Globais de Expansão/Colapso dos Blocos */}
+                <div className="flex items-center justify-between p-3.5 rounded-2xl bg-zinc-900/80 border border-zinc-800">
+                  <span className="text-xs text-zinc-300 font-mono font-semibold">
+                    📂 Blocos do formulário (iniciam colapsados):
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOpenBlocks({
+                          basic: true,
+                          status: true,
+                          platform: true,
+                          playtime: true,
+                          dates: true,
+                          trophies: true,
+                          replay: true,
+                          icon: true,
+                          cover: true,
+                          proscons: true,
+                          genres: true,
+                          tags: true,
+                          hltb: true,
+                          metacritic: true,
+                          steam: true,
+                        });
+                      }}
+                      className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 px-3 py-1.5 bg-cyan-950/60 border border-cyan-500/40 rounded-xl transition-all cursor-pointer"
+                    >
+                      Expandir Todos
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setOpenBlocks({})}
+                      className="text-[11px] font-bold text-zinc-400 hover:text-zinc-200 px-3 py-1.5 bg-zinc-950 border border-zinc-800 rounded-xl transition-all cursor-pointer"
+                    >
+                      Recolher Todos
+                    </button>
+                  </div>
                 </div>
-              </div>
 
-              {/* Bloco 1: Informações Básicas */}
-              <div id="block-basic" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("basic", !!openBlocks["basic"])}`}>
+                {/* Grid de 2 Colunas para Agrupamento Compacto dos Blocos */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 items-start">
+                  {/* COLUNA 1: Identificação, Cronologia, Progresso & Ícone */}
+                  <div className="space-y-4.5">
+                    {/* Bloco 1: Informações Básicas & GaaS */}
+                    <div id="block-basic" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("basic", !!openBlocks["basic"])}`}>
                 <div
                   onClick={() => toggleBlock("basic")}
                   className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-cyan-500/30"
@@ -1573,33 +2223,36 @@ export default function GameFormModal({
                     <h4 className="text-xs font-bold text-cyan-300 uppercase tracking-wider font-mono shrink-0">
                       Informações Básicas
                     </h4>
-                    {name && !openBlocks["basic"] && (
+                    {!openBlocks["basic"] && (
                       <span className="text-xs text-zinc-400 font-normal truncate">
-                        — {name}
+                        — {name || "Sem título"} {isGaaS ? "(GaaS)" : ""}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    {/* IGDB Procurar Quick Button */}
                     <button
                       type="button"
-                      onClick={handleFetchAIMetadata}
-                      disabled={isFetchingAIMetadata}
-                      className={`text-xs font-bold text-cyan-400 flex items-center gap-1 hover:text-cyan-300 transition-colors cursor-pointer ${
-                        isFetchingAIMetadata ? "opacity-50 cursor-not-allowed" : ""
+                      onClick={() => handleOpenIgdbSearch(name)}
+                      disabled={isFetchingIgdb}
+                      className={`text-xs font-bold text-emerald-400 flex items-center gap-1.5 hover:text-emerald-300 px-2.5 py-1 rounded-lg bg-emerald-950/40 border border-emerald-500/30 hover:bg-emerald-900/40 transition-all cursor-pointer ${
+                        isFetchingIgdb ? "opacity-50 cursor-not-allowed" : ""
                       }`}
+                      title="Procurar jogo no IGDB para comparar e importar metadados, plataformas, sinopse e capa"
                     >
-                      {isFetchingAIMetadata ? (
+                      {isFetchingIgdb ? (
                         <>
-                          <Loader2 size={12} className="animate-spin text-cyan-400" />
-                          <span>Buscando Metadados...</span>
+                          <Loader2 size={12} className="animate-spin text-emerald-400" />
+                          <span>Buscando IGDB...</span>
                         </>
                       ) : (
                         <>
-                          <Sparkles size={12} className="text-purple-400 animate-pulse" />
-                          <span>Preencher via IA</span>
+                          <Search size={12} className="text-emerald-400" />
+                          <span>Procurar no IGDB</span>
                         </>
                       )}
                     </button>
+
                     <button
                       type="button"
                       onClick={() => toggleBlock("basic")}
@@ -1708,6 +2361,383 @@ export default function GameFormModal({
                           onChange={(e) => setReleaseDate(e.target.value)}
                           className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500 font-mono"
                         />
+                      </div>
+                    </div>
+
+                    {/* Marcador GaaS Integrado */}
+                    <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-pink-950/20 border border-pink-500/30 rounded-xl p-3">
+                      <div className="flex items-start sm:items-center gap-2.5">
+                        <Infinity size={18} className="text-pink-400 shrink-0 mt-0.5 sm:mt-0" />
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-bold uppercase tracking-wider text-pink-200 font-mono">
+                              Game as a Service (GaaS)
+                            </span>
+                            {isGaaS && (
+                              <span className="px-2 py-0.5 rounded-full bg-pink-950 text-pink-300 border border-pink-500/40 text-[10px] font-mono font-bold">
+                                Ativo
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-[11px] text-zinc-400 mt-0.5">
+                            Jogos com conteúdo contínuo (MMO, Gacha, Live-service). Não afeta taxas de 100% de conclusão.
+                          </p>
+                        </div>
+                      </div>
+
+                      <label className="flex items-center gap-2 cursor-pointer select-none bg-zinc-900 hover:bg-zinc-850 px-3.5 py-1.5 rounded-xl border border-zinc-800 transition-colors shrink-0 self-start sm:self-auto" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={isGaaS}
+                          onChange={(e) => setIsGaaS(e.target.checked)}
+                          className="rounded border-zinc-800 bg-zinc-950 text-pink-500 focus:ring-pink-500 h-4 w-4 accent-pink-500"
+                        />
+                        <span className="text-xs font-bold uppercase tracking-wider text-pink-300 font-mono">
+                          Marcar como GaaS
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Categoria de Progresso & DLC */}
+              <div id="block-status" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("status", !!openBlocks["status"])}`}>
+                <div
+                  onClick={() => toggleBlock("status")}
+                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-emerald-500/30"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CheckCircle size={16} className="text-emerald-400 shrink-0" />
+                    <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider font-mono shrink-0">
+                      Categoria de Progresso & Expansões *
+                    </h4>
+                    {!openBlocks["status"] && selectedStatus.length > 0 && (
+                      <span className="text-xs text-emerald-400 font-mono font-bold truncate">
+                        — {selectedStatus.join(", ")} {dlcMode !== "none" ? `(${dlcMode})` : ""}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleBlock("status")}
+                      className="p-1 rounded-lg text-emerald-400 hover:text-white transition-colors cursor-pointer"
+                    >
+                      {openBlocks["status"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                {openBlocks["status"] && (
+                  <div className="pt-4 space-y-3">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+                      {["Jogando", "Em Hiatus", "Terminado", "Backlog", "Desistido"].map((status) => (
+                        <label key={status} className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={selectedStatus.includes(status)}
+                            onChange={() => toggleStatus(status)}
+                            className="rounded border-zinc-800 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 h-4 w-4 accent-emerald-500"
+                          />
+                          {status}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="mt-3 px-1 pt-2 border-t border-zinc-800/60">
+                      <div className="w-full">
+                        <span className="block font-bold text-xs uppercase tracking-wider text-amber-300 mb-1.5 flex items-center gap-1.5">
+                          <Layers size={13} className="stroke-[2.5]" />
+                          Marcador de DLC / Expansão
+                        </span>
+                        <div className="grid grid-cols-3 gap-1.5 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
+                          <button
+                            type="button"
+                            onClick={() => setDlcMode("none")}
+                            className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
+                              dlcMode === "none"
+                                ? "bg-zinc-800 text-white shadow"
+                                : "text-zinc-500 hover:text-zinc-300"
+                            }`}
+                          >
+                            Nenhum
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDlcMode("dlc")}
+                            className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                              dlcMode === "dlc"
+                                ? "bg-amber-950 text-amber-300 border border-amber-500/50 shadow"
+                                : "text-zinc-500 hover:text-amber-300"
+                            }`}
+                            title="Apenas a Expansão / DLC"
+                          >
+                            <Layers size={11} />
+                            DLC
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDlcMode("plus_dlc")}
+                            className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                              dlcMode === "plus_dlc"
+                                ? "bg-amber-950 text-amber-300 border border-amber-500/50 shadow"
+                                : "text-zinc-500 hover:text-amber-300"
+                            }`}
+                            title="Jogo Base + Conteúdo DLC"
+                          >
+                            <Layers size={11} />
+                            +DLC
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-zinc-500 italic mt-1 font-sans">
+                          {dlcMode === "none" && "Jogo padrão sem marcador adicional"}
+                          {dlcMode === "dlc" && "Indica que este item é uma Expansão / DLC individual"}
+                          {dlcMode === "plus_dlc" && "Indica que a jogada conta o Jogo Base + DLC"}
+                        </p>
+
+                        {dlcMode !== "none" && (
+                          <div className="mt-3 animate-fade-in">
+                            <label className="block text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">
+                              Nome das DLCs / Expansões Jogadas
+                            </label>
+                            <input
+                              type="text"
+                              value={dlcNames}
+                              onChange={(e) => setDlcNames(e.target.value)}
+                              placeholder="Ex: Shadow of the Erdtree [100% Zerada]; Blood and Wine [Terminada no PS5]"
+                              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-amber-900/40 text-amber-200 placeholder-zinc-600 outline-none focus:ring-2 focus:ring-amber-500 text-xs"
+                            />
+                            <p className="text-[10px] text-zinc-500 italic mt-1">
+                              Separe nomes por ponto e vírgula ( ; ). Use colchetes <code className="text-amber-400 font-mono font-bold">[ ]</code> para contextualizar no tooltip!
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Plataforma e Dificuldade */}
+              <div id="block-platform" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("platform", !!openBlocks["platform"])}`}>
+                <div
+                  onClick={() => toggleBlock("platform")}
+                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-indigo-500/30"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Monitor size={16} className="text-indigo-400 shrink-0" />
+                    <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider font-mono shrink-0">
+                      Plataformas e Dificuldade
+                    </h4>
+                    {!openBlocks["platform"] && (platform || availablePlatforms.length > 0 || difficulty) && (
+                      <span className="text-xs text-indigo-400 font-mono font-bold truncate">
+                        — {platform || "Sem escolha"} {availablePlatforms.length > 0 ? `(${availablePlatforms.length} disp.)` : ""} {difficulty ? `| ${difficulty}` : ""}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleBlock("platform")}
+                      className="p-1 rounded-lg text-indigo-400 hover:text-white transition-colors cursor-pointer"
+                    >
+                      {openBlocks["platform"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                {openBlocks["platform"] && (
+                  <div className="pt-4 space-y-5">
+                    {/* Linha superior: Plataforma de Escolha e Dificuldade */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Plataforma de Escolha (onde joguei) */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <label className="block text-xs font-bold text-indigo-300 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+                            <Gamepad2 size={14} className="text-indigo-400" />
+                            <span>Plataforma de Escolha *</span>
+                          </label>
+                          {platform && (
+                            <span className="text-[10px] text-zinc-400 font-semibold">
+                              Exibida no Card
+                            </span>
+                          )}
+                        </div>
+
+                        <input
+                          type="text"
+                          value={platform}
+                          onChange={(e) => setPlatform(e.target.value)}
+                          placeholder="Ex: PC, Nintendo Switch [OLED], PS5"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+
+                        {/* Quick Presets for Plataforma de Escolha */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mr-1">
+                            {availablePlatforms.length > 0 ? "Das Disponíveis:" : "Rápido:"}
+                          </span>
+                          {(availablePlatforms.length > 0
+                            ? availablePlatforms
+                            : ["PC", "PlayStation 5", "PlayStation 4", "Xbox Series X/S", "Xbox One", "Nintendo Switch", "Steam Deck", "Mobile"]
+                          ).map((plat) => {
+                            const isCurrent = platform.trim().toLowerCase() === plat.toLowerCase();
+                            return (
+                              <button
+                                key={`quick-plat-${plat}`}
+                                type="button"
+                                onClick={() => setPlatform(plat)}
+                                className={`text-[11px] font-semibold px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
+                                  isCurrent
+                                    ? "bg-indigo-600/40 text-indigo-200 border-indigo-500/60 shadow-sm"
+                                    : "bg-zinc-900/90 text-zinc-400 border-zinc-800 hover:text-zinc-200 hover:bg-zinc-850"
+                                }`}
+                              >
+                                {plat}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <p className="text-[10px] text-zinc-500">
+                          Use colchetes <code className="text-indigo-400 font-mono font-bold">[ ]</code> para notas de contexto (ex: <code>Nintendo Switch [Docked]</code>).
+                        </p>
+                      </div>
+
+                      {/* Dificuldade */}
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest font-mono">
+                          Dificuldade
+                        </label>
+                        <input
+                          type="text"
+                          value={difficulty}
+                          onChange={(e) => setDifficulty(e.target.value)}
+                          placeholder="Ex: Hard [Sem Checklist], Marcha da Morte"
+                          className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        />
+
+                        {/* Quick Presets for Dificuldade */}
+                        <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                          <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-wider mr-1">Exemplos:</span>
+                          {["Fácil", "Normal", "Difícil", "Muito Difícil", "Pesadelo"].map((diff) => (
+                            <button
+                              key={`quick-diff-${diff}`}
+                              type="button"
+                              onClick={() => setDifficulty(diff)}
+                              className="text-[11px] font-semibold px-2 py-0.5 rounded-lg border border-zinc-800 bg-zinc-900/90 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-850 transition-all cursor-pointer"
+                            >
+                              {diff}
+                            </button>
+                          ))}
+                        </div>
+
+                        <p className="text-[10px] text-zinc-500">
+                          Use colchetes <code className="text-indigo-400 font-mono font-bold">[ ]</code> para contextualizar no tooltip!
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* Plataformas Disponíveis (Ficha Técnica) */}
+                    <div className="pt-3 border-t border-zinc-800/80 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <label className="block text-xs font-bold text-cyan-300 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+                            <Monitor size={14} className="text-cyan-400" />
+                            <span>Plataformas Disponíveis (Ficha Técnica)</span>
+                          </label>
+                          <p className="text-[11px] text-zinc-400 mt-0.5">
+                            Lista onde este jogo foi lançado ou está disponível (preenchido automaticamente pelo IGDB/IA).
+                          </p>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowNewAvailablePlatform(!showNewAvailablePlatform)}
+                          className="text-[10px] uppercase tracking-[0.2em] text-cyan-400 font-extrabold hover:underline cursor-pointer flex items-center gap-1 shrink-0"
+                        >
+                          <Plus size={12} />
+                          <span>Outra Plataforma</span>
+                        </button>
+                      </div>
+
+                      {showNewAvailablePlatform && (
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={newAvailablePlatformVal}
+                            onChange={(e) => setNewAvailablePlatformVal(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                addCustomAvailablePlatform();
+                              }
+                            }}
+                            placeholder="Nome da plataforma (ex: PlayStation 2, Dreamcast, Atari)..."
+                            className="flex-1 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-white outline-none focus:ring-2 focus:ring-cyan-500 text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={addCustomAvailablePlatform}
+                            className="px-4 py-2 rounded-xl bg-cyan-600 text-white font-bold text-xs hover:bg-cyan-500 transition-colors cursor-pointer"
+                          >
+                            Adicionar
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Lista de Plataformas Disponíveis Selecionadas / Rápidas */}
+                      <div className="flex flex-wrap gap-1.5 p-3 rounded-2xl bg-zinc-900/90 border border-zinc-800">
+                        {[
+                          "PC",
+                          "PlayStation 5",
+                          "PlayStation 4",
+                          "PlayStation 3",
+                          "Xbox Series X/S",
+                          "Xbox One",
+                          "Xbox 360",
+                          "Nintendo Switch",
+                          "Nintendo 3DS",
+                          "Wii U",
+                          "iOS",
+                          "Android",
+                          "macOS",
+                          "Linux",
+                          ...availablePlatforms.filter((p) => ![
+                            "PC",
+                            "PlayStation 5",
+                            "PlayStation 4",
+                            "PlayStation 3",
+                            "Xbox Series X/S",
+                            "Xbox One",
+                            "Xbox 360",
+                            "Nintendo Switch",
+                            "Nintendo 3DS",
+                            "Wii U",
+                            "iOS",
+                            "Android",
+                            "macOS",
+                            "Linux"
+                          ].includes(p))
+                        ].map((plat, idx) => {
+                          const isSelected = availablePlatforms.includes(plat);
+                          const badgeStyle = getPlatformBadgeStyle(plat);
+                          return (
+                            <button
+                              key={`avail-plat-btn-${plat}-${idx}`}
+                              type="button"
+                              onClick={() => toggleAvailablePlatform(plat)}
+                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-bold transition-all cursor-pointer border ${
+                                isSelected
+                                  ? `${badgeStyle.bg} ${badgeStyle.text} ${badgeStyle.border} shadow-sm`
+                                  : "bg-zinc-950 text-zinc-500 border-zinc-800 hover:text-zinc-300 hover:border-zinc-700"
+                              }`}
+                            >
+                              <span>{isSelected ? "✓" : "+"}</span>
+                              <span>{plat}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -1852,6 +2882,62 @@ export default function GameFormModal({
                 )}
               </div>
 
+              {/* Datas de Jogatina */}
+              <div id="block-dates" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("dates", !!openBlocks["dates"])}`}>
+                <div
+                  onClick={() => toggleBlock("dates")}
+                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-sky-500/30"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Calendar size={16} className="text-sky-400 shrink-0" />
+                    <h4 className="text-xs font-bold text-sky-300 uppercase tracking-wider font-mono shrink-0">
+                      Datas de Jogatina
+                    </h4>
+                    {!openBlocks["dates"] && (startDate || endDate) && (
+                      <span className="text-xs text-sky-400 font-mono font-bold truncate">
+                        — {startDate || "..."} até {endDate || "..."}
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => toggleBlock("dates")}
+                      className="p-1 rounded-lg text-sky-400 hover:text-white transition-colors cursor-pointer"
+                    >
+                      {openBlocks["dates"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                {openBlocks["dates"] && (
+                  <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1.5">
+                        Data de Início
+                      </label>
+                      <input
+                        type="date"
+                        value={startDate}
+                        onChange={(e) => setStartDate(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1.5">
+                        Data de Término
+                      </label>
+                      <input
+                        type="date"
+                        value={endDate}
+                        onChange={(e) => setEndDate(e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Seção de Troféus Organizada */}
               <div id="block-trophies" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("trophies", !!openBlocks["trophies"])}`}>
                 <div
@@ -1865,7 +2951,7 @@ export default function GameFormModal({
                     </h4>
                     {!openBlocks["trophies"] && selectedTrophyItems.length > 0 && (
                       <span className="text-xs text-amber-400 font-mono font-bold truncate">
-                        — {selectedTrophyItems.length} troféus (P:{platinumCount} O:{goldCount} P:{silverCount})
+                        — {selectedTrophyItems.length} troféus (P:{platinumCount} O:{goldCount} P:{silverCount} B:{bronzeCount})
                       </span>
                     )}
                   </div>
@@ -1899,7 +2985,42 @@ export default function GameFormModal({
                     </div>
 
                     {/* Seletores / Contadores Rápidos */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+                      {/* Bronze Card */}
+                      <div className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between gap-2 ${bronzeCount > 0 ? "bg-amber-950/90 border-amber-700/60 shadow-[0_0_10px_rgba(217,119,6,0.2)]" : "bg-zinc-900/80 border-zinc-800/80"}`}>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <Trophy size={14} fill="currentColor" className={bronzeCount > 0 ? "text-amber-600" : "text-zinc-600"} />
+                            <span className={`text-xs font-bold ${bronzeCount > 0 ? "text-amber-500" : "text-zinc-400"}`}>Bronze</span>
+                          </div>
+                          {bronzeCount > 0 && (
+                            <span className="px-2 py-0.5 rounded-full bg-amber-950 text-amber-500 font-mono text-[10px] font-extrabold border border-amber-700 shrink-0">
+                              x{bronzeCount}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1.5 w-full">
+                          <button
+                            type="button"
+                            onClick={() => removeTrophy("bronze")}
+                            disabled={bronzeCount === 0}
+                            className="w-7 h-7 rounded-lg bg-zinc-800 hover:bg-zinc-700 disabled:opacity-20 text-zinc-300 font-black flex items-center justify-center text-sm cursor-pointer transition-all shrink-0"
+                            title="Remover 1 Bronze"
+                          >
+                            -
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => addTrophy("bronze")}
+                            className="flex-1 h-7 rounded-lg bg-amber-950/80 hover:bg-amber-900/90 text-amber-500 border border-amber-700/50 text-xs font-extrabold flex items-center justify-center gap-1 cursor-pointer transition-all min-w-0"
+                            title="Adicionar 1 Bronze"
+                          >
+                            <Plus size={12} className="shrink-0" />
+                            <span className="truncate">Bronze</span>
+                          </button>
+                        </div>
+                      </div>
+
                       {/* Silver Card */}
                       <div className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between gap-2 ${silverCount > 0 ? "bg-slate-900/90 border-slate-500/50 shadow-[0_0_10px_rgba(203,213,225,0.15)]" : "bg-zinc-900/80 border-zinc-800/80"}`}>
                         <div className="flex items-center justify-between">
@@ -2024,7 +3145,9 @@ export default function GameFormModal({
                                   ? "bg-cyan-950/30 border-cyan-500/40 text-cyan-100"
                                   : item.type === "gold"
                                   ? "bg-amber-950/30 border-amber-500/40 text-amber-100"
-                                  : "bg-slate-900/50 border-slate-700/50 text-slate-100"
+                                  : item.type === "silver"
+                                  ? "bg-slate-900/50 border-slate-700/50 text-slate-100"
+                                  : "bg-amber-950/20 border-amber-700/40 text-amber-200"
                               }`}
                             >
                               <div className="flex items-center justify-between gap-2">
@@ -2035,7 +3158,9 @@ export default function GameFormModal({
                                         ? "bg-cyan-950 border-cyan-400/60 text-cyan-200"
                                         : item.type === "gold"
                                         ? "bg-amber-950 border-amber-500/60 text-amber-300"
-                                        : "bg-slate-800 border-slate-500/60 text-slate-200"
+                                        : item.type === "silver"
+                                        ? "bg-slate-800 border-slate-500/60 text-slate-200"
+                                        : "bg-amber-950/80 border-amber-700/60 text-amber-500"
                                     }`}
                                   >
                                     <Trophy size={12} fill="currentColor" />
@@ -2044,7 +3169,9 @@ export default function GameFormModal({
                                         ? "Platina"
                                         : item.type === "gold"
                                         ? "Ouro"
-                                        : "Prata"}{" "}
+                                        : item.type === "silver"
+                                        ? "Prata"
+                                        : "Bronze"}{" "}
                                       #{idx + 1}
                                     </span>
                                   </span>
@@ -2073,7 +3200,7 @@ export default function GameFormModal({
                     ) : (
                       <div className="p-3 bg-zinc-900/40 border border-zinc-800/60 rounded-xl text-center">
                         <p className="text-xs text-zinc-500 italic">
-                          Nenhum troféu adicionado ainda. Clique nos botões acima para incluir Prata, Ouro ou Platina.
+                          Nenhum troféu adicionado ainda. Clique nos botões acima para incluir Bronze, Prata, Ouro ou Platina.
                         </p>
                       </div>
                     )}
@@ -2081,8 +3208,8 @@ export default function GameFormModal({
                 )}
               </div>
 
-              {/* Seção de Replay Organizada */}
-              <div className={`bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("replay", !!openBlocks["replay"])}`}>
+              {/* Bloco: Replay & Re-plays */}
+              <div id="block-replay" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("replay", !!openBlocks["replay"])}`}>
                 <div
                   onClick={() => toggleBlock("replay")}
                   className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-purple-500/30"
@@ -2193,180 +3320,373 @@ export default function GameFormModal({
                 )}
               </div>
 
-              {/* Jogo como Serviço (GaaS) Card */}
-              <div className={`bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("gaas", !!openBlocks["gaas"])}`}>
-                <div
-                  onClick={() => toggleBlock("gaas")}
-                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-pink-500/30"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Infinity size={18} className="text-pink-400 animate-pulse shrink-0" />
-                    <h4 className="text-xs font-bold text-pink-200 uppercase tracking-wider font-mono shrink-0">
-                      Game as a Service (GaaS)
-                    </h4>
-                    {isGaaS && (
-                      <span className="px-2 py-0.5 rounded-full bg-pink-950 text-pink-300 border border-pink-500/40 text-[10px] font-mono font-bold shrink-0">
-                        Ativo
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => toggleBlock("gaas")}
-                      className="p-1 rounded-lg text-pink-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      {openBlocks["gaas"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                {openBlocks["gaas"] && (
-                  <div className="pt-4 space-y-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-[11px] text-zinc-400">
-                        Jogos com suporte/conteúdo contínuo (ex: MMOs, Battle Royales). São contabilizados no tempo de jogo mas não entram em taxas de 100% de conclusão.
-                      </p>
-
-                      <label className="flex items-center gap-2 cursor-pointer select-none bg-zinc-900 hover:bg-zinc-850 px-3.5 py-1.5 rounded-xl border border-zinc-800 transition-colors shrink-0" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={isGaaS}
-                          onChange={(e) => setIsGaaS(e.target.checked)}
-                          className="rounded border-zinc-800 bg-zinc-950 text-pink-500 focus:ring-pink-500 h-4 w-4 accent-pink-500"
-                        />
-                        <span className="text-xs font-bold uppercase tracking-wider text-pink-300 font-mono">
-                          Ativar GaaS
+                {/* Bloco 8: Ícone do Perfil */}
+                <div id="block-icon" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("icon", !!openBlocks["icon"])}`}>
+                  <div
+                    onClick={() => toggleBlock("icon")}
+                    className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-sky-500/30"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Smile size={16} className="text-sky-400 shrink-0" />
+                      <h4 className="text-xs font-bold text-sky-300 uppercase tracking-wider font-mono shrink-0">
+                        Ícone do Perfil
+                      </h4>
+                      {!openBlocks["icon"] && (iconEmoji || tempUploadedIcon || iconUrl) && (
+                        <span className="text-xs text-sky-400 font-mono font-bold truncate">
+                          — {iconEmoji || (tempUploadedIcon ? "Arquivo carregado" : "URL")}
                         </span>
-                      </label>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenSteamGridGallery(undefined, "icon")}
+                        disabled={isLoadingSteamGridMedia}
+                        className="text-xs font-bold text-sky-400 hover:text-sky-300 flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-sky-950/50 border border-sky-500/40 hover:bg-sky-900/50 transition-all cursor-pointer shadow-sm"
+                        title="Buscar ícones oficiais e da comunidade no SteamGridDB"
+                      >
+                        <Sparkles size={12} className="text-sky-400" />
+                        <span>Ícones SteamGridDB</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleBlock("icon")}
+                        className="p-1 rounded-lg text-sky-400 hover:text-white transition-colors cursor-pointer"
+                      >
+                        {openBlocks["icon"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                      </button>
                     </div>
                   </div>
-                )}
+
+                  {openBlocks["icon"] && (
+                    <div className="pt-4 space-y-3">
+                      <div className="flex flex-wrap gap-2 mb-1">
+                        <button
+                          type="button"
+                          onClick={() => setActiveIconTab("emoji")}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeIconTab === "emoji" ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-800"
+                          }`}
+                        >
+                          <Smile size={14} /> Emoji
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveIconTab("upload")}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeIconTab === "upload" ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-800"
+                          }`}
+                        >
+                          <Upload size={14} /> Subir Ícone
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveIconTab("url")}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeIconTab === "url" ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-800"
+                          }`}
+                        >
+                          <Globe size={14} /> URL da Web
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveIconTab("steamgriddb");
+                            if (quickSteamGridIcons.length === 0) {
+                              handleFetchQuickSteamGridIcons(name);
+                            }
+                          }}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
+                            activeIconTab === "steamgriddb" ? "bg-sky-600 text-white shadow-md shadow-sky-500/20" : "bg-zinc-900 text-sky-400 border border-sky-500/30 hover:border-sky-500/60"
+                          }`}
+                        >
+                          <Sparkles size={14} className={activeIconTab === "steamgriddb" ? "text-white" : "text-sky-400"} /> SteamGridDB
+                        </button>
+                      </div>
+
+                      {activeIconTab === "emoji" && (
+                        <input
+                          type="text"
+                          value={iconEmoji}
+                          onChange={(e) => setIconEmoji(e.target.value)}
+                          placeholder="Ex: 👾, 👑, ☄️, 🕹️"
+                          className="w-full px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-white text-sm"
+                        />
+                      )}
+
+                      {activeIconTab === "upload" && (
+                        <div 
+                          onDragOver={handleIconDragOver}
+                          onDragLeave={handleIconDragLeave}
+                          onDrop={handleIconDrop}
+                          className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
+                            isDragOverIcon 
+                              ? "border-cyan-500 bg-cyan-950/10 scale-[1.01]" 
+                              : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
+                          }`}
+                          onClick={() => {
+                            const iconInput = document.getElementById("icon-file-input");
+                            if (iconInput) iconInput.click();
+                          }}
+                        >
+                          <input
+                            id="icon-file-input"
+                            type="file"
+                            accept="image/*"
+                            disabled={isUploadingIcon}
+                            onChange={handleIconUpload}
+                            className="hidden"
+                          />
+                          {isUploadingIcon ? (
+                            <div className="flex flex-col items-center gap-2 py-1 text-center">
+                              <Loader2 size={20} className="animate-spin text-cyan-400" />
+                              <span className="text-xs text-zinc-300 font-medium animate-pulse">Enviando ícone...</span>
+                            </div>
+                          ) : (
+                            <div className="flex flex-col items-center gap-1.5 text-center">
+                              <Upload size={18} className="text-purple-400" />
+                              <p className="text-xs font-semibold text-zinc-300">
+                                Arraste o ícone aqui ou <span className="text-cyan-400 underline decoration-dashed underline-offset-4">escolha um arquivo</span>
+                              </p>
+                            </div>
+                          )}
+                          {tempUploadedIcon && !isUploadingIcon && (
+                            <div className="absolute right-3 top-3 flex items-center gap-1.5 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800 px-2 py-1 rounded-xl">
+                              <img
+                                src={tempUploadedIcon}
+                                className="w-5 h-5 rounded-md object-cover border border-cyan-500"
+                                alt="Icon Preview"
+                              />
+                              <span className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider">Salvo</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      {activeIconTab === "url" && (
+                        <input
+                          type="url"
+                          value={iconUrl}
+                          onChange={(e) => setIconUrl(e.target.value)}
+                          placeholder="https://..."
+                          className="w-full px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-white text-sm"
+                        />
+                      )}
+
+                      {activeIconTab === "steamgriddb" && (
+                        <div className="space-y-3 p-3 bg-zinc-900/70 border border-sky-500/30 rounded-2xl">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="text"
+                              value={quickIconsSearchTerm || name}
+                              onChange={(e) => setQuickIconsSearchTerm(e.target.value)}
+                              placeholder="Pesquisar ícones do jogo no SteamGridDB..."
+                              className="flex-1 px-3 py-2 rounded-xl bg-zinc-950 border border-zinc-800 focus:outline-none focus:border-sky-500 text-white text-xs font-medium"
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleFetchQuickSteamGridIcons(quickIconsSearchTerm || name);
+                                }
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleFetchQuickSteamGridIcons(quickIconsSearchTerm || name)}
+                              disabled={isLoadingQuickIcons}
+                              className="px-3 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-1 cursor-pointer shrink-0 shadow-sm"
+                            >
+                              {isLoadingQuickIcons ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+                              <span>Buscar</span>
+                            </button>
+                          </div>
+
+                          {isLoadingQuickIcons ? (
+                            <div className="flex items-center justify-center py-6 gap-2 text-zinc-400 text-xs">
+                              <Loader2 size={16} className="animate-spin text-sky-400" />
+                              <span>Carregando ícones do SteamGridDB...</span>
+                            </div>
+                          ) : quickSteamGridIcons.length > 0 ? (
+                            <div className="space-y-2">
+                              <div className="grid grid-cols-4 sm:grid-cols-6 gap-2.5 max-h-48 overflow-y-auto p-1">
+                                {quickSteamGridIcons.map((item) => (
+                                  <div
+                                    key={item.id}
+                                    className="group relative flex flex-col items-center p-2 rounded-xl bg-zinc-950/80 border border-zinc-800 hover:border-sky-500/80 transition-all cursor-pointer"
+                                    onClick={() => handleSelectSteamGridMediaAsIcon(item)}
+                                    title={`Selecionar ícone (${item.width}x${item.height})`}
+                                  >
+                                    <div className="w-12 h-12 rounded-lg overflow-hidden bg-zinc-900 border border-zinc-800 flex items-center justify-center relative shadow-inner">
+                                      <img
+                                        src={item.thumb || item.url}
+                                        alt={item.title || "Icon"}
+                                        className="w-full h-full object-contain p-1 group-hover:scale-110 transition-transform"
+                                        loading="lazy"
+                                        referrerPolicy="no-referrer"
+                                        onError={(e) => {
+                                          (e.target as HTMLImageElement).src = "https://placehold.co/128x128/1e1b4b/38bdf8?text=Icon";
+                                        }}
+                                      />
+                                    </div>
+                                    <span className="text-[9px] font-mono text-zinc-400 mt-1">
+                                      {item.width}x{item.height}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="flex items-center justify-between pt-1 border-t border-zinc-800 text-[11px] text-zinc-400">
+                                <span>{quickSteamGridIcons.length} ícones encontrados</span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenSteamGridGallery(quickIconsSearchTerm || name, "icon")}
+                                  className="text-sky-400 hover:text-sky-300 font-bold hover:underline cursor-pointer flex items-center gap-1"
+                                >
+                                  <span>Abrir Galeria Completa & Preview</span>
+                                  <ArrowRight size={12} />
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="flex items-center justify-between py-2 text-zinc-400 text-xs">
+                              <span>Busque ícones oficiais e da comunidade no SteamGridDB.</span>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenSteamGridGallery(quickIconsSearchTerm || name, "icon")}
+                                className="text-sky-400 hover:text-sky-300 font-bold hover:underline cursor-pointer"
+                              >
+                                Abrir Galeria Completa
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
-              {/* Datas de Jogatina */}
-              <div id="block-dates" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("dates", !!openBlocks["dates"])}`}>
-                <div
-                  onClick={() => toggleBlock("dates")}
-                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-sky-500/30"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Calendar size={16} className="text-sky-400 shrink-0" />
-                    <h4 className="text-xs font-bold text-sky-300 uppercase tracking-wider font-mono shrink-0">
-                      Datas de Jogatina
-                    </h4>
-                    {!openBlocks["dates"] && (startDate || endDate) && (
-                      <span className="text-xs text-sky-400 font-mono font-bold truncate">
-                        — {startDate || "..."} até {endDate || "..."}
-                      </span>
-                    )}
+              {/* COLUNA 2: Mídias, Avaliações, Metadados & Integrações */}
+              <div className="space-y-4.5">
+                {/* Bloco 9: Imagem de Capa */}
+                <div id="block-cover" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("cover", !!openBlocks["cover"])}`}>
+                  <div
+                    onClick={() => toggleBlock("cover")}
+                    className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-rose-500/30"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <ImageIcon size={16} className="text-rose-400 shrink-0" />
+                      <h4 className="text-xs font-bold text-rose-300 uppercase tracking-wider font-mono shrink-0">
+                        Imagem de Capa
+                      </h4>
+                      {!openBlocks["cover"] && (tempUploadedCover || coverUrl) && (
+                        <span className="text-xs text-rose-400 font-mono font-bold truncate">
+                          — Capa configurada
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 sm:gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenSteamGridGallery(undefined, "cover")}
+                        disabled={isLoadingSteamGridMedia}
+                        className="text-xs font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-cyan-950/50 border border-cyan-500/40 hover:bg-cyan-900/50 transition-all cursor-pointer shadow-sm"
+                        title="Buscar e selecionar capas (grids), heroes panorâmicos e logos no SteamGridDB"
+                      >
+                        {isLoadingSteamGridMedia ? (
+                          <>
+                            <Loader2 size={12} className="animate-spin text-cyan-400" />
+                            <span>Buscando...</span>
+                          </>
+                        ) : (
+                          <>
+                            <ImageIcon size={13} className="text-cyan-400" />
+                            <span>Galeria SteamGridDB</span>
+                          </>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleBlock("cover")}
+                        className="p-1 rounded-lg text-rose-400 hover:text-white transition-colors cursor-pointer"
+                      >
+                        {openBlocks["cover"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => toggleBlock("dates")}
-                      className="p-1 rounded-lg text-sky-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      {openBlocks["dates"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                    </button>
-                  </div>
+
+                  {openBlocks["cover"] && (
+                    <div className="pt-4 space-y-3">
+                      <div className="flex flex-col md:flex-row gap-3">
+                        <div className="flex-1">
+                          <input
+                            type="url"
+                            value={coverUrl}
+                            onChange={(e) => {
+                              setCoverUrl(e.target.value);
+                              setTempUploadedCover(""); // clear upload if text changes
+                            }}
+                            placeholder="https://images.unsplash.com/photo-..."
+                            className="w-full px-4 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm text-white mb-2"
+                          />
+                          <div 
+                            onDragOver={handleCoverDragOver}
+                            onDragLeave={handleCoverDragLeave}
+                            onDrop={handleCoverDrop}
+                            className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
+                              isDragOverCover 
+                                ? "border-rose-500 bg-rose-950/10 scale-[1.01]" 
+                                : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
+                            }`}
+                            onClick={() => {
+                              const coverInput = document.getElementById("cover-file-input");
+                              if (coverInput) coverInput.click();
+                            }}
+                          >
+                            <input
+                              id="cover-file-input"
+                              type="file"
+                              accept="image/*"
+                              disabled={isUploadingCover}
+                              onChange={handleCoverUpload}
+                              className="hidden"
+                            />
+                            {isUploadingCover ? (
+                              <div className="flex flex-col items-center gap-2 py-1 text-center">
+                                <Loader2 size={20} className="animate-spin text-rose-400" />
+                                <span className="text-xs text-zinc-300 font-medium animate-pulse">Enviando imagem de capa...</span>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col items-center gap-1.5 text-center">
+                                <Upload size={18} className="text-rose-400" />
+                                <p className="text-xs font-semibold text-zinc-300">
+                                  Arraste a capa aqui ou <span className="text-rose-400 underline decoration-dashed underline-offset-4">escolha um arquivo</span>
+                                </p>
+                                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">
+                                  Formatos: JPG, PNG, WEBP, GIF
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        {(tempUploadedCover || coverUrl) && (
+                          <div className="w-28 h-20 rounded-2xl overflow-hidden border border-rose-500/40 shrink-0 bg-black">
+                            <img
+                              src={tempUploadedCover || coverUrl}
+                              className="w-full h-full object-cover"
+                              alt="Capa"
+                              onError={(e) => {
+                                (e.target as HTMLImageElement).src = "https://placehold.co/100x100/040406/ffffff?text=Capa";
+                              }}
+                            />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {openBlocks["dates"] && (
-                  <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1.5">
-                        Data de Início
-                      </label>
-                      <input
-                        type="date"
-                        value={startDate}
-                        onChange={(e) => setStartDate(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1.5">
-                        Data de Término
-                      </label>
-                      <input
-                        type="date"
-                        value={endDate}
-                        onChange={(e) => setEndDate(e.target.value)}
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Plataforma e Dificuldade Lado a Lado */}
-              <div id="block-platform" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("platform", !!openBlocks["platform"])}`}>
-                <div
-                  onClick={() => toggleBlock("platform")}
-                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-indigo-500/30"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <Monitor size={16} className="text-indigo-400 shrink-0" />
-                    <h4 className="text-xs font-bold text-indigo-300 uppercase tracking-wider font-mono shrink-0">
-                      Plataforma e Dificuldade
-                    </h4>
-                    {!openBlocks["platform"] && (platform || difficulty) && (
-                      <span className="text-xs text-indigo-400 font-mono font-bold truncate">
-                        — {[platform, difficulty].filter(Boolean).join(" | ")}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => toggleBlock("platform")}
-                      className="p-1 rounded-lg text-indigo-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      {openBlocks["platform"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                {openBlocks["platform"] && (
-                  <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1.5">
-                        Plataforma
-                      </label>
-                      <input
-                        type="text"
-                        value={platform}
-                        onChange={(e) => setPlatform(e.target.value)}
-                        placeholder="Ex: Nintendo Switch [OLED, Docked], PS5"
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                      <p className="text-[10px] text-zinc-500 mt-1">
-                        Use colchetes <code className="text-indigo-400 font-mono font-bold">[ ]</code> para notas de contexto no tooltip!
-                      </p>
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-zinc-300 uppercase tracking-widest mb-1.5">
-                        Dificuldade
-                      </label>
-                      <input
-                        type="text"
-                        value={difficulty}
-                        onChange={(e) => setDifficulty(e.target.value)}
-                        placeholder="Ex: Hard [Sem Checklist], Marcha da Morte"
-                        className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                      <p className="text-[10px] text-zinc-500 mt-1">
-                        Use colchetes <code className="text-indigo-400 font-mono font-bold">[ ]</code> para contextualizar no tooltip!
-                      </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Pros & Cons Inputs */}
-              <div id="block-proscons" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("proscons", !!openBlocks["proscons"])}`}>
+                {/* Pros & Cons Inputs */}
+                <div id="block-proscons" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("proscons", !!openBlocks["proscons"])}`}>
                 <div
                   onClick={() => toggleBlock("proscons")}
                   className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-emerald-500/30"
@@ -2427,123 +3747,6 @@ export default function GameFormModal({
                       <p className="text-[11px] text-zinc-400 leading-tight">
                         Pressione <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">Enter</code> ou separe por <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">;</code>. O texto em colchetes <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">[ ]</code> vira tooltip no mouseover!
                       </p>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Categoria de Progresso & DLC */}
-              <div id="block-status" className={`scroll-mt-28 bg-zinc-950/80 p-4.5 rounded-2xl transition-all ${getCategoryBorderClass("status", !!openBlocks["status"])}`}>
-                <div
-                  onClick={() => toggleBlock("status")}
-                  className="flex items-center justify-between cursor-pointer select-none pb-2 border-b border-emerald-500/30"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <CheckCircle size={16} className="text-emerald-400 shrink-0" />
-                    <h4 className="text-xs font-bold text-emerald-300 uppercase tracking-wider font-mono shrink-0">
-                      Categoria de Progresso & Expansões *
-                    </h4>
-                    {!openBlocks["status"] && selectedStatus.length > 0 && (
-                      <span className="text-xs text-emerald-400 font-mono font-bold truncate">
-                        — {selectedStatus.join(", ")} {dlcMode !== "none" ? `(${dlcMode})` : ""}
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => toggleBlock("status")}
-                      className="p-1 rounded-lg text-emerald-400 hover:text-white transition-colors cursor-pointer"
-                    >
-                      {openBlocks["status"] ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                    </button>
-                  </div>
-                </div>
-
-                {openBlocks["status"] && (
-                  <div className="pt-4 space-y-3">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
-                      {["Jogando", "Em Hiatus", "Terminado", "Backlog", "Desistido"].map((status) => (
-                        <label key={status} className="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer select-none">
-                          <input
-                            type="checkbox"
-                            checked={selectedStatus.includes(status)}
-                            onChange={() => toggleStatus(status)}
-                            className="rounded border-zinc-800 bg-zinc-950 text-emerald-500 focus:ring-emerald-500 h-4 w-4 accent-emerald-500"
-                          />
-                          {status}
-                        </label>
-                      ))}
-                    </div>
-                    <div className="mt-3 px-1 pt-2 border-t border-zinc-800/60">
-                      <div className="w-full">
-                        <span className="block font-bold text-xs uppercase tracking-wider text-amber-300 mb-1.5 flex items-center gap-1.5">
-                          <Layers size={13} className="stroke-[2.5]" />
-                          Marcador de DLC / Expansão
-                        </span>
-                        <div className="grid grid-cols-3 gap-1.5 bg-zinc-950 p-1 rounded-xl border border-zinc-800">
-                          <button
-                            type="button"
-                            onClick={() => setDlcMode("none")}
-                            className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold transition-all cursor-pointer ${
-                              dlcMode === "none"
-                                ? "bg-zinc-800 text-white shadow"
-                                : "text-zinc-500 hover:text-zinc-300"
-                            }`}
-                          >
-                            Nenhum
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDlcMode("dlc")}
-                            className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                              dlcMode === "dlc"
-                                ? "bg-amber-950 text-amber-300 border border-amber-500/50 shadow"
-                                : "text-zinc-500 hover:text-amber-300"
-                            }`}
-                            title="Apenas a Expansão / DLC"
-                          >
-                            <Layers size={11} />
-                            DLC
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setDlcMode("plus_dlc")}
-                            className={`py-1.5 px-2 rounded-lg text-[11px] font-extrabold flex items-center justify-center gap-1 transition-all cursor-pointer ${
-                              dlcMode === "plus_dlc"
-                                ? "bg-amber-950 text-amber-300 border border-amber-500/50 shadow"
-                                : "text-zinc-500 hover:text-amber-300"
-                            }`}
-                            title="Jogo Base + Conteúdo DLC"
-                          >
-                            <Layers size={11} />
-                            +DLC
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-zinc-500 italic mt-1 font-sans">
-                          {dlcMode === "none" && "Jogo padrão sem marcador adicional"}
-                          {dlcMode === "dlc" && "Indica que este item é uma Expansão / DLC individual"}
-                          {dlcMode === "plus_dlc" && "Indica que a jogada conta o Jogo Base + DLC"}
-                        </p>
-
-                        {dlcMode !== "none" && (
-                          <div className="mt-3 animate-fade-in">
-                            <label className="block text-[10px] uppercase tracking-wider text-amber-300 font-bold mb-1">
-                              Nome das DLCs / Expansões Jogadas
-                            </label>
-                            <input
-                              type="text"
-                              value={dlcNames}
-                              onChange={(e) => setDlcNames(e.target.value)}
-                              placeholder="Ex: Shadow of the Erdtree [100% Zerada]; Blood and Wine [Terminada no PS5]"
-                              className="w-full px-3 py-2 rounded-xl bg-zinc-950 border border-amber-900/40 text-amber-200 placeholder-zinc-600 outline-none focus:ring-2 focus:ring-amber-500 text-xs"
-                            />
-                            <p className="text-[10px] text-zinc-500 italic mt-1">
-                              Separe nomes por ponto e vírgula ( ; ). Use colchetes <code className="text-amber-400 font-mono font-bold">[ ]</code> para contextualizar no tooltip!
-                            </p>
-                          </div>
-                        )}
-                      </div>
                     </div>
                   </div>
                 )}
@@ -3014,7 +4217,7 @@ export default function GameFormModal({
               </div>
 
               {/* Metacritic Integration Section - Borda Laranja / Amber */}
-              <div className="bg-zinc-950/80 border-2 border-amber-500/70 bg-amber-950/20 shadow-md shadow-amber-500/10 rounded-2xl p-4.5 space-y-4">
+              <div id="block-metacritic" className="scroll-mt-28 bg-zinc-950/80 border-2 border-amber-500/70 bg-amber-950/20 shadow-md shadow-amber-500/10 rounded-2xl p-4.5 space-y-4">
                 <div className="flex items-center justify-between border-b border-amber-500/30 pb-2">
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-pulse" />
@@ -3608,199 +4811,49 @@ export default function GameFormModal({
                 )}
               </div>
 
-              {/* Ícone do Perfil */}
-              <div className="bg-zinc-950/80 p-4.5 rounded-2xl border-2 border-sky-500/60 shadow-md shadow-sky-500/10 space-y-3">
-                <label className="block text-xs font-bold text-sky-300 uppercase tracking-widest font-mono">
-                  Ícone do Perfil
-                </label>
-                <div className="flex flex-wrap gap-2 mb-3">
-                  <button
-                    type="button"
-                    onClick={() => setActiveIconTab("emoji")}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                      activeIconTab === "emoji" ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-800"
-                    }`}
-                  >
-                    <Smile size={14} /> Emoji
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveIconTab("upload")}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                      activeIconTab === "upload" ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-800"
-                    }`}
-                  >
-                    <Upload size={14} /> Subir Ícone
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setActiveIconTab("url")}
-                    className={`px-3 py-2 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer ${
-                      activeIconTab === "url" ? "bg-cyan-600 text-white" : "bg-zinc-900 text-zinc-400 border border-zinc-800"
-                    }`}
-                  >
-                    <Globe size={14} /> URL da Web
-                  </button>
+                  </div>
                 </div>
 
-                {activeIconTab === "emoji" && (
-                  <input
-                    type="text"
-                    value={iconEmoji}
-                    onChange={(e) => setIconEmoji(e.target.value)}
-                    placeholder="Ex: 👾, 👑, ☄️, 🕹️"
-                    className="w-full px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-white text-sm"
-                  />
-                )}
-
-                {activeIconTab === "upload" && (
-                  <div 
-                    onDragOver={handleIconDragOver}
-                    onDragLeave={handleIconDragLeave}
-                    onDrop={handleIconDrop}
-                    className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
-                      isDragOverIcon 
-                        ? "border-cyan-500 bg-cyan-950/10 scale-[1.01]" 
-                        : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
-                    }`}
-                    onClick={() => {
-                      const iconInput = document.getElementById("icon-file-input");
-                      if (iconInput) iconInput.click();
-                    }}
+                {/* Form Bottom Actions Footer */}
+                <div className="pt-5 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => handleOpenIgdbSearch(name)}
+                    disabled={isFetchingIgdb}
+                    className="px-5 py-3 rounded-2xl bg-emerald-950/80 hover:bg-emerald-900 border border-emerald-500/50 text-emerald-300 hover:text-emerald-200 font-bold text-sm transition-all flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-950/40 active:scale-95 disabled:opacity-50"
+                    title="Pesquisar qualquer jogo no IGDB para comparar e importar dados seletivamente"
                   >
-                    <input
-                      id="icon-file-input"
-                      type="file"
-                      accept="image/*"
-                      disabled={isUploadingIcon}
-                      onChange={handleIconUpload}
-                      className="hidden"
-                    />
-                    {isUploadingIcon ? (
-                      <div className="flex flex-col items-center gap-2 py-1 text-center">
-                        <Loader2 size={20} className="animate-spin text-cyan-400" />
-                        <span className="text-xs text-zinc-300 font-medium animate-pulse">Enviando ícone...</span>
-                      </div>
+                    {isFetchingIgdb ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin text-emerald-400" />
+                        <span>Buscando no IGDB...</span>
+                      </>
                     ) : (
-                      <div className="flex flex-col items-center gap-1.5 text-center">
-                        <Upload size={18} className="text-purple-400" />
-                        <p className="text-xs font-semibold text-zinc-300">
-                          Arraste o ícone aqui ou <span className="text-cyan-400 underline decoration-dashed underline-offset-4">escolha um arquivo</span>
-                        </p>
-                      </div>
+                      <>
+                        <Search size={16} className="text-emerald-400" />
+                        <span>Procurar no IGDB</span>
+                      </>
                     )}
-                    {tempUploadedIcon && !isUploadingIcon && (
-                      <div className="absolute right-3 top-3 flex items-center gap-1.5 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800 px-2 py-1 rounded-xl">
-                        <img
-                          src={tempUploadedIcon}
-                          className="w-5 h-5 rounded-md object-cover border border-cyan-500"
-                          alt="Icon Preview"
-                        />
-                        <span className="text-[9px] text-zinc-400 font-bold uppercase tracking-wider">Salvo</span>
-                      </div>
-                    )}
-                  </div>
-                )}
+                  </button>
 
-                {activeIconTab === "url" && (
-                  <input
-                    type="url"
-                    value={iconUrl}
-                    onChange={(e) => setIconUrl(e.target.value)}
-                    placeholder="https://..."
-                    className="w-full px-4 py-2.5 rounded-xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-white text-sm"
-                  />
-                )}
-              </div>
-
-              {/* Imagem de Capa */}
-              <div className="bg-zinc-950/80 p-4.5 rounded-2xl border-2 border-rose-500/60 shadow-md shadow-rose-500/10 space-y-3">
-                <label className="block text-xs font-bold text-rose-300 uppercase tracking-widest font-mono">
-                  Imagem de Capa
-                </label>
-                <div className="flex flex-col md:flex-row gap-3">
-                  <div className="flex-1">
-                    <input
-                      type="url"
-                      value={coverUrl}
-                      onChange={(e) => {
-                        setCoverUrl(e.target.value);
-                        setTempUploadedCover(""); // clear upload if text changes
-                      }}
-                      placeholder="https://images.unsplash.com/photo-..."
-                      className="w-full px-4 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:ring-2 focus:ring-rose-500 text-sm text-white mb-2"
-                    />
-                    <div 
-                      onDragOver={handleCoverDragOver}
-                      onDragLeave={handleCoverDragLeave}
-                      onDrop={handleCoverDrop}
-                      className={`flex flex-col items-center justify-center p-5 rounded-2xl bg-zinc-950 border-2 border-dashed transition-all cursor-pointer relative overflow-hidden ${
-                        isDragOverCover 
-                          ? "border-rose-500 bg-rose-950/10 scale-[1.01]" 
-                          : "border-zinc-800 hover:border-zinc-700 hover:bg-zinc-900/40"
-                      }`}
-                      onClick={() => {
-                        const coverInput = document.getElementById("cover-file-input");
-                        if (coverInput) coverInput.click();
-                      }}
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      className="px-5 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-semibold hover:bg-zinc-800 transition-all text-sm cursor-pointer"
                     >
-                      <input
-                        id="cover-file-input"
-                        type="file"
-                        accept="image/*"
-                        disabled={isUploadingCover}
-                        onChange={handleCoverUpload}
-                        className="hidden"
-                      />
-                      {isUploadingCover ? (
-                        <div className="flex flex-col items-center gap-2 py-1 text-center">
-                          <Loader2 size={20} className="animate-spin text-rose-400" />
-                          <span className="text-xs text-zinc-300 font-medium animate-pulse">Enviando imagem de capa...</span>
-                        </div>
-                      ) : (
-                        <div className="flex flex-col items-center gap-1.5 text-center">
-                          <Upload size={18} className="text-rose-400" />
-                          <p className="text-xs font-semibold text-zinc-300">
-                            Arraste a capa aqui ou <span className="text-rose-400 underline decoration-dashed underline-offset-4">escolha um arquivo</span>
-                          </p>
-                          <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">
-                            Formatos: JPG, PNG, WEBP, GIF
-                          </p>
-                        </div>
-                      )}
-                    </div>
+                      Cancelar
+                    </button>
+                    <button
+                      type="submit"
+                      className="btn-neon px-5 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-cyan-500 text-white font-bold text-sm cursor-pointer"
+                    >
+                      Salvar Ficha
+                    </button>
                   </div>
-                  {(tempUploadedCover || coverUrl) && (
-                    <div className="w-28 h-20 rounded-2xl overflow-hidden border border-rose-500/40 shrink-0 bg-black">
-                      <img
-                        src={tempUploadedCover || coverUrl}
-                        className="w-full h-full object-cover"
-                        alt="Capa"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = "https://placehold.co/100x100/040406/ffffff?text=Capa";
-                        }}
-                      />
-                    </div>
-                  )}
                 </div>
-              </div>
-
-              <div className="pt-5 flex justify-end gap-3 border-t border-zinc-800">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-5 py-3 rounded-2xl bg-zinc-900 border border-zinc-800 text-zinc-300 font-semibold hover:bg-zinc-800 transition-all text-sm"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="btn-neon px-5 py-3 rounded-2xl bg-gradient-to-r from-purple-600 to-cyan-500 text-white font-bold text-sm"
-                >
-                  Salvar Ficha
-                </button>
-              </div>
-            </form>
+              </form>
+            </div>
 
             {/* Modal de confirmação inteligente de Replay */}
             {showReplayPromptModal && (
@@ -3891,6 +4944,894 @@ export default function GameFormModal({
                       >
                         Apenas Mudar Status
                       </button>
+                    </div>
+                  </motion.div>
+                </div>
+              </AnimatePresence>
+            )}
+
+            {/* Modal de Galeria de Mídias SteamGridDB */}
+            {showSteamGridModal && (
+              <AnimatePresence>
+                <div className="fixed inset-0 z-[100000] flex items-center justify-center p-2 sm:p-4">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 bg-black/85 backdrop-blur-md"
+                    onClick={() => {
+                      if (!previewMediaItem) setShowSteamGridModal(false);
+                    }}
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 16 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 16 }}
+                    className="w-[94vw] max-w-[96vw] h-[88vh] max-h-[92vh] bg-zinc-950 border-2 border-cyan-500/60 rounded-3xl p-3.5 sm:p-6 shadow-[0_0_60px_rgba(6,182,212,0.3)] relative z-10 flex flex-col space-y-3.5 text-white overflow-hidden"
+                  >
+                    {/* Header da Galeria */}
+                    <div className="flex items-center justify-between border-b border-zinc-800 pb-3 shrink-0">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-cyan-950/80 border border-cyan-500/50 text-cyan-400 flex items-center justify-center shrink-0 shadow-inner">
+                          <ImageIcon size={20} />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h3 className="text-base font-black text-white flex items-center gap-2">
+                              Galeria de Mídias SteamGridDB
+                            </h3>
+                            <span className="text-[10px] font-bold text-cyan-400 bg-cyan-950/80 border border-cyan-500/40 px-2 py-0.5 rounded-full font-mono">
+                              Alta Definição
+                            </span>
+                            {selectedSteamGridGame && (
+                              <span className="hidden sm:inline-flex text-[11px] text-zinc-400 font-mono">
+                                • {selectedSteamGridGame.name} (ID: {selectedSteamGridGame.id})
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-zinc-400">
+                            Capas (Grids), Banners Panorâmicos (Heroes), Logotipos PNG e Ícones de Perfil para <strong className="text-cyan-300">{name || "este jogo"}</strong>.
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setShowSteamGridModal(false)}
+                        className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-900 border border-zinc-800 transition-colors cursor-pointer"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    {/* Barra de Pesquisa e Troca de Jogo */}
+                    <div className="flex flex-col sm:flex-row gap-2 shrink-0">
+                      <div className="flex-1 flex gap-2">
+                        <div className="relative flex-1">
+                          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                          <input
+                            type="text"
+                            value={steamGridSearchTerm}
+                            onChange={(e) => setSteamGridSearchTerm(e.target.value)}
+                            placeholder="Buscar jogo no SteamGridDB (ex: God of War, Half-Life 2)..."
+                            className="w-full pl-9 pr-3 py-2 rounded-xl bg-zinc-900 border border-zinc-800 focus:outline-none focus:border-cyan-500 text-white text-xs font-medium"
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") {
+                                e.preventDefault();
+                                handleOpenSteamGridGallery(steamGridSearchTerm, steamGridTargetMode);
+                              }
+                            }}
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenSteamGridGallery(steamGridSearchTerm, steamGridTargetMode)}
+                          disabled={isLoadingSteamGridMedia}
+                          className="px-3.5 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shrink-0 shadow-sm"
+                        >
+                          {isLoadingSteamGridMedia ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+                          <span>Pesquisar</span>
+                        </button>
+                      </div>
+
+                      {/* Dropdown de Variações/Edições encontradas no SteamGridDB */}
+                      {steamGridCandidates.length > 1 && (
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider shrink-0 hidden md:inline">
+                            Edições:
+                          </label>
+                          <select
+                            value={selectedSteamGridGame?.id || ""}
+                            onChange={(e) => {
+                              const gameId = Number(e.target.value);
+                              const found = steamGridCandidates.find(c => c.id === gameId);
+                              if (found) {
+                                handleOpenSteamGridGallery(found.name, steamGridTargetMode, found.id);
+                              }
+                            }}
+                            className="px-2.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 text-xs text-cyan-300 font-medium focus:outline-none focus:border-cyan-500 cursor-pointer"
+                          >
+                            {steamGridCandidates.map((cand) => (
+                              <option key={cand.id} value={cand.id}>
+                                {cand.name} {cand.release_date ? `(${new Date(cand.release_date * 1000).getFullYear()})` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Filtros de Tipo de Mídia */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 shrink-0">
+                      <div className="flex flex-wrap items-center gap-1.5 p-1 bg-zinc-900/90 rounded-xl border border-zinc-800">
+                        <button
+                          type="button"
+                          onClick={() => setActiveSteamGridFilter("all")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            activeSteamGridFilter === "all"
+                              ? "bg-cyan-500 text-zinc-950 shadow-md shadow-cyan-500/30"
+                              : "text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          Todas ({steamGridMediaList.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSteamGridFilter("grid")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            activeSteamGridFilter === "grid"
+                              ? "bg-cyan-500 text-zinc-950 shadow-md shadow-cyan-500/30"
+                              : "text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          Capas / Grids ({steamGridMediaList.filter(m => m.type === "grid").length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSteamGridFilter("hero")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            activeSteamGridFilter === "hero"
+                              ? "bg-cyan-500 text-zinc-950 shadow-md shadow-cyan-500/30"
+                              : "text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          Heroes / Banners ({steamGridMediaList.filter(m => m.type === "hero").length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSteamGridFilter("logo")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            activeSteamGridFilter === "logo"
+                              ? "bg-cyan-500 text-zinc-950 shadow-md shadow-cyan-500/30"
+                              : "text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          Logos Transparentes ({steamGridMediaList.filter(m => m.type === "logo").length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveSteamGridFilter("icon")}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                            activeSteamGridFilter === "icon"
+                              ? "bg-cyan-500 text-zinc-950 shadow-md shadow-cyan-500/30"
+                              : "text-zinc-400 hover:text-zinc-200"
+                          }`}
+                        >
+                          Ícones ({steamGridMediaList.filter(m => m.type === "icon").length})
+                        </button>
+                      </div>
+
+                      {/* Sub-filtro de orientação para Grids */}
+                      {activeSteamGridFilter === "grid" && (
+                        <div className="flex items-center gap-1 text-xs">
+                          <span className="text-zinc-400 text-[10px] uppercase font-bold mr-1">Formato:</span>
+                          <button
+                            type="button"
+                            onClick={() => setSteamGridGridOrientation("all")}
+                            className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                              steamGridGridOrientation === "all" ? "bg-zinc-800 text-cyan-400 border border-cyan-500/30" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            Todos
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSteamGridGridOrientation("vertical")}
+                            className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                              steamGridGridOrientation === "vertical" ? "bg-zinc-800 text-cyan-400 border border-cyan-500/30" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            Verticais (600x900)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSteamGridGridOrientation("horizontal")}
+                            className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all ${
+                              steamGridGridOrientation === "horizontal" ? "bg-zinc-800 text-cyan-400 border border-cyan-500/30" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                          >
+                            Horizontais (920x430)
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Conteúdo da Galeria */}
+                    <div className="flex-1 overflow-y-auto pr-1">
+                      {isLoadingSteamGridMedia ? (
+                        <div className="flex flex-col items-center justify-center py-20 text-center space-y-3">
+                          <Loader2 size={36} className="animate-spin text-cyan-400" />
+                          <p className="text-sm font-semibold text-zinc-300">
+                            Buscando mídias em alta resolução no SteamGridDB...
+                          </p>
+                        </div>
+                      ) : steamGridMediaList.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-16 text-center space-y-3 bg-zinc-900/30 rounded-2xl border border-zinc-850">
+                          <ImageIcon size={40} className="text-zinc-600" />
+                          <p className="text-sm font-semibold text-zinc-300">
+                            Nenhuma mídia encontrada no SteamGridDB para "{steamGridSearchTerm}".
+                          </p>
+                          <p className="text-xs text-zinc-500 max-w-md">
+                            Tente pesquisar pelo título em inglês do jogo ou verifique a conexão da API nas Configurações do Sistema.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 2xl:grid-cols-7 gap-3 sm:gap-4">
+                          {steamGridMediaList
+                            .filter(m => {
+                              if (activeSteamGridFilter !== "all" && m.type !== activeSteamGridFilter) return false;
+                              if (activeSteamGridFilter === "grid" && steamGridGridOrientation !== "all") {
+                                if (steamGridGridOrientation === "vertical" && m.width > m.height) return false;
+                                if (steamGridGridOrientation === "horizontal" && m.height >= m.width) return false;
+                              }
+                              return true;
+                            })
+                            .map((item) => {
+                              const isVerticalGrid = item.type === "grid" && item.height >= item.width;
+                              const isHorizontalHero = item.type === "hero" || (item.type === "grid" && item.width > item.height);
+                              const isSquareLike = item.type === "icon" || item.type === "logo";
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  className="group relative rounded-2xl overflow-hidden bg-zinc-900/90 border border-zinc-800 hover:border-cyan-500/70 transition-all flex flex-col shadow-md"
+                                >
+                                  {/* Thumbnail Container */}
+                                  <div
+                                    className={`w-full overflow-hidden bg-black/60 relative flex items-center justify-center cursor-pointer ${
+                                      isVerticalGrid
+                                        ? "aspect-[2/3]"
+                                        : isHorizontalHero
+                                        ? "aspect-[16/8]"
+                                        : isSquareLike
+                                        ? "aspect-[1/1] p-3"
+                                        : "aspect-[16/10]"
+                                    }`}
+                                    onClick={() => setPreviewMediaItem(item)}
+                                    title="Clique para abrir Pré-visualização em Alta Resolução"
+                                  >
+                                    {/* Checkerboard Pattern for transparent PNGs */}
+                                    {(item.type === "logo" || item.type === "icon") && (
+                                      <div
+                                        className="absolute inset-0 opacity-15"
+                                        style={{
+                                          backgroundImage:
+                                            "linear-gradient(45deg, #404040 25%, transparent 25%), linear-gradient(-45deg, #404040 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #404040 75%), linear-gradient(-45deg, transparent 75%, #404040 75%)",
+                                          backgroundSize: "16px 16px",
+                                          backgroundPosition: "0 0, 0 8px, 8px -8px, -8px 0px",
+                                        }}
+                                      />
+                                    )}
+
+                                    <img
+                                      src={item.thumb || item.url}
+                                      alt={item.title || "SteamGridDB Media"}
+                                      className={`w-full h-full group-hover:scale-105 transition-transform duration-300 ${
+                                        item.type === "logo" || item.type === "icon" ? "object-contain relative z-10" : "object-cover"
+                                      }`}
+                                      loading="lazy"
+                                      referrerPolicy="no-referrer"
+                                      onError={(e) => {
+                                        (e.target as HTMLImageElement).src = "https://placehold.co/300x300/0c0a0f/ffffff?text=SteamGridDB";
+                                      }}
+                                    />
+
+                                    {/* Top Badges */}
+                                    <div className="absolute top-2 left-2 right-2 flex items-center justify-between pointer-events-none z-20">
+                                      <span
+                                        className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md backdrop-blur-md shadow-sm ${
+                                          item.type === "grid"
+                                            ? "bg-rose-950/80 text-rose-300 border border-rose-500/40"
+                                            : item.type === "hero"
+                                            ? "bg-purple-950/80 text-purple-300 border border-purple-500/40"
+                                            : item.type === "logo"
+                                            ? "bg-emerald-950/80 text-emerald-300 border border-emerald-500/40"
+                                            : "bg-sky-950/80 text-sky-300 border border-sky-500/40"
+                                        }`}
+                                      >
+                                        {item.type === "grid" ? "Grid" : item.type === "hero" ? "Hero" : item.type === "logo" ? "Logo" : "Ícone"}
+                                      </span>
+
+                                      <span className="text-[9px] font-mono font-bold text-zinc-300 bg-black/70 border border-white/10 px-1.5 py-0.5 rounded backdrop-blur-md">
+                                        {item.width}x{item.height}
+                                      </span>
+                                    </div>
+
+                                    {/* Center Preview Button Overlay on Hover */}
+                                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 z-20">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setPreviewMediaItem(item);
+                                        }}
+                                        className="p-2 rounded-xl bg-zinc-900/90 hover:bg-cyan-600 text-white border border-white/20 transition-all cursor-pointer shadow-lg flex items-center gap-1 text-xs font-bold"
+                                        title="Pré-visualizar em tamanho original"
+                                      >
+                                        <Eye size={14} />
+                                        <span>Prévia</span>
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Card Bottom / Action Buttons */}
+                                  <div className="p-2.5 bg-zinc-950/95 border-t border-zinc-850 flex flex-col gap-2">
+                                    <div className="flex items-center justify-between text-[10px] text-zinc-400 font-mono">
+                                      <span className="truncate" title={item.author?.name ? `Autor: ${item.author.name}` : ""}>
+                                        {item.author?.name || item.style || "Comunidade"}
+                                      </span>
+                                      {item.score !== undefined && item.score > 0 && (
+                                        <span className="text-amber-400 flex items-center gap-0.5 font-bold">
+                                          ★ {item.score}
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSelectSteamGridMediaAsCover(item)}
+                                        className="px-2 py-1.5 rounded-xl bg-rose-950/80 hover:bg-rose-900 text-rose-300 border border-rose-500/40 text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+                                        title="Aplicar como Capa Principal do Jogo"
+                                      >
+                                        <Check size={11} />
+                                        <span>Capa</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSelectSteamGridMediaAsIcon(item)}
+                                        className="px-2 py-1.5 rounded-xl bg-sky-950/80 hover:bg-sky-900 text-sky-300 border border-sky-500/40 text-[10px] font-bold transition-all flex items-center justify-center gap-1 cursor-pointer active:scale-95 shadow-sm"
+                                        title="Aplicar como Ícone do Jogo"
+                                      >
+                                        <Sparkles size={11} className="text-sky-400" />
+                                        <span>Ícone</span>
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Rodapé da Galeria */}
+                    <div className="flex flex-col sm:flex-row justify-between items-center gap-2 pt-3 border-t border-zinc-800 shrink-0">
+                      <p className="text-[11px] text-zinc-500 text-center sm:text-left">
+                        💡 Dica: Você pode aplicar Grids/Heroes como Capa ou Logos/Ícones como Ícone da Ficha. Clique em qualquer imagem para abrir a Pré-visualização.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setShowSteamGridModal(false)}
+                        className="px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-bold text-zinc-300 transition-all cursor-pointer"
+                      >
+                        Fechar
+                      </button>
+                    </div>
+                  </motion.div>
+                </div>
+              </AnimatePresence>
+            )}
+
+            {/* Modal de Pré-visualização Ampliada (Lightbox / Preview) do SteamGridDB */}
+            {previewMediaItem && (
+              <AnimatePresence>
+                <div className="fixed inset-0 z-[100010] flex items-center justify-center p-4">
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    exit={{ opacity: 0 }}
+                    className="absolute inset-0 bg-black/90 backdrop-blur-lg"
+                    onClick={() => setPreviewMediaItem(null)}
+                  />
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                    className="w-[90vw] max-w-5xl max-h-[92vh] bg-zinc-950 border-2 border-cyan-500/70 rounded-3xl overflow-hidden relative z-20 flex flex-col shadow-[0_0_60px_rgba(6,182,212,0.3)] text-white"
+                  >
+                    {/* Lightbox Header */}
+                    <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/90 shrink-0">
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`text-[10px] font-black uppercase tracking-wider px-2.5 py-1 rounded-lg ${
+                            previewMediaItem.type === "grid"
+                              ? "bg-rose-950 text-rose-300 border border-rose-500/40"
+                              : previewMediaItem.type === "hero"
+                              ? "bg-purple-950 text-purple-300 border border-purple-500/40"
+                              : previewMediaItem.type === "logo"
+                              ? "bg-emerald-950 text-emerald-300 border border-emerald-500/40"
+                              : "bg-sky-950 text-sky-300 border border-sky-500/40"
+                          }`}
+                        >
+                          {previewMediaItem.type === "grid" ? "Grid / Capa" : previewMediaItem.type === "hero" ? "Hero / Banner" : previewMediaItem.type === "logo" ? "Logo Transparente" : "Ícone de Perfil"}
+                        </span>
+                        <div>
+                          <h4 className="text-sm font-bold text-white">
+                            {previewMediaItem.title || name || "Mídia SteamGridDB"}
+                          </h4>
+                          <p className="text-[11px] text-zinc-400 font-mono">
+                            Resolução: <strong className="text-cyan-400">{previewMediaItem.width} × {previewMediaItem.height}</strong>
+                            {previewMediaItem.author?.name && ` • Autor: ${previewMediaItem.author.name}`}
+                            {previewMediaItem.style && ` • Estilo: ${previewMediaItem.style}`}
+                          </p>
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setPreviewMediaItem(null)}
+                        className="p-2 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-900 border border-zinc-800 transition-colors cursor-pointer"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    {/* Image Viewer Area */}
+                    <div className="flex-1 overflow-auto p-4 sm:p-6 flex items-center justify-center bg-zinc-900/60 relative min-h-[300px]">
+                      {/* Checkerboard Pattern for transparent PNGs */}
+                      {(previewMediaItem.type === "logo" || previewMediaItem.type === "icon") && (
+                        <div
+                          className="absolute inset-0 opacity-20"
+                          style={{
+                            backgroundImage:
+                              "linear-gradient(45deg, #505050 25%, transparent 25%), linear-gradient(-45deg, #505050 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #505050 75%), linear-gradient(-45deg, transparent 75%, #505050 75%)",
+                            backgroundSize: "20px 20px",
+                            backgroundPosition: "0 0, 0 10px, 10px -10px, -10px 0px",
+                          }}
+                        />
+                      )}
+
+                      <img
+                        src={previewMediaItem.url || previewMediaItem.thumb}
+                        alt={previewMediaItem.title || "Preview"}
+                        className="max-h-[60vh] max-w-full object-contain rounded-xl shadow-2xl relative z-10 border border-white/10"
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+
+                    {/* Lightbox Footer Actions */}
+                    <div className="p-4 border-t border-zinc-800 bg-zinc-950/95 flex flex-wrap items-center justify-between gap-3 shrink-0">
+                      <a
+                        href={previewMediaItem.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs text-cyan-400 hover:text-cyan-300 font-mono underline flex items-center gap-1"
+                      >
+                        <Globe size={13} />
+                        <span>Abrir Link Original em Alta Resolução</span>
+                      </a>
+
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleSelectSteamGridMediaAsCover(previewMediaItem)}
+                          className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-rose-600/25 active:scale-95"
+                        >
+                          <Check size={14} />
+                          <span>Definir como Capa</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSelectSteamGridMediaAsIcon(previewMediaItem)}
+                          className="px-4 py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-lg shadow-sky-600/25 active:scale-95"
+                        >
+                          <Sparkles size={14} />
+                          <span>Definir como Ícone</span>
+                        </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                </div>
+              </AnimatePresence>
+            )}
+
+            {/* Modal de Pré-visualização e Comparação de Metadados IGDB */}
+            {showMetadataPreviewModal && previewCandidateData && (
+              <AnimatePresence>
+                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md">
+                  <motion.div
+                    initial={{ opacity: 0, scale: 0.95, y: 15 }}
+                    animate={{ opacity: 1, scale: 1, y: 0 }}
+                    exit={{ opacity: 0, scale: 0.95, y: 15 }}
+                    className="bg-zinc-950 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col border border-cyan-500/50 shadow-2xl shadow-cyan-950/50"
+                  >
+                    {/* Header */}
+                    <div className="p-4 sm:p-5 border-b border-zinc-800 flex justify-between items-center bg-zinc-950/95 shrink-0">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl bg-cyan-950/80 border border-cyan-500/40 flex items-center justify-center text-cyan-400">
+                          <Eye size={18} />
+                        </div>
+                        <div>
+                          <h4 className="text-base font-bold text-white flex items-center gap-2">
+                            <span>Comparação de Metadados:</span>
+                            <span className="text-cyan-400 font-extrabold truncate max-w-xs sm:max-w-md">
+                              {previewCandidateData.name}
+                            </span>
+                          </h4>
+                          <p className="text-xs text-zinc-400">
+                            Revise os dados antes de aplicar. Marque ou desmarque os campos que deseja atualizar na ficha.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowMetadataPreviewModal(false)}
+                        className="text-zinc-400 hover:text-white p-1.5 hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    {/* Quick Selection Toolbar */}
+                    <div className="bg-zinc-900/60 border-b border-zinc-800/80 px-5 py-2.5 flex items-center justify-between gap-3 text-xs shrink-0">
+                      <span className="text-zinc-400 font-medium">
+                        Campos selecionados: <strong className="text-cyan-400">{Object.values(selectedPreviewFields).filter(Boolean).length}</strong> de {Object.keys(selectedPreviewFields).length}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleAllPreviewFields(true)}
+                          className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 px-2.5 py-1 rounded-lg bg-cyan-950/50 border border-cyan-500/30 hover:bg-cyan-900/40 transition-colors cursor-pointer"
+                        >
+                          Marcar Todos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleAllPreviewFields(false)}
+                          className="text-[11px] font-bold text-zinc-400 hover:text-zinc-200 px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 transition-colors cursor-pointer"
+                        >
+                          Desmarcar Todos
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Comparison Table / List */}
+                    <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-3">
+                      {/* Comparison Row: Capa */}
+                      <div
+                        onClick={() => togglePreviewField("cover")}
+                        className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between ${
+                          selectedPreviewFields.cover
+                            ? "bg-cyan-950/20 border-cyan-500/50 shadow-sm"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 shrink-0">
+                          {selectedPreviewFields.cover ? (
+                            <CheckSquare size={18} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={18} className="text-zinc-600 shrink-0" />
+                          )}
+                          <div>
+                            <span className="text-xs font-bold text-white uppercase tracking-wider block">
+                              Capa HD Oficial
+                            </span>
+                            <span className="text-[10px] text-zinc-400">Arte e box art em alta resolução</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4 w-full sm:w-auto justify-between sm:justify-end">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-zinc-500">Atual:</span>
+                            <div className="w-12 h-16 bg-black rounded-lg overflow-hidden border border-zinc-800 shrink-0">
+                              {coverUrl ? (
+                                <img src={coverUrl} alt="Atual" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-[9px] text-zinc-600">Sem Capa</div>
+                              )}
+                            </div>
+                          </div>
+
+                          <ArrowRight size={14} className="text-cyan-500 shrink-0" />
+
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-mono text-emerald-400 font-bold">IGDB:</span>
+                            <div className="w-12 h-16 bg-black rounded-lg overflow-hidden border border-cyan-500/40 shrink-0 shadow-md">
+                              <img
+                                src={previewCandidateData.coverHdUrl || previewCandidateData.coverUrl}
+                                alt="IGDB"
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: Título */}
+                      <div
+                        onClick={() => togglePreviewField("title")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.title
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-80 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.title ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <div>
+                            <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider block">
+                              Título
+                            </span>
+                            {!selectedPreviewFields.title && name.trim() && (
+                              <span className="text-[10px] text-amber-400 font-mono">
+                                Mantendo nome personalizado do seu site
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right">
+                          <span className="text-zinc-400 truncate max-w-[140px] sm:max-w-[200px]" title={name || "Vazio"}>
+                            {name || "(Vazio)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold truncate max-w-[160px] sm:max-w-[240px]" title={previewCandidateData.name}>
+                            {previewCandidateData.name}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: Desenvolvedora */}
+                      <div
+                        onClick={() => togglePreviewField("developer")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.developer
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.developer ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            Desenvolvedor
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right">
+                          <span className="text-zinc-400 truncate max-w-[140px]" title={studio || "Vazio"}>
+                            {studio || "(Vazio)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold truncate max-w-[180px]" title={previewCandidateData.developer || "(Não inf.)"}>
+                            {previewCandidateData.developer || "(Não inf.)"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: Publicadora */}
+                      <div
+                        onClick={() => togglePreviewField("publisher")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.publisher
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.publisher ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            Publicadora
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right">
+                          <span className="text-zinc-400 truncate max-w-[140px]" title={publisher || "Vazio"}>
+                            {publisher || "(Vazio)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold truncate max-w-[180px]" title={previewCandidateData.publisher || "(Não inf.)"}>
+                            {previewCandidateData.publisher || "(Não inf.)"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: Data de Lançamento */}
+                      <div
+                        onClick={() => togglePreviewField("releaseDate")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.releaseDate
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.releaseDate ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            Lançamento
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right font-mono">
+                          <span className="text-zinc-400">
+                            {releaseDate || "(Vazio)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold">
+                            {previewCandidateData.releaseDate || "(Não inf.)"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: Plataformas Disponíveis */}
+                      <div
+                        onClick={() => togglePreviewField("platforms")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.platforms
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.platforms ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            Plataformas Disponíveis
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right">
+                          <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-[180px]">
+                            {availablePlatforms.join(", ") || "(Nenhuma)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold truncate max-w-[160px] sm:max-w-[240px]">
+                            {previewCandidateData.platforms?.join(", ") || "(Não inf.)"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: Gêneros */}
+                      <div
+                        onClick={() => togglePreviewField("genres")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.genres
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.genres ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            Gêneros
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right">
+                          <span className="text-zinc-400 truncate max-w-[120px] sm:max-w-[180px]">
+                            {selectedGenres.join(", ") || "(Vazio)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold truncate max-w-[160px] sm:max-w-[240px]">
+                            {previewCandidateData.genres?.join(", ") || "(Não inf.)"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: HLTB Times */}
+                      <div
+                        onClick={() => togglePreviewField("hltb")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.hltb
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.hltb ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            HowLongToBeat
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right font-mono">
+                          <span className="text-zinc-400">
+                            {hltbMain ? `${hltbMain}` : "(Vazio)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-cyan-300 font-bold">
+                            {previewCandidateData.hltbMain ? formatHltbTime(previewCandidateData.hltbMain) : "(Não inf.)"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Comparison Row: IGDB Rating / Metacritic */}
+                      <div
+                        onClick={() => togglePreviewField("metacritic")}
+                        className={`p-3 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-4 ${
+                          selectedPreviewFields.metacritic
+                            ? "bg-cyan-950/20 border-cyan-500/50"
+                            : "bg-zinc-900/30 border-zinc-850 opacity-60 hover:opacity-100"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          {selectedPreviewFields.metacritic ? (
+                            <CheckSquare size={17} className="text-cyan-400 shrink-0" />
+                          ) : (
+                            <Square size={17} className="text-zinc-600 shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider shrink-0">
+                            Notas & Crítica
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs min-w-0 text-right font-mono">
+                          <span className="text-zinc-400">
+                            {metacriticCritScore ? `${metacriticCritScore}%` : "(Sem nota)"}
+                          </span>
+                          <ArrowRight size={12} className="text-cyan-500 shrink-0" />
+                          <span className="text-amber-400 font-bold">
+                            {previewCandidateData.aggregatedRating || previewCandidateData.rating
+                              ? `${Math.round(previewCandidateData.aggregatedRating || previewCandidateData.rating)}%`
+                              : "(Sem nota)"}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Footer Actions */}
+                    <div className="p-4 sm:p-5 border-t border-zinc-800 bg-zinc-950/95 flex flex-col sm:flex-row items-center justify-between gap-3 shrink-0">
+                      <span className="text-xs text-zinc-500 text-center sm:text-left">
+                        Os campos selecionados serão mesclados diretamente na ficha técnica atual.
+                      </span>
+                      <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setShowMetadataPreviewModal(false)}
+                          className="flex-1 sm:flex-none px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-semibold text-zinc-300 transition-colors cursor-pointer"
+                        >
+                          Cancelar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={applySelectedMetadataFields}
+                          className="flex-1 sm:flex-none px-5 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-teal-600 hover:from-cyan-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-cyan-900/30 transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                        >
+                          <Check size={14} />
+                          <span>Aplicar Metadados Selecionados</span>
+                        </button>
+                      </div>
                     </div>
                   </motion.div>
                 </div>

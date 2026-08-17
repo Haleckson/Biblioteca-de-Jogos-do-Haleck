@@ -51,6 +51,7 @@ import StorytellingModal from "./components/StorytellingModal";
 import KanbanView, { mapKanbanToStatus } from "./components/KanbanView";
 import { restoreTrashItem } from "./utils/trashService";
 import { playRetroSound } from "./utils/audioEffects";
+import { preloadImagesToCache } from "./utils/imageCacheManager";
 
 const sortAlphabetically = (arr: string[]) => {
   return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
@@ -428,6 +429,16 @@ export default function App() {
       gamesCount: games.length,
       sampleGameNames: games.slice(0, 5).map((g) => g.name),
     });
+
+    // Pré-carrega capas e mídias principais no CacheStorage local em background
+    if (games.length > 0) {
+      const coverUrls = games.map((g) => g.cover).filter(Boolean);
+      const iconUrls = games.map((g) => g.iconUrl).filter(Boolean);
+      const recentDiaryMedias = games.flatMap((g) => 
+        (g.diary || []).flatMap((d) => (d.medias || []).map((m) => m.url)).slice(0, 30)
+      );
+      preloadImagesToCache([...coverUrls, ...iconUrls, ...recentDiaryMedias]);
+    }
   }, [games]);
 
   useEffect(() => {
@@ -1551,6 +1562,37 @@ export default function App() {
     setEditGame(null);
   };
 
+  const handleBulkAddGames = (
+    gamesList: Array<Omit<Game, "id" | "diary"> & { id?: string; diary?: DiaryEntry[] }>
+  ) => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para adicionar jogos em lote.");
+      return;
+    }
+    if (!gamesList || gamesList.length === 0) return;
+
+    const baseTimestamp = Date.now();
+    const createdGames: Game[] = gamesList.map((gameData, idx) => ({
+      ...gameData,
+      id: `game-${baseTimestamp}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
+      diary: gameData.diary || [],
+      rating: Math.min(5, Math.max(0, gameData.rating || 0)),
+      playtime: typeof gameData.playtime === "string" ? gameData.playtime.trim() || "00h 00m" : "00h 00m",
+      additionalPlaytime: typeof gameData.additionalPlaytime === "string" ? gameData.additionalPlaytime.trim() : "",
+      status: gameData.status && gameData.status.length > 0 ? gameData.status : ["Quero Jogar"],
+      genre: gameData.genre && gameData.genre.length > 0 ? gameData.genre : ["Ação"],
+    } as Game));
+
+    setGames((prev) => [...createdGames, ...prev]);
+    setHasUnsavedChanges(true);
+    setIsFormOpen(false);
+    setEditGame(null);
+    triggerAlert(
+      "Importação em Lote Concluída!",
+      `Sucesso! ${createdGames.length} ${createdGames.length === 1 ? "jogo foi adicionado" : "jogos foram adicionados"} à sua biblioteca a partir do IGDB.`
+    );
+  };
+
   const handleDeleteGame = (gameId: string) => {
     ensureAdmin("excluir este jogo", () => {
       triggerConfirm(
@@ -2339,7 +2381,10 @@ export default function App() {
               />
             ) : (
               <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                <div 
+                  className="grid gap-[clamp(0.875rem,1.5vw,1.5rem)]"
+                  style={{ gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))" }}
+                >
                   <AnimatePresence mode="popLayout">
                     {filteredGames.slice(0, visibleCount).map((game) => (
                       <GameCard
@@ -2390,6 +2435,7 @@ export default function App() {
         }}
         game={editGame}
         onSave={handleSaveGame}
+        onBulkSaveGames={handleBulkAddGames}
         globalTags={globalTags}
         globalGenres={globalGenres}
         onAddGlobalTag={handleAddGlobalTag}

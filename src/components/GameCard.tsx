@@ -12,6 +12,7 @@ import TrophyBadge, { TrophiesList } from "./TrophyBadge";
 import { formatHoursAndMinutes, getTotalGamePlaytimeHours, getGameTimeBreakdown } from "../utils/playtime";
 import { startLiveSessionForGame } from "./LiveSessionWidget";
 import { formatSteamPlaytime } from "../utils/steamApi";
+import CachedImage from "./CachedImage";
 
 export interface GameCardProps {
   game: Game;
@@ -368,6 +369,7 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
   }, [validDiaryImages]);
 
   const handleMouseEnterCard = () => {
+    if (isAdjusting) return;
     if (validDiaryImages.length === 0) return;
 
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
@@ -381,16 +383,23 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
     if (!pref) {
       // Exibe o alerta de spoiler após 3 segundos (3000ms) de mouseover
       hoverTimerRef.current = setTimeout(() => {
-        setShowSpoilerPrompt(true);
+        if (!isAdjusting) {
+          setShowSpoilerPrompt(true);
+        }
       }, 3000);
       return;
     }
 
     // Inicia exibição do carrossel após breve hover de 200ms e alterna imagem a cada 3 segundos
     hoverTimerRef.current = setTimeout(() => {
+      if (isAdjusting) return;
       pickRandomImage();
 
       intervalTimerRef.current = setInterval(() => {
+        if (isAdjusting) {
+          if (intervalTimerRef.current) clearInterval(intervalTimerRef.current);
+          return;
+        }
         pickRandomImage();
       }, 3000);
     }, 200);
@@ -409,7 +418,9 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
       clearInterval(intervalTimerRef.current);
       intervalTimerRef.current = null;
     }
-    setActiveRandomImage(null);
+    if (!isAdjusting) {
+      setActiveRandomImage(null);
+    }
   };
 
   const coverContainerRef = React.useRef<HTMLDivElement>(null);
@@ -419,6 +430,21 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
     setTempPosY(posY);
     setTempZoom(zoom);
   }, [posX, posY, zoom]);
+
+  React.useEffect(() => {
+    if (isAdjusting) {
+      if (hoverTimerRef.current) {
+        clearTimeout(hoverTimerRef.current);
+        hoverTimerRef.current = null;
+      }
+      if (intervalTimerRef.current) {
+        clearInterval(intervalTimerRef.current);
+        intervalTimerRef.current = null;
+      }
+      setActiveRandomImage(null);
+      setShowSpoilerPrompt(false);
+    }
+  }, [isAdjusting]);
 
   React.useEffect(() => {
     const el = coverContainerRef.current;
@@ -538,7 +564,7 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
         }
         if (onClick) onClick(game.id);
       }}
-      className={`group cursor-pointer glass rounded-3xl transition-all duration-300 flex flex-col h-full relative z-10 hover:z-40 overflow-hidden ${getStatusBorderClass(game.status)}`}
+      className={`game-card group cursor-pointer glass rounded-3xl transition-all duration-300 flex flex-col h-full relative z-10 hover:z-40 overflow-hidden ${getStatusBorderClass(game.status)}`}
     >
       <div 
         ref={coverContainerRef}
@@ -546,31 +572,29 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
         onMouseMove={handleCardMouseMove}
         onMouseUp={handleCardMouseUpOrLeave}
         onMouseLeave={handleCardMouseUpOrLeave}
-        className={`relative h-56 rounded-t-3xl shrink-0 overflow-hidden ${isAdjusting ? "cursor-move border-2 border-dashed border-cyan-400" : ""}`}
+        className={`relative rounded-t-3xl shrink-0 overflow-hidden ${isAdjusting ? "cursor-move border-2 border-dashed border-cyan-400" : ""}`}
+        style={{ height: "clamp(10.5rem, 15vw, 14rem)" }}
       >
         <div className="w-full h-full rounded-t-3xl overflow-hidden group-hover:scale-[1.03] transition-transform duration-500 ease-out relative">
-          <img
+          <CachedImage
             src={coverImg}
             alt=""
             loading="lazy"
             decoding="async"
             className="absolute inset-0 w-full h-full object-cover blur-md scale-110 opacity-50 select-none pointer-events-none"
           />
-          <img
+          <CachedImage
             src={coverImg}
             loading="lazy"
             decoding="async"
             className="w-full h-full object-cover origin-center select-none pointer-events-none relative z-10"
             style={imageStyle}
             alt={game.name}
-            referrerPolicy="no-referrer"
-            onError={(e: any) => {
-              (e.target as HTMLImageElement).src = "https://placehold.co/800x600/040406/ffffff?text=Sem+Capa";
-            }}
+            fallbackSrc="https://placehold.co/800x600/040406/ffffff?text=Sem+Capa"
           />
 
           {/* Random Diary Image Overlay (after hover) */}
-          {activeRandomImage ? (
+          {activeRandomImage && !isAdjusting ? (
             <div 
               className="absolute inset-0 z-20 rounded-t-3xl overflow-hidden transition-all duration-300 animate-fadeIn bg-zinc-950/20 cursor-zoom-in group/diaryimg"
               onClick={(e) => {
@@ -581,11 +605,10 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
               }}
               title="Clique na imagem para expandir no Modo Teatro (tela cheia)"
             >
-              <img
+              <CachedImage
                 src={activeRandomImage}
                 alt="Diário de Jogatina"
                 className="w-full h-full object-cover transition-all duration-500 group-hover/diaryimg:scale-105 cursor-zoom-in relative z-10"
-                referrerPolicy="no-referrer"
                 onError={() => {
                   const brokenUrl = activeRandomImage;
                   if (brokenUrl) {
@@ -632,10 +655,11 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 </button>
               </div>
             </div>
-          ) : validDiaryImages.length > 0 ? (
+          ) : validDiaryImages.length > 0 && !isAdjusting ? (
             <div 
               onClick={(e) => {
                 e.stopPropagation();
+                if (isAdjusting) return;
                 const pref = sessionStorage.getItem("spoiler_warning_preference");
                 if (pref === "declined") return;
                 if (!pref) {
@@ -645,6 +669,10 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 pickRandomImage();
                 if (intervalTimerRef.current) clearInterval(intervalTimerRef.current);
                 intervalTimerRef.current = setInterval(() => {
+                  if (isAdjusting) {
+                    if (intervalTimerRef.current) clearInterval(intervalTimerRef.current);
+                    return;
+                  }
                   pickRandomImage();
                 }, 3000);
               }}
@@ -810,6 +838,16 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (hoverTimerRef.current) {
+                    clearTimeout(hoverTimerRef.current);
+                    hoverTimerRef.current = null;
+                  }
+                  if (intervalTimerRef.current) {
+                    clearInterval(intervalTimerRef.current);
+                    intervalTimerRef.current = null;
+                  }
+                  setActiveRandomImage(null);
+                  setShowSpoilerPrompt(false);
                   setTempPosX(posX);
                   setTempPosY(posY);
                   setTempZoom(zoom);
@@ -880,7 +918,7 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
           <div className="flex items-start gap-3">
             {renderIcon(game, "w-11 h-11 rounded-2xl shrink-0 mt-0.5 shadow-md border border-zinc-800")}
             <div className="min-w-0 flex-1">
-              <h3 className="text-base sm:text-lg font-extrabold text-white group-hover:text-cyan-300 transition-colors break-words leading-tight">
+              <h3 className="font-extrabold text-white group-hover:text-cyan-300 transition-colors break-words leading-tight" style={{ fontSize: "clamp(0.875rem, 1.1vw, 1.125rem)" }}>
                 <span className="align-middle">{game.name}</span>
                 {getGameTrophyItems(game).length > 0 && (
                   <span className="inline-flex align-middle ml-2 shrink-0">
@@ -978,8 +1016,8 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
             </div>
           )}
         </div>
-        <div className="mt-4 pt-4 border-t border-zinc-850">
-          <div className="flex items-stretch justify-between gap-2.5">
+        <div className="mt-3.5 sm:mt-4 pt-2.5 sm:pt-3 border-t border-zinc-850">
+          <div className="grid grid-cols-1 xs:grid-cols-2 gap-2 2xl:gap-2.5 items-stretch">
             {(() => {
               const breakdown = getGameTimeBreakdown(game);
               const playParsed = parseContextNote(breakdown.playtimeRaw);
@@ -988,21 +1026,21 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
 
               return (
                 <div 
-                  className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800/60 shrink-0 relative group/playtime"
+                  className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2 2xl:p-2.5 rounded-xl border border-zinc-800/60 min-w-0 relative group/playtime"
                   data-tooltip={`${breakdown.currentLabel} | ${breakdown.extraLabel} | ${breakdown.totalLabel}`}
                   data-tooltip-title="Resumo de Tempo de Jogo"
                   data-tooltip-theme="cyan"
                 >
                   {/* Row 1: Main/Current/Campanha/Season Time */}
-                  <div className="flex items-center justify-between gap-1 text-xs text-purple-300 font-mono font-semibold">
+                  <div className="flex items-center justify-between gap-1 text-[11px] 2xl:text-xs text-purple-300 font-mono font-semibold">
                     <div 
-                      className="flex items-center gap-1.5 cursor-help" 
+                      className="flex items-center gap-1.5 cursor-help min-w-0 truncate" 
                       data-tooltip={playParsed.note ? `${breakdown.currentLabel}: ${breakdown.isGaaS || breakdown.isCurrentlyPlaying ? breakdown.currentTimeFormatted : breakdown.finalTimeFormatted} (${playParsed.note})` : `${breakdown.currentLabel}: ${breakdown.isGaaS || breakdown.isCurrentlyPlaying ? breakdown.currentTimeFormatted : breakdown.finalTimeFormatted}`}
                       data-tooltip-title={breakdown.currentLabel}
                       data-tooltip-theme="purple"
                     >
-                      <Clock size={13} className="text-purple-400 shrink-0" />
-                      <strong className="text-purple-200">
+                      <Clock size={12} className="text-purple-400 shrink-0" />
+                      <strong className="text-purple-200 truncate">
                         {breakdown.isGaaS || breakdown.isCurrentlyPlaying
                           ? breakdown.currentTimeFormatted
                           : breakdown.finalTimeFormatted}
@@ -1014,35 +1052,35 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                         e.stopPropagation();
                         startLiveSessionForGame(game.id);
                       }}
-                      className="p-1 rounded-md bg-cyan-950/90 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 hover:text-white transition-all cursor-pointer shadow-sm active:scale-95 ml-1"
+                      className="p-1 rounded-md bg-cyan-950/90 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 hover:text-white transition-all cursor-pointer shadow-sm active:scale-95 shrink-0"
                       data-tooltip="Iniciar Cronômetro de Sessão ao Vivo para este jogo"
                       data-tooltip-title="Sessão ao Vivo"
                       data-tooltip-theme="cyan"
                     >
-                      <Play size={10} className="fill-cyan-400" />
+                      <Play size={9} className="fill-cyan-400" />
                     </button>
                   </div>
 
                   {/* Row 2: Extra Time / Account Time */}
                   <div 
-                    className="flex items-center gap-1.5 text-xs text-cyan-300 font-mono font-semibold cursor-help" 
+                    className="flex items-center gap-1.5 text-[11px] 2xl:text-xs text-cyan-300 font-mono font-semibold cursor-help min-w-0 truncate" 
                     data-tooltip={addParsed.note ? `${breakdown.extraLabel}: ${breakdown.extraTimeFormatted} (${addParsed.note})` : `${breakdown.extraLabel}: ${breakdown.extraTimeFormatted}`}
                     data-tooltip-title={breakdown.extraLabel}
                     data-tooltip-theme="cyan"
                   >
-                    <Clock size={13} className="text-cyan-400 shrink-0" />
-                    <strong className="text-cyan-200">{breakdown.extraTimeFormatted}</strong>
+                    <Clock size={12} className="text-cyan-400 shrink-0" />
+                    <strong className="text-cyan-200 truncate">{breakdown.extraTimeFormatted}</strong>
                   </div>
 
                   {/* Row 3: Total Time */}
                   <div 
-                    className="flex items-center gap-1.5 text-xs text-emerald-300 font-mono font-bold cursor-help" 
+                    className="flex items-center gap-1.5 text-[11px] 2xl:text-xs text-emerald-300 font-mono font-bold cursor-help min-w-0 truncate" 
                     data-tooltip={`${breakdown.totalLabel}: Somatório do ${breakdown.currentLabel} (${breakdown.isGaaS || breakdown.isCurrentlyPlaying ? breakdown.currentTimeFormatted : breakdown.finalTimeFormatted}) + ${breakdown.extraLabel} (${breakdown.extraTimeFormatted})`}
                     data-tooltip-title={breakdown.totalLabel}
                     data-tooltip-theme="emerald"
                   >
-                    <Clock size={13} className="text-emerald-400 shrink-0" />
-                    <strong className="text-emerald-300">{breakdown.totalTimeFormatted}</strong>
+                    <Clock size={12} className="text-emerald-400 shrink-0" />
+                    <strong className="text-emerald-300 truncate">{breakdown.totalTimeFormatted}</strong>
                   </div>
 
                   {hasCustomNote && (
@@ -1069,59 +1107,59 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
               );
             })()}
             <div 
-              className="flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800/60 shrink-0 ml-auto min-w-0 overflow-hidden"
+              className="rating-container flex flex-col justify-center gap-1.5 bg-zinc-950/80 p-2 2xl:p-2.5 rounded-xl border border-zinc-800/60 min-w-0 overflow-hidden"
               title="Avaliações e Notas do Jogo"
             >
               <div 
-                className="flex items-center justify-start gap-2.5 w-full min-w-0"
+                className="flex items-center justify-between gap-1 w-full min-w-0"
                 title={`Avaliação Pessoal: ${game.rating || 0} de 5 estrelas`}
               >
-                <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-bold text-zinc-300 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
+                <span className="shrink-0 text-[clamp(0.55rem,0.85vw,0.6875rem)] font-bold text-zinc-300 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-0.5 sm:gap-1">
                   <span className="w-1.5 h-1.5 rounded-full bg-purple-400 shrink-0"></span>
-                  <span>Pessoal</span> <span className="text-zinc-400 font-mono text-[10px]">({game.rating || 0})</span>
+                  <span>Pessoal</span> <span className="text-zinc-400 font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">({game.rating || 0})</span>
                 </span>
-                <div className="flex items-center shrink-0">{renderStars(game.rating || 0, `${game.id}-top-personal`, "w-3 h-3 sm:w-3.5 sm:h-3.5")}</div>
+                <div className="flex items-center shrink-0 min-w-0 gap-0.5 flex-wrap justify-end">{renderStars(game.rating || 0, `${game.id}-top-personal`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]")}</div>
               </div>
 
               {game.metacriticCritScore !== undefined && game.metacriticCritScore !== null ? (
                 <div 
-                  className="flex items-center justify-start gap-2.5 w-full min-w-0"
+                  className="flex items-center justify-between gap-1 w-full min-w-0"
                   title={`Nota da Crítica (Metacritic): ${game.metacriticCritScore} de 100`}
                 >
-                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-bold text-amber-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
+                  <span className="shrink-0 text-[clamp(0.55rem,0.85vw,0.6875rem)] font-bold text-amber-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-0.5 sm:gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-400 shrink-0"></span>
-                    <span>Crítica</span> <span className="font-mono text-[10px]">({game.metacriticCritScore})</span>
+                    <span>Crítica</span> <span className="font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">({game.metacriticCritScore})</span>
                   </span>
-                  <div className="flex items-center shrink-0">{renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-top-crit`, "w-3 h-3 sm:w-3.5 sm:h-3.5", "", game.metacriticCritScore >= 95)}</div>
+                  <div className="flex items-center shrink-0 min-w-0 gap-0.5 flex-wrap justify-end">{renderStars(Math.round((game.metacriticCritScore / 20) * 2) / 2, `${game.id}-top-crit`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]", "", game.metacriticCritScore >= 95)}</div>
                 </div>
               ) : (
-                <div className="flex items-center justify-start gap-2.5 w-full min-w-0 opacity-40" title="Nota da Crítica: N/A">
-                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-medium text-zinc-500 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
+                <div className="flex items-center justify-between gap-1 w-full min-w-0 opacity-40" title="Nota da Crítica: N/A">
+                  <span className="shrink-0 text-[clamp(0.55rem,0.85vw,0.6875rem)] font-medium text-zinc-500 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-0.5 sm:gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
-                    <span>Crítica</span> <span className="font-mono text-[10px]">(N/A)</span>
+                    <span>Crítica</span> <span className="font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">(N/A)</span>
                   </span>
-                  <div className="flex items-center shrink-0 opacity-30">{renderStars(0, `${game.id}-top-crit-na`, "w-3 h-3 sm:w-3.5 sm:h-3.5")}</div>
+                  <div className="flex items-center shrink-0 min-w-0 opacity-30 gap-0.5 flex-wrap justify-end">{renderStars(0, `${game.id}-top-crit-na`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]")}</div>
                 </div>
               )}
 
               {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null ? (
                 <div 
-                  className="flex items-center justify-start gap-2.5 w-full min-w-0"
+                  className="flex items-center justify-between gap-1 w-full min-w-0"
                   title={`Nota do Público (Metacritic): ${game.metacriticUserScore.toFixed(1)} de 10`}
                 >
-                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-bold text-cyan-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
+                  <span className="shrink-0 text-[clamp(0.55rem,0.85vw,0.6875rem)] font-bold text-cyan-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-0.5 sm:gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
-                    <span>Público</span> <span className="font-mono text-[10px]">({game.metacriticUserScore.toFixed(1)})</span>
+                    <span>Público</span> <span className="font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">({game.metacriticUserScore.toFixed(1)})</span>
                   </span>
-                  <div className="flex items-center shrink-0">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-3 h-3 sm:w-3.5 sm:h-3.5", "", game.metacriticUserScore >= 9.5)}</div>
+                  <div className="flex items-center shrink-0 min-w-0 gap-0.5 flex-wrap justify-end">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]", "", game.metacriticUserScore >= 9.5)}</div>
                 </div>
               ) : (
-                <div className="flex items-center justify-start gap-2.5 w-full min-w-0 opacity-40" title="Nota do Público: N/A">
-                  <span className="w-[86px] sm:w-[90px] shrink-0 text-[10px] sm:text-[11px] font-medium text-zinc-500 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-1">
+                <div className="flex items-center justify-between gap-1 w-full min-w-0 opacity-40" title="Nota do Público: N/A">
+                  <span className="shrink-0 text-[clamp(0.55rem,0.85vw,0.6875rem)] font-medium text-zinc-500 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-0.5 sm:gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-600 shrink-0"></span>
-                    <span>Público</span> <span className="font-mono text-[10px]">(N/A)</span>
+                    <span>Público</span> <span className="font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">(N/A)</span>
                   </span>
-                  <div className="flex items-center shrink-0 opacity-30">{renderStars(0, `${game.id}-top-user-na`, "w-3 h-3 sm:w-3.5 sm:h-3.5")}</div>
+                  <div className="flex items-center shrink-0 min-w-0 opacity-30 gap-0.5 flex-wrap justify-end">{renderStars(0, `${game.id}-top-user-na`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]")}</div>
                 </div>
               )}
             </div>

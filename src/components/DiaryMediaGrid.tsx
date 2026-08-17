@@ -10,6 +10,7 @@ import { getYoutubeEmbedUrl } from "../utils/youtube";
 import { YouTubeThumbnail } from "./YouTubeThumbnail";
 import { resolveSingleMediaUrl } from "../utils/mediaRepair";
 import { CustomConfirm } from "./CustomDialogs";
+import CachedImage from "./CachedImage";
 
 interface DiaryMediaGridProps {
   medias: MediaItem[];
@@ -481,19 +482,19 @@ function LazyMediaCard({
             </div>
           )}
 
-          <img
+          <CachedImage
             src={media.src}
             className={`w-full h-full object-contain transition-all duration-500 hover:scale-[1.04] ${
               isLoaded ? "opacity-100 scale-100" : "opacity-0 scale-95"
             } ${isSelectionMode ? "" : "cursor-zoom-in"}`}
             alt="Anexo de diário"
             loading="lazy"
-            referrerPolicy="no-referrer"
             onClick={(e) => {
               if (isSelectionMode) return;
               handleOpenZoom(media.src);
             }}
-            onLoad={() => setIsLoaded(true)}
+            onLoadingComplete={() => setIsLoaded(true)}
+            fallbackSrc="https://placehold.co/400x300/040406/ffffff?text=Falha+de+Mídia"
             onError={async (e: any) => {
               const imgEl = e.target as HTMLImageElement;
               const currentSrc = media.src;
@@ -510,7 +511,6 @@ function LazyMediaCard({
                 }
               }
               setIsLoaded(true);
-              imgEl.src = "https://placehold.co/400x300/040406/ffffff?text=Falha+de+Mídia";
             }}
           />
 

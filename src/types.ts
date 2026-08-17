@@ -39,7 +39,7 @@ export interface TrashItem {
 }
 
 export interface TrophyItem {
-  type: "silver" | "gold" | "platinum";
+  type: "bronze" | "silver" | "gold" | "platinum";
   note?: string;
 }
 
@@ -68,7 +68,8 @@ export interface Game {
   series: string;
   cover: string;
   status: string[]; // e.g. ["Jogando", "Terminado"]
-  platform: string;
+  platform: string; // Plataforma de Escolha (onde joguei / exibida no card)
+  availablePlatforms?: string[] | string; // Plataformas Disponíveis (onde o jogo foi lançado)
   genre: string[];
   tags: string[];
   publisher: string;
@@ -99,8 +100,8 @@ export interface Game {
   metacriticUrl?: string;
   metacriticCritScore?: number;
   metacriticUserScore?: number;
-  trophy?: "none" | "silver" | "gold" | "platinum";
-  trophies?: (("silver" | "gold" | "platinum") | TrophyItem)[];
+  trophy?: "none" | "bronze" | "silver" | "gold" | "platinum";
+  trophies?: (("bronze" | "silver" | "gold" | "platinum") | TrophyItem)[];
   pros?: string;
   cons?: string;
   isGaaS?: boolean;
@@ -116,35 +117,121 @@ export interface Game {
   gogLastPlayedTimestamp?: number;
   gogAchievementsCount?: number;
   gogAchievementsTotal?: number;
+  igdbId?: number;
+  igdbRating?: number;
+  igdbSlug?: string;
+  igdbUrl?: string;
+  steamGridDbId?: number;
+}
+
+export interface SteamGridGameCandidate {
+  id: number;
+  name: string;
+  types?: string[];
+  verified?: boolean;
+}
+
+export interface SteamGridAuthor {
+  name?: string;
+  steam64?: string;
+  avatar?: string;
+}
+
+export type SteamGridAssetType = "grid" | "hero" | "logo" | "icon";
+
+export interface SteamGridMediaItem {
+  id: string | number;
+  rawId?: number;
+  type: SteamGridAssetType;
+  title?: string;
+  style?: string; // "alternate" | "blurred" | "material" | "white_logo" | "official" | "custom"
+  width?: number;
+  height?: number;
+  orientation?: "vertical" | "horizontal" | "square" | "panoramic";
+  url: string;
+  thumb?: string;
+  thumbUrl: string;
+  mime?: string;
+  score?: number;
+  nsfw?: boolean;
+  humor?: boolean;
+  notes?: string;
+  language?: string;
+  author?: SteamGridAuthor;
+  gameId?: number;
+  gameName?: string;
+}
+
+export interface SteamGridStatusResult {
+  connected: boolean;
+  isCustomKey: boolean;
+  message?: string;
+  keyMasked?: string;
+}
+
+export interface IgdbGameCandidate {
+  id: number;
+  name: string;
+  slug?: string;
+  series?: string;
+  summary?: string;
+  storyline?: string;
+  releaseDate?: string; // YYYY-MM-DD
+  developer?: string;
+  publisher?: string;
+  genres: string[];
+  platforms: string[];
+  rating?: number; // 0-100 (user)
+  aggregatedRating?: number; // 0-100 (critic)
+  totalRating?: number; // 0-100 (combined)
+  coverUrl?: string;
+  coverHdUrl?: string;
+  iconUrl?: string;
+  artworks?: { id: number; url: string; hdUrl: string }[];
+  screenshots?: { id: number; url: string; hdUrl: string }[];
+  videos?: { id: number; videoId: string; title?: string; youtubeUrl: string }[];
+  igdbUrl?: string;
+  source?: "igdb" | "ai" | "steam";
+}
+
+export interface IgdbMediaItem {
+  id: string | number;
+  type: "cover" | "artwork" | "screenshot";
+  title: string;
+  thumbnailUrl: string;
+  fullUrl: string;
+  width?: number;
+  height?: number;
 }
 
 export function getGameTrophyItems(game: Partial<Game>): TrophyItem[] {
   if (Array.isArray(game.trophies) && game.trophies.length > 0) {
     return game.trophies.map((item) => {
       if (typeof item === "string") {
-        return { type: item as "silver" | "gold" | "platinum", note: "" };
+        return { type: item as "bronze" | "silver" | "gold" | "platinum", note: "" };
       }
       if (item && typeof item === "object" && item.type) {
-        return { type: item.type, note: item.note || "" };
+        return { type: item.type as "bronze" | "silver" | "gold" | "platinum", note: item.note || "" };
       }
       return { type: "silver", note: "" };
     });
   }
   if (game.trophy && game.trophy !== "none") {
-    return [{ type: game.trophy as "silver" | "gold" | "platinum", note: "" }];
+    return [{ type: game.trophy as "bronze" | "silver" | "gold" | "platinum", note: "" }];
   }
   return [];
 }
 
-export function getGameTrophies(game: Partial<Game>): ("silver" | "gold" | "platinum")[] {
+export function getGameTrophies(game: Partial<Game>): ("bronze" | "silver" | "gold" | "platinum")[] {
   return getGameTrophyItems(game).map((item) => item.type);
 }
 
-export function getGameHighestTrophy(game: Partial<Game>): "none" | "silver" | "gold" | "platinum" {
+export function getGameHighestTrophy(game: Partial<Game>): "none" | "bronze" | "silver" | "gold" | "platinum" {
   const trophyTypes = getGameTrophies(game);
   if (trophyTypes.includes("platinum")) return "platinum";
   if (trophyTypes.includes("gold")) return "gold";
   if (trophyTypes.includes("silver")) return "silver";
+  if (trophyTypes.includes("bronze")) return "bronze";
   return "none";
 }
 

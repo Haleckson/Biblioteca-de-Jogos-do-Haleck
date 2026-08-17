@@ -32,7 +32,7 @@ export default function StatsCards({ games, activeTab, onTabChange }: StatsProps
   ];
 
   return (
-    <div id="stats-container" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-10">
+    <div id="stats-container" className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5 sm:gap-3.5 lg:gap-4 mb-6 sm:mb-10">
       {stats.map((stat, idx) => {
         const Icon = stat.icon;
         const isActive = activeTab === stat.value;

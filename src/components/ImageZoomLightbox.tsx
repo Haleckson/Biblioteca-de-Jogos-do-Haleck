@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
 import { getYoutubeEmbedUrl } from "../utils/youtube";
+import { getCachedImageUrl, preloadImagesToCache } from "../utils/imageCacheManager";
 
 interface ImageZoomLightboxProps {
   isOpen: boolean;
@@ -43,6 +44,7 @@ export default function ImageZoomLightbox({
   const [copied, setCopied] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [imgError, setImgError] = useState(false);
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(currentSrc);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const initialTouchDistRef = useRef<number | null>(null);
@@ -108,27 +110,31 @@ export default function ImageZoomLightbox({
     return foundIdx !== -1 ? foundIdx : 0;
   }, [currentSrc, validImages]);
 
-  // Reset states when opening a new image
+  // Reset states and resolve cache when opening a new image
   useEffect(() => {
     if (currentSrc) {
       setZoomScale(1);
       setImgError(false);
       setControlsVisible(true);
-    }
-  }, [currentSrc]);
+      setResolvedSrc(currentSrc);
 
-  // Preload adjacent images
+      if (!isVideo) {
+        getCachedImageUrl(currentSrc).then((cached) => {
+          if (cached) setResolvedSrc(cached);
+        });
+      }
+    }
+  }, [currentSrc, isVideo]);
+
+  // Preload adjacent images into CacheStorage
   useEffect(() => {
     if (!isOpen || currentIndex === -1 || validImages.length <= 1) return;
 
     const nextIndex = (currentIndex + 1) % validImages.length;
     const prevIndex = (currentIndex - 1 + validImages.length) % validImages.length;
+    const adjacent = [validImages[nextIndex], validImages[prevIndex]].filter(Boolean);
 
-    const imgNext = new Image();
-    imgNext.src = validImages[nextIndex];
-
-    const imgPrev = new Image();
-    imgPrev.src = validImages[prevIndex];
+    preloadImagesToCache(adjacent);
   }, [isOpen, currentIndex, validImages]);
 
   // Navigate functions
@@ -422,7 +428,7 @@ export default function ImageZoomLightbox({
                 dragTransition={{ bounceStiffness: 300, bounceDamping: 30 }}
                 animate={{ scale: zoomScale }}
                 transition={{ type: "spring", stiffness: 320, damping: 28 }}
-                src={currentSrc}
+                src={resolvedSrc || currentSrc}
                 alt="Zoom Imagem"
                 onDoubleClick={handleDoubleTap}
                 onClick={(e) => {

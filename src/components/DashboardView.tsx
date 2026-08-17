@@ -39,9 +39,10 @@ import {
   PieChart as PieChartIcon,
   TrendingDown,
 } from "lucide-react";
-import { Game, getDlcMode, formatDateDisplay, splitEntities, getGameHighestTrophy, parseContextNote } from "../types";
+import { Game, getDlcMode, formatDateDisplay, splitEntities, getGameHighestTrophy, getGameTrophies, parseContextNote } from "../types";
 import TrophyBadge from "./TrophyBadge";
 import { formatSteamPlaytime } from "../utils/steamApi";
+import CachedImage from "./CachedImage";
 
 interface DashboardViewProps {
   games: Game[];
@@ -462,6 +463,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         platinumCount: 0,
         goldCount: 0,
         silverCount: 0,
+        bronzeCount: 0,
         avgMetacritic: 0,
         metacriticRatedCount: 0,
         avgUserScoreConverted: 0,
@@ -500,6 +502,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     let platinumCount = 0;
     let goldCount = 0;
     let silverCount = 0;
+    let bronzeCount = 0;
 
     let metacriticSum = 0;
     let metacriticRatedCount = 0;
@@ -584,6 +587,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       if (highestTrophy === "platinum") platinumCount++;
       else if (highestTrophy === "gold") goldCount++;
       else if (highestTrophy === "silver") silverCount++;
+      else if (highestTrophy === "bronze") bronzeCount++;
 
       // Metacritic & User Ratings
       if (typeof game.metacriticCritScore === "number" && game.metacriticCritScore > 0) {
@@ -747,6 +751,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       platinumCount,
       goldCount,
       silverCount,
+      bronzeCount,
       avgMetacritic,
       metacriticRatedCount,
       avgUserScoreConverted,
@@ -1237,7 +1242,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   subtitle: `${stats.platinumCount} platinas`,
                   explanation: "Conquista máxima de 100% de conclusão nos seus títulos zerados.",
                   icon: <Trophy className="text-slate-100" size={20} />,
-                  gamesList: games.filter(g => g.trophy === "platinum"),
+                  gamesList: games.filter(g => getGameTrophies(g).includes("platinum")),
                   metricType: "trophies",
                 });
               }}
@@ -1256,7 +1261,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   subtitle: `${stats.goldCount} conquistas de Ouro`,
                   explanation: "Títulos onde você alcançou o selo de Ouro.",
                   icon: <Trophy className="text-amber-400" size={20} />,
-                  gamesList: games.filter(g => g.trophy === "gold"),
+                  gamesList: games.filter(g => getGameTrophies(g).includes("gold")),
                   metricType: "trophies",
                 });
               }}
@@ -1275,7 +1280,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   subtitle: `${stats.silverCount} conquistas de Prata`,
                   explanation: "Títulos onde você alcançou o selo de Prata.",
                   icon: <Trophy className="text-zinc-400" size={20} />,
-                  gamesList: games.filter(g => g.trophy === "silver"),
+                  gamesList: games.filter(g => getGameTrophies(g).includes("silver")),
                   metricType: "trophies",
                 });
               }}
@@ -1285,6 +1290,25 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 <TrophyBadge trophy="silver" mode="detail" />
               </div>
               <span className="text-lg font-black text-zinc-300 font-mono">{stats.silverCount}</span>
+            </div>
+
+            <div 
+              onClick={() => {
+                setActiveModal({
+                  title: "Jogos com Troféu de Bronze",
+                  subtitle: `${stats.bronzeCount} conquistas de Bronze`,
+                  explanation: "Jogos que você jogou o suficiente mas não foram concluídos.",
+                  icon: <Trophy className="text-amber-600" size={20} />,
+                  gamesList: games.filter(g => getGameTrophies(g).includes("bronze")),
+                  metricType: "trophies",
+                });
+              }}
+              className="p-3 rounded-2xl bg-amber-950/30 border border-amber-700/40 hover:border-amber-700/70 flex items-center justify-between cursor-pointer transition-all"
+            >
+              <div className="flex items-center gap-2.5">
+                <TrophyBadge trophy="bronze" mode="detail" />
+              </div>
+              <span className="text-lg font-black text-amber-500 font-mono">{stats.bronzeCount}</span>
             </div>
           </div>
 
@@ -2330,7 +2354,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                         #{idx + 1}
                       </div>
                       <div className="w-9 h-11 rounded-xl overflow-hidden shrink-0 bg-zinc-900">
-                        <img
+                        <CachedImage
                           src={game.cover}
                           alt={game.name}
                           loading="lazy"
@@ -2424,7 +2448,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </span>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 2xl:grid-cols-6 gap-3">
               {stats.recentlyFinishedGames.map((game) => (
                 <RecentlyFinishedGameCard
                   key={game.id}
@@ -2782,7 +2806,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       >
                         <div className="flex items-center gap-3 min-w-0">
                           <div className="w-10 h-12 rounded-xl overflow-hidden shrink-0 bg-zinc-900">
-                            <img
+                            <CachedImage
                               src={game.cover || "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=800"}
                               alt={game.name}
                               loading="lazy"

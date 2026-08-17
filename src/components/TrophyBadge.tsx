@@ -7,7 +7,7 @@ import React from "react";
 import { Trophy, Sparkles } from "lucide-react";
 import { TrophyItem } from "../types";
 
-export type TrophyType = "none" | "silver" | "gold" | "platinum" | string;
+export type TrophyType = "none" | "bronze" | "silver" | "gold" | "platinum" | string;
 
 export interface TrophyBadgeProps {
   key?: React.Key;
@@ -18,6 +18,16 @@ export interface TrophyBadgeProps {
 }
 
 export const TROPHY_INFO = {
+  bronze: {
+    name: "Troféu de Bronze",
+    shortName: "Bronze",
+    description: "Bronze: Joguei o suficiente mas não foi concluído",
+    colorClass: "text-amber-600",
+    borderClass: "border-amber-700/60",
+    bgClass: "bg-amber-950/80",
+    glowClass: "shadow-[0_0_10px_rgba(217,119,6,0.3)]",
+    iconColor: "text-amber-600",
+  },
   silver: {
     name: "Troféu de Prata",
     shortName: "Prata",

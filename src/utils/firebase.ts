@@ -143,6 +143,7 @@ export const syncFromFirebase = (
             gogAchievementsTotal: typeof game.gogAchievementsTotal === "number" ? game.gogAchievementsTotal : undefined,
             diary: diaryRaw.map((entry: any) => {
               const mediasRaw = parseArraySafely(entry.medias);
+              const keyMomentsRaw = parseArraySafely(entry.keyMoments);
               return {
                 id: entry.id || "",
                 period: entry.period || "",
@@ -155,6 +156,11 @@ export const syncFromFirebase = (
                     deleteUrl: media.deleteUrl || "",
                   })),
                 text: entry.text || "",
+                keyMoments: Array.isArray(keyMomentsRaw) && keyMomentsRaw.length > 0
+                  ? keyMomentsRaw.map((k: any) => String(k).trim()).filter(Boolean)
+                  : (Array.isArray(entry.keyMoments) && entry.keyMoments.length > 0
+                      ? entry.keyMoments.map((k: any) => String(k).trim()).filter(Boolean)
+                      : undefined),
               };
             }),
             dictionary: parseArraySafely(game.dictionary).map((d: any) => ({

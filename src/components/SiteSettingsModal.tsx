@@ -3,8 +3,8 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
-import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers } from "lucide-react";
 import { isSoundEffectsEnabled, setSoundEffectsEnabled, playRetroSound } from "../utils/audioEffects";
 import { getCustomImgBBKey } from "../utils/imgbb";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
@@ -25,6 +25,29 @@ import {
   isGogOAuthConnected,
   getGogOAuthStatus
 } from "../utils/gogApi";
+import {
+  getStoredIgdbClientId,
+  setStoredIgdbClientId,
+  getStoredIgdbClientSecret,
+  setStoredIgdbClientSecret,
+  checkIgdbStatus,
+  IgdbStatusResult,
+  getStoredRateLimitInfo,
+  getIgdbCacheStats,
+  clearIgdbLocalCache,
+  IgdbRateLimitState
+} from "../utils/igdbApi";
+import {
+  getStoredSteamGridApiKey,
+  setStoredSteamGridApiKey,
+  checkSteamGridStatus,
+  clearSteamGridCache
+} from "../utils/steamGridDbApi";
+import { SteamGridStatusResult } from "../types";
+import {
+  getImageCacheStats,
+  clearAllImageCache
+} from "../utils/imageCacheManager";
 
 interface SiteSettingsModalProps {
   isOpen: boolean;
@@ -83,17 +106,197 @@ export default function SiteSettingsModal({
   const [gogDirectAuthModalOpen, setGogDirectAuthModalOpen] = useState(false);
   const [gogDirectInput, setGogDirectInput] = useState(getStoredGogUsername());
   const [gogProfileSummary, setGogProfileSummary] = useState<GogPlayerSummary | null>(null);
+
+  // IGDB / Twitch API State
+  const [igdbClientIdInput, setIgdbClientIdInput] = useState(getStoredIgdbClientId());
+  const [igdbClientSecretInput, setIgdbClientSecretInput] = useState(getStoredIgdbClientSecret());
+  const [showIgdbConfig, setShowIgdbConfig] = useState(false);
+  const [igdbStatus, setIgdbStatus] = useState<IgdbStatusResult | null>(null);
+  const [isCheckingIgdb, setIsCheckingIgdb] = useState(false);
+  const [rateLimitInfo, setRateLimitInfo] = useState<IgdbRateLimitState>(getStoredRateLimitInfo());
+  const [cacheStats, setCacheStats] = useState(getIgdbCacheStats());
+
+  // SteamGridDB API State
+  const [steamGridApiKeyInput, setSteamGridApiKeyInput] = useState(getStoredSteamGridApiKey());
+  const [showSteamGridConfig, setShowSteamGridConfig] = useState(false);
+  const [steamGridStatus, setSteamGridStatus] = useState<SteamGridStatusResult | null>(null);
+  const [isCheckingSteamGrid, setIsCheckingSteamGrid] = useState(false);
+
+  // Local Image Storage Cache State
+  const [imageCacheStats, setImageCacheStats] = useState<{ count: number; sizeBytes: number; sizeFormatted: string }>({
+    count: 0,
+    sizeBytes: 0,
+    sizeFormatted: "0 MB",
+  });
+  const [isClearingImageCache, setIsClearingImageCache] = useState(false);
+
   const [sfxEnabled, setSfxEnabled] = useState(isSoundEffectsEnabled());
 
-  // Auto load profile summary on mount if username is configured
-  React.useEffect(() => {
+  // Auto load profile summary, IGDB and SteamGridDB status on mount
+  useEffect(() => {
+    getImageCacheStats().then(setImageCacheStats);
+
     const user = getStoredGogUsername();
     if (user) {
       fetchGogProfile(user).then((p) => {
         if (p) setGogProfileSummary(p);
       });
     }
+
+    checkIgdbStatus().then((res) => {
+      setIgdbStatus(res);
+      if (res.rateLimit) {
+        setRateLimitInfo(res.rateLimit);
+      }
+    });
+
+    checkSteamGridStatus().then((res) => {
+      setSteamGridStatus(res);
+    });
+
+    setCacheStats(getIgdbCacheStats());
   }, []);
+
+  // Update Rate Limit info when window receives custom event or ticking every second
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const handleRateLimitUpdated = (e: any) => {
+      if (e.detail) {
+        setRateLimitInfo(e.detail);
+      }
+    };
+
+    window.addEventListener("igdb_ratelimit_updated", handleRateLimitUpdated);
+
+    // Live countdown timer for reset seconds
+    const timer = setInterval(() => {
+      setRateLimitInfo((prev) => {
+        if (prev.resetSeconds > 1) {
+          return { ...prev, resetSeconds: prev.resetSeconds - 1 };
+        } else {
+          return {
+            ...prev,
+            resetSeconds: 60,
+            remaining: prev.limit || 800,
+          };
+        }
+      });
+    }, 1000);
+
+    return () => {
+      window.removeEventListener("igdb_ratelimit_updated", handleRateLimitUpdated);
+      clearInterval(timer);
+    };
+  }, [isOpen]);
+
+  const handleTestAndSaveIgdb = async () => {
+    setIsCheckingIgdb(true);
+    try {
+      const res = await checkIgdbStatus(igdbClientIdInput, igdbClientSecretInput);
+      setIgdbStatus(res);
+      if (res.rateLimit) {
+        setRateLimitInfo(res.rateLimit);
+      }
+      setCacheStats(getIgdbCacheStats());
+
+      if (res.connected) {
+        setStoredIgdbClientId(igdbClientIdInput);
+        setStoredIgdbClientSecret(igdbClientSecretInput);
+        if (triggerAlert) {
+          triggerAlert(
+            "IGDB / Twitch Conectado!",
+            `Conexão validada com sucesso com a API do IGDB. As credenciais personalizadas foram salvas localmente.`
+          );
+        }
+      } else {
+        if (triggerAlert) {
+          triggerAlert("Falha no IGDB", res.message || "Não foi possível autenticar as credenciais do IGDB.");
+        }
+      }
+    } catch (err: any) {
+      if (triggerAlert) triggerAlert("Erro no IGDB", err?.message || "Erro ao testar conexão.");
+    } finally {
+      setIsCheckingIgdb(false);
+    }
+  };
+
+  const handleClearCache = () => {
+    clearIgdbLocalCache();
+    setCacheStats(getIgdbCacheStats());
+    if (triggerAlert) {
+      triggerAlert("Cache IGDB Limpo", "O cache local de buscas e capas do IGDB foi esvaziado com sucesso.");
+    }
+  };
+
+  const handleResetIgdbToDefault = async () => {
+    setIgdbClientIdInput("");
+    setIgdbClientSecretInput("");
+    setStoredIgdbClientId("");
+    setStoredIgdbClientSecret("");
+    setIsCheckingIgdb(true);
+    try {
+      const res = await checkIgdbStatus("", "");
+      setIgdbStatus(res);
+      if (res.rateLimit) {
+        setRateLimitInfo(res.rateLimit);
+      }
+      if (triggerAlert) {
+        triggerAlert("IGDB Restaurado", "Credenciais padrão do sistema restauradas com sucesso.");
+      }
+    } finally {
+      setIsCheckingIgdb(false);
+    }
+  };
+
+  const handleTestAndSaveSteamGrid = async () => {
+    setIsCheckingSteamGrid(true);
+    try {
+      const res = await checkSteamGridStatus(steamGridApiKeyInput);
+      setSteamGridStatus(res);
+      if (res.connected) {
+        setStoredSteamGridApiKey(steamGridApiKeyInput);
+        if (triggerAlert) {
+          triggerAlert(
+            "SteamGridDB Conectado!",
+            "Conexão validada com sucesso com a API do SteamGridDB. Sua chave foi salva localmente."
+          );
+        }
+      } else {
+        if (triggerAlert) {
+          triggerAlert("Aviso SteamGridDB", res.message || "Não foi possível validar a chave com o SteamGridDB.");
+        }
+      }
+    } catch (err: any) {
+      if (triggerAlert) {
+        triggerAlert("Erro no SteamGridDB", err?.message || "Erro ao testar chave do SteamGridDB.");
+      }
+    } finally {
+      setIsCheckingSteamGrid(false);
+    }
+  };
+
+  const handleClearSteamGridCache = () => {
+    clearSteamGridCache();
+    if (triggerAlert) {
+      triggerAlert("Cache SteamGridDB Limpo", "O cache local de mídias e ícones do SteamGridDB foi esvaziado.");
+    }
+  };
+
+  const handleResetSteamGridToDefault = async () => {
+    setSteamGridApiKeyInput("");
+    setStoredSteamGridApiKey("");
+    setIsCheckingSteamGrid(true);
+    try {
+      const res = await checkSteamGridStatus("");
+      setSteamGridStatus(res);
+      if (triggerAlert) {
+        triggerAlert("SteamGridDB Restaurado", "Chave personalizada removida. Usando configuração padrão do servidor.");
+      }
+    } finally {
+      setIsCheckingSteamGrid(false);
+    }
+  };
 
   const handleDirectGogLogin = async (inputToAuth?: string) => {
     const target = (inputToAuth || gogDirectInput || gogUsernameInput).trim();
@@ -470,6 +673,297 @@ export default function SiteSettingsModal({
                 )}
               </div>
 
+              {/* IGDB (INTERNET GAME DATABASE) & TWITCH API CARD */}
+              <div className="p-4 bg-zinc-900/80 border border-emerald-500/30 rounded-2xl space-y-3 hover:border-emerald-500/50 transition-all shadow-md md:col-span-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-400 shrink-0 relative">
+                      <Globe size={18} />
+                      {igdbStatus?.connected && (
+                        <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-white">IGDB Database API</span>
+                        {igdbStatus?.connected ? (
+                          <span className="text-[9px] font-semibold text-emerald-400 bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Wifi size={10} className="text-emerald-400 animate-pulse" />
+                            <span>Integração Ativa & Pronta</span>
+                            <span className="text-emerald-500/80 font-mono">({igdbStatus.isCustomKey ? "Própria" : "OAuth2"})</span>
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-semibold text-amber-400 bg-amber-950/50 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <WifiOff size={10} className="text-amber-400" />
+                            <span>Verificando Conexão...</span>
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                        Status de Rede: <strong className={igdbStatus?.connected ? "text-emerald-300 font-semibold" : "text-amber-300 font-semibold"}>{igdbStatus?.connected ? "Online • OAuth2 Conectado" : "Aguardando verificação"}</strong> — capas 1080p, estúdios, datas e galerias oficiais
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleTestAndSaveIgdb}
+                      disabled={isCheckingIgdb}
+                      className="px-3 py-1.5 rounded-xl bg-emerald-600/90 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                    >
+                      {isCheckingIgdb ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      <span>Testar Conexão</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowIgdbConfig(!showIgdbConfig)}
+                      className="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      {showIgdbConfig ? "Ocultar" : "Credenciais"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* RATE LIMIT & CLIENT-SIDE CACHE TELEMETRY COUNTER */}
+                <div className="p-3 bg-zinc-950/70 rounded-xl border border-zinc-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="flex items-center gap-1.5 font-bold text-zinc-300">
+                      <Gauge size={14} className="text-emerald-400" />
+                      <span>Limite de Requisições (Rate Limit)</span>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono text-[11px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                        {rateLimitInfo.remaining} / {rateLimitInfo.limit} livres
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Visual Progress Bar */}
+                  <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full transition-all duration-500 rounded-full ${
+                        rateLimitInfo.remaining > (rateLimitInfo.limit * 0.4)
+                          ? "bg-gradient-to-r from-emerald-500 to-teal-400"
+                          : rateLimitInfo.remaining > (rateLimitInfo.limit * 0.15)
+                          ? "bg-gradient-to-r from-amber-500 to-yellow-400"
+                          : "bg-gradient-to-r from-rose-500 to-red-400"
+                      }`}
+                      style={{
+                        width: `${Math.max(2, Math.min(100, (rateLimitInfo.remaining / (rateLimitInfo.limit || 800)) * 100))}%`,
+                      }}
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-zinc-400 pt-0.5">
+                    <div className="flex items-center gap-1.5">
+                      <Zap size={11} className="text-amber-400" />
+                      <span>
+                        Janela de 60s • Reset em <strong className="text-zinc-200 font-mono">{rateLimitInfo.resetSeconds}s</strong>
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="flex items-center gap-1 text-zinc-400">
+                        <Layers size={11} className="text-cyan-400" />
+                        <span>Cache: <strong className="text-zinc-200">{cacheStats.totalEntries} buscas</strong> (~{cacheStats.estimatedSizeKb} KB)</span>
+                      </span>
+
+                      {cacheStats.totalEntries > 0 && (
+                        <button
+                          type="button"
+                          onClick={handleClearCache}
+                          className="text-[10px] text-zinc-400 hover:text-rose-300 underline cursor-pointer ml-1"
+                        >
+                          Limpar cache
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {showIgdbConfig && (
+                  <div className="pt-2 border-t border-zinc-800 space-y-2.5 animate-fadeIn">
+                    <p className="text-xs text-zinc-400">
+                      O aplicativo já vem pré-configurado com as credenciais oficiais da API Twitch/IGDB. Se desejar usar seu próprio Client ID e Client Secret (BYOB), insira abaixo:
+                    </p>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Client ID (Twitch Console)
+                        </label>
+                        <input
+                          type="text"
+                          value={igdbClientIdInput}
+                          onChange={(e) => setIgdbClientIdInput(e.target.value)}
+                          placeholder="ID do cliente IGDB"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Client Secret
+                        </label>
+                        <input
+                          type="password"
+                          value={igdbClientSecretInput}
+                          onChange={(e) => setIgdbClientSecretInput(e.target.value)}
+                          placeholder="Secret do cliente IGDB"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:border-emerald-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleTestAndSaveIgdb}
+                        disabled={isCheckingIgdb}
+                        className="flex-1 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 shadow-md shadow-emerald-500/20"
+                      >
+                        {isCheckingIgdb ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                        <span>Salvar Chaves Próprias</span>
+                      </button>
+
+                      {(getStoredIgdbClientId() || getStoredIgdbClientSecret()) && (
+                        <button
+                          type="button"
+                          onClick={handleResetIgdbToDefault}
+                          disabled={isCheckingIgdb}
+                          className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-all cursor-pointer"
+                          title="Restaurar chaves padrão do sistema"
+                        >
+                          Restaurar Padrão
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* STEAMGRIDDB API ITEM */}
+              <div className="p-4 bg-zinc-900/80 border border-zinc-800 rounded-2xl space-y-3 hover:border-cyan-500/30 transition-all shadow-md">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2.5 bg-cyan-500/15 border border-cyan-500/30 rounded-xl text-cyan-400 shrink-0 relative">
+                      <Image size={18} />
+                      {steamGridStatus?.connected && (
+                        <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
+                        </span>
+                      )}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-white">SteamGridDB API</span>
+                        {steamGridStatus?.connected ? (
+                          <span className="text-[9px] font-semibold text-cyan-400 bg-cyan-950/60 border border-cyan-500/40 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <Wifi size={10} className="text-cyan-400 animate-pulse" />
+                            <span>Integração Ativa</span>
+                            <span className="text-cyan-500/80 font-mono">({steamGridStatus.isCustomKey ? "Chave Própria" : "Padrão"})</span>
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-semibold text-amber-400 bg-amber-950/50 border border-amber-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <WifiOff size={10} className="text-amber-400" />
+                            <span>{getStoredSteamGridApiKey() ? "Chave não validada" : "Chave necessária"}</span>
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                        Status: <strong className={steamGridStatus?.connected ? "text-cyan-300 font-semibold" : "text-amber-300 font-semibold"}>{steamGridStatus?.connected ? "Online • Busca de Capas & Ícones Ativa" : "Configuração opcional / BYOB"}</strong> — Grids verticais/horizontais, Heroes 1920p, Logos PNG e Ícones
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleTestAndSaveSteamGrid}
+                      disabled={isCheckingSteamGrid}
+                      className="px-3 py-1.5 rounded-xl bg-cyan-600/90 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                    >
+                      {isCheckingSteamGrid ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      <span>Testar Conexão</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowSteamGridConfig(!showSteamGridConfig)}
+                      className="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      {showSteamGridConfig ? "Ocultar" : "Credenciais"}
+                    </button>
+                  </div>
+                </div>
+
+                {showSteamGridConfig && (
+                  <div className="pt-2 border-t border-zinc-800 space-y-2.5 animate-fadeIn">
+                    <p className="text-xs text-zinc-400">
+                      O SteamGridDB fornece artes em alta definição da comunidade (Grids, Heroes panorâmicos, Logos transparentes e Ícones). Você pode gerar uma chave gratuita em{" "}
+                      <a
+                        href="https://www.steamgriddb.com/profile/preferences/api"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-cyan-400 hover:underline font-semibold"
+                      >
+                        steamgriddb.com/profile/preferences/api
+                      </a>.
+                    </p>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                        SteamGridDB API Key (Bearer Token)
+                      </label>
+                      <input
+                        type="password"
+                        value={steamGridApiKeyInput}
+                        onChange={(e) => setSteamGridApiKeyInput(e.target.value)}
+                        placeholder="Insira sua chave de API do SteamGridDB"
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:border-cyan-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleTestAndSaveSteamGrid}
+                        disabled={isCheckingSteamGrid}
+                        className="flex-1 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 shadow-md shadow-cyan-500/20"
+                      >
+                        {isCheckingSteamGrid ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                        <span>Salvar Chave Própria</span>
+                      </button>
+
+                      {getStoredSteamGridApiKey() && (
+                        <button
+                          type="button"
+                          onClick={handleResetSteamGridToDefault}
+                          disabled={isCheckingSteamGrid}
+                          className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-all cursor-pointer"
+                          title="Restaurar padrão"
+                        >
+                          Restaurar Padrão
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleClearSteamGridCache}
+                        className="px-3 py-1.5 rounded-xl bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 text-xs font-medium transition-all cursor-pointer"
+                      >
+                        Limpar Cache de Mídias
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
             </div>
           </div>
 
@@ -577,7 +1071,7 @@ export default function SiteSettingsModal({
           <div className="space-y-2.5 pt-2 border-t border-zinc-800/80">
             <h4 className="text-xs font-bold uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
               <Image size={14} />
-              Serviços de Hospedagem de Imagens
+              Serviços de Hospedagem & Cache de Imagens
             </h4>
 
             <div
@@ -616,6 +1110,54 @@ export default function SiteSettingsModal({
               </div>
 
               <ChevronRight size={18} className="text-zinc-500 group-hover:text-cyan-400 group-hover:translate-x-0.5 transition-all shrink-0 ml-2" />
+            </div>
+
+            {/* Local Image Cache Storage Card */}
+            <div className="p-4 bg-zinc-900/80 border border-zinc-800 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="p-2.5 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-400 shrink-0">
+                  <Zap size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-white">
+                      Acelerador & Cache Local de Imagens
+                    </span>
+                    <span className="text-[9px] font-mono font-bold text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <CheckCircle2 size={9} /> Alta Resolução 100%
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Armazenamento local persistente: <strong className="text-zinc-200">{imageCacheStats.count} imagens</strong> salvas ({imageCacheStats.sizeFormatted}) para carregamento instantâneo.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                <button
+                  type="button"
+                  disabled={isClearingImageCache || imageCacheStats.count === 0}
+                  onClick={async () => {
+                    setIsClearingImageCache(true);
+                    await clearAllImageCache();
+                    const stats = await getImageCacheStats();
+                    setImageCacheStats(stats);
+                    setIsClearingImageCache(false);
+                    if (triggerAlert) {
+                      triggerAlert("Cache de Imagens Limpo", "O cache local de mídias foi esvaziado. As imagens serão recarregadas sob demanda.");
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-750 disabled:opacity-40 disabled:cursor-not-allowed border border-zinc-700 text-xs font-semibold text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
+                  title="Esvaziar cache local de fotos e capas salvas"
+                >
+                  {isClearingImageCache ? (
+                    <Loader2 size={12} className="animate-spin text-emerald-400" />
+                  ) : (
+                    <Trash2 size={12} className="text-rose-400" />
+                  )}
+                  <span>Limpar Cache</span>
+                </button>
+              </div>
             </div>
           </div>
 
