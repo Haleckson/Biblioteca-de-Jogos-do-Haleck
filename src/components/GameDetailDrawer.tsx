@@ -27,6 +27,7 @@ import { mediaUploadQueueManager } from "../utils/mediaUploadManager";
 import { isVideoFile, isImageFile } from "../utils/mediaUtils";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
 import { fetchSteamAchievements, fetchSteamOwnedGames, formatSteamPlaytime, isPcPlatform, SteamAchievementsResult } from "../utils/steamApi";
+import { fetchGogAchievements, fetchGogOwnedGames, formatGogPlaytime, getGogStoreUrl, getGogGalaxyProtocolUrl, resolveGogGame, GogAchievementsResult } from "../utils/gogApi";
 import { showToast } from "../utils/toast";
 import { moveToTrash } from "../utils/trashService";
 import { exportGameDiaryToMarkdown, exportGameDiaryToPrintPDF } from "../utils/exportService";
@@ -707,6 +708,55 @@ export default function GameDetailDrawer({
   const [achievementsSearch, setAchievementsSearch] = useState("");
   const [isAchievementsGalleryOpen, setIsAchievementsGalleryOpen] = useState(false);
 
+  // GOG Galaxy State & Gallery
+  const [gogAchieveData, setGogAchieveData] = useState<GogAchievementsResult | null>(null);
+  const [gogCelebrationData, setGogCelebrationData] = useState<{ diff: number; unlockedCount: number; totalCount: number; gameName: string } | null>(null);
+  const [isSyncingGogDrawer, setIsSyncingGogDrawer] = useState(false);
+  const [gogAchievementsFilter, setGogAchievementsFilter] = useState<"all" | "unlocked" | "locked" | "rare">("all");
+  const [gogAchievementsSort, setGogAchievementsSort] = useState<"unlocked_first" | "rare_first" | "recent">("unlocked_first");
+  const [gogAchievementsSearch, setGogAchievementsSearch] = useState("");
+  const [isGogAchievementsGalleryOpen, setIsGogAchievementsGalleryOpen] = useState(false);
+
+  // Process and filter GOG Achievements
+  const processedGogAchievements = useMemo(() => {
+    if (!gogAchieveData?.achievements) return [];
+
+    let list = [...gogAchieveData.achievements];
+
+    if (gogAchievementsSearch.trim()) {
+      const q = gogAchievementsSearch.toLowerCase().trim();
+      list = list.filter(
+        (a) => (a.name && a.name.toLowerCase().includes(q)) || (a.description && a.description.toLowerCase().includes(q))
+      );
+    }
+
+    if (gogAchievementsFilter === "unlocked") {
+      list = list.filter((a) => a.achieved === 1);
+    } else if (gogAchievementsFilter === "locked") {
+      list = list.filter((a) => a.achieved === 0);
+    } else if (gogAchievementsFilter === "rare") {
+      list = list.filter((a) => a.isUltraRare || (a.globalPercent !== undefined && a.globalPercent <= 10));
+    }
+
+    list.sort((a, b) => {
+      if (gogAchievementsSort === "unlocked_first") {
+        if (a.achieved !== b.achieved) return b.achieved - a.achieved;
+        return (b.unlocktime || 0) - (a.unlocktime || 0);
+      }
+      if (gogAchievementsSort === "rare_first") {
+        const percA = a.globalPercent !== undefined ? a.globalPercent : 100;
+        const percB = b.globalPercent !== undefined ? b.globalPercent : 100;
+        return percA - percB;
+      }
+      if (gogAchievementsSort === "recent") {
+        return (b.unlocktime || 0) - (a.unlocktime || 0);
+      }
+      return 0;
+    });
+
+    return list;
+  }, [gogAchieveData, gogAchievementsSearch, gogAchievementsFilter, gogAchievementsSort]);
+
   // Process and filter Steam Achievements
   const processedAchievements = useMemo(() => {
     if (!steamAchieveData?.achievements) return [];
@@ -940,6 +990,157 @@ export default function GameDetailDrawer({
     triggerAlert("Tempo Atualizado", `O seu Tempo Investido pessoal foi definido para "${formatted}" (Horas da Steam).`);
   };
 
+  const handleSyncGogInDrawer = async () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para sincronizar dados da GOG.");
+      return;
+    }
+    if (!game || (!game.gogGameId && !game.name)) return;
+    setIsSyncingGogDrawer(true);
+    try {
+      let updatedGame = { ...game };
+      let newPlaytime = 0;
+      let newLastPlayed = game.gogLastPlayedTimestamp;
+
+      // 1. Deep GOG resolver
+      try {
+        const resolved = await resolveGogGame(String(game.gogGameId || game.name));
+        if (resolved && resolved.success) {
+          if (!updatedGame.gogGameId && resolved.gameId) {
+            updatedGame.gogGameId = resolved.gameId;
+          }
+          if (resolved.playtime_minutes > 0) {
+            newPlaytime = resolved.playtime_minutes;
+          }
+          if (resolved.last_played_timestamp) {
+            newLastPlayed = resolved.last_played_timestamp;
+          }
+          if (resolved.achievements) {
+            setGogAchieveData(resolved.achievements);
+            const prevCount = game.gogAchievementsCount;
+            const currentCount = resolved.achievements.unlockedCount;
+            const totalCount = resolved.achievements.totalCount;
+
+            if (prevCount !== undefined && currentCount > prevCount) {
+              const diff = currentCount - prevCount;
+              showToast({
+                title: "🏆 Novas Conquistas GOG Desbloqueadas!",
+                message: `Você conquistou +${diff} nova(s) conquista(s) em "${game.name}"!\nTotal: ${currentCount} / ${totalCount}`,
+                type: "achievement",
+                duration: 8000,
+              });
+              setGogCelebrationData({
+                diff,
+                unlockedCount: currentCount,
+                totalCount,
+                gameName: game.name,
+              });
+            }
+
+            updatedGame.gogAchievementsCount = currentCount;
+            updatedGame.gogAchievementsTotal = totalCount;
+          }
+        }
+      } catch (err) {
+        console.warn("Aviso ao resolver jogo na GOG:", err);
+      }
+
+      // 2. Query Owned Games library fallback
+      if (newPlaytime === 0) {
+        try {
+          const ownedList = await fetchGogOwnedGames();
+          const match = ownedList.find((g) => 
+            (updatedGame.gogGameId && String(g.id) === String(updatedGame.gogGameId)) ||
+            g.title.toLowerCase().trim() === game.name.toLowerCase().trim()
+          );
+          if (match) {
+            if (match.playtime_minutes > 0) newPlaytime = match.playtime_minutes;
+            if (match.last_played_timestamp) newLastPlayed = match.last_played_timestamp;
+            if (!updatedGame.gogGameId) updatedGame.gogGameId = String(match.id);
+          }
+        } catch (err) {
+          console.warn("Aviso ao consultar owned games da GOG:", err);
+        }
+      }
+
+      // 3. Query Achievements endpoint
+      const targetGogId = updatedGame.gogGameId || game.gogGameId;
+      if (targetGogId) {
+        try {
+          const ach = await fetchGogAchievements(targetGogId);
+          if (ach) {
+            setGogAchieveData(ach);
+            if (ach.playtime_minutes && ach.playtime_minutes > 0 && newPlaytime === 0) {
+              newPlaytime = ach.playtime_minutes;
+            }
+            const prevCount = game.gogAchievementsCount;
+            const currentCount = ach.unlockedCount;
+            const totalCount = ach.totalCount;
+
+            if (prevCount !== undefined && currentCount > prevCount) {
+              const diff = currentCount - prevCount;
+              showToast({
+                title: "🏆 Novas Conquistas GOG Desbloqueadas!",
+                message: `Você conquistou +${diff} nova(s) conquista(s) em "${game.name}"!\nTotal: ${currentCount} / ${totalCount}`,
+                type: "achievement",
+                duration: 8000,
+              });
+              setGogCelebrationData({
+                diff,
+                unlockedCount: currentCount,
+                totalCount,
+                gameName: game.name,
+              });
+            }
+
+            updatedGame.gogAchievementsCount = currentCount;
+            updatedGame.gogAchievementsTotal = totalCount;
+          }
+        } catch (err) {
+          console.warn("Aviso ao buscar conquistas da GOG:", err);
+        }
+      }
+
+      if (newPlaytime > 0) {
+        updatedGame.gogPlaytimeMinutes = newPlaytime;
+        if (updatedGame.integrationPlatform === "gog") {
+          updatedGame.playtime = formatGogPlaytime(newPlaytime);
+        }
+      }
+      if (newLastPlayed) {
+        updatedGame.gogLastPlayedTimestamp = newLastPlayed;
+      }
+
+      if (onUpdateGame) {
+        onUpdateGame(updatedGame);
+      }
+      triggerAlert(
+        "Sincronização GOG Concluída",
+        `Estatísticas da GOG Galaxy atualizadas! ${newPlaytime > 0 ? `Tempo registrado: ${formatGogPlaytime(newPlaytime)}.` : ""} Conquistas: ${updatedGame.gogAchievementsCount || 0}/${updatedGame.gogAchievementsTotal || 0}.`
+      );
+    } catch (err: any) {
+      console.error(err);
+      triggerAlert("Erro ao Sincronizar", "Não foi possível atualizar os dados da GOG.");
+    } finally {
+      setIsSyncingGogDrawer(false);
+    }
+  };
+
+  const handleCopyGogPlaytimeToPersonal = () => {
+    if (!isAdmin) {
+      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para copiar as horas da GOG para o seu Tempo Investido Pessoal.");
+      return;
+    }
+    if (!game || !game.gogPlaytimeMinutes || !onUpdateGame) return;
+    const formatted = formatGogPlaytime(game.gogPlaytimeMinutes);
+    const updatedGame = {
+      ...game,
+      playtime: formatted,
+    };
+    onUpdateGame(updatedGame);
+    triggerAlert("Tempo Atualizado", `O seu Tempo Investido pessoal foi definido para "${formatted}" (Horas da GOG Galaxy).`);
+  };
+
   const formatLastPlayedDate = (timestamp?: number) => {
     if (!timestamp || timestamp <= 0) return null;
     const date = new Date(timestamp * 1000);
@@ -953,7 +1154,7 @@ export default function GameDetailDrawer({
   };
 
   useEffect(() => {
-    if (game?.steamAppId && isOpen) {
+    if (game?.steamAppId && isOpen && (game.integrationPlatform === "steam" || (!game.integrationPlatform && game.steamAppId))) {
       fetchSteamAchievements(game.steamAppId)
         .then((data) => {
           setSteamAchieveData(data);
@@ -998,7 +1199,55 @@ export default function GameDetailDrawer({
     } else {
       setSteamAchieveData(null);
     }
-  }, [game?.steamAppId, isOpen]);
+  }, [game?.steamAppId, game?.integrationPlatform, isOpen]);
+
+  useEffect(() => {
+    if (game?.gogGameId && isOpen && (game.integrationPlatform === "gog" || (!game.integrationPlatform && game.gogGameId))) {
+      fetchGogAchievements(game.gogGameId)
+        .then((data) => {
+          setGogAchieveData(data);
+          if (data && data.unlockedCount !== undefined) {
+            const prevCount = game.gogAchievementsCount;
+            const currentCount = data.unlockedCount;
+            const totalCount = data.totalCount;
+
+            if (prevCount !== undefined && currentCount > prevCount) {
+              const diff = currentCount - prevCount;
+              showToast({
+                title: "🏆 Novas Conquistas GOG Desbloqueadas!",
+                message: `Você conquistou +${diff} nova(s) conquista(s) em "${game.name}" desde a última sincronização!\nTotal: ${currentCount} / ${totalCount} (${data.percentage}%)`,
+                type: "achievement",
+                duration: 8000,
+              });
+              setGogCelebrationData({
+                diff,
+                unlockedCount: currentCount,
+                totalCount,
+                gameName: game.name,
+              });
+              if (onUpdateGame) {
+                onUpdateGame({
+                  ...game,
+                  gogAchievementsCount: currentCount,
+                  gogAchievementsTotal: totalCount,
+                });
+              }
+            } else if (prevCount === undefined) {
+              if (onUpdateGame) {
+                onUpdateGame({
+                  ...game,
+                  gogAchievementsCount: currentCount,
+                  gogAchievementsTotal: totalCount,
+                });
+              }
+            }
+          }
+        })
+        .catch((err) => console.warn("Erro ao carregar conquistas GOG:", err));
+    } else {
+      setGogAchieveData(null);
+    }
+  }, [game?.gogGameId, game?.integrationPlatform, isOpen]);
 
   useEffect(() => {
     if (game && game.metacriticUrl && isOpen) {
@@ -2842,11 +3091,18 @@ export default function GameDetailDrawer({
                             <TrophyBadge trophy={game.trophy} mode="detail" />
                           </span>
                         )}
-                        {((steamAchieveData && steamAchieveData.percentage === 100) ||
-                          (game.steamAchievementsCount !== undefined &&
-                            game.steamAchievementsTotal !== undefined &&
-                            game.steamAchievementsTotal > 0 &&
-                            game.steamAchievementsCount === game.steamAchievementsTotal)) && (
+                        {(((game.integrationPlatform === "steam" || (!game.integrationPlatform && game.steamAppId)) &&
+                          ((steamAchieveData && steamAchieveData.percentage === 100) ||
+                            (game.steamAchievementsCount !== undefined &&
+                              game.steamAchievementsTotal !== undefined &&
+                              game.steamAchievementsTotal > 0 &&
+                              game.steamAchievementsCount === game.steamAchievementsTotal))) ||
+                          ((game.integrationPlatform === "gog" || (!game.integrationPlatform && game.gogGameId)) &&
+                            ((gogAchieveData && gogAchieveData.percentage === 100) ||
+                              (game.gogAchievementsCount !== undefined &&
+                                game.gogAchievementsTotal !== undefined &&
+                                game.gogAchievementsTotal > 0 &&
+                                game.gogAchievementsCount === game.gogAchievementsTotal)))) && (
                           <span className="inline-flex items-center gap-1.5 align-middle shrink-0 px-3 py-1 rounded-full bg-gradient-to-r from-amber-500/30 via-yellow-400/30 to-amber-500/30 border border-amber-400/80 text-amber-300 text-xs font-extrabold font-mono shadow-xl shadow-amber-500/20 animate-pulse">
                             <Sparkles size={14} className="text-yellow-300 shrink-0" />
                             <span>👑 100% Achiev.</span>
@@ -3260,7 +3516,7 @@ export default function GameDetailDrawer({
                       </div>
 
                       {/* Steam Web API Block - Only rendered for PC Platform games with a linked Steam App ID */}
-                      {isPcPlatform(game.platform) && game.steamAppId && (
+                      {isPcPlatform(game.platform) && (game.integrationPlatform === "steam" || (!game.integrationPlatform && game.steamAppId)) && game.steamAppId && (
                         <div className="col-span-2 sm:col-span-3 md:col-span-4 mt-1 text-left">
                           <div className="bg-zinc-950/80 border-2 border-blue-500/50 hover:border-blue-500/80 rounded-2xl p-4.5 shadow-md shadow-blue-500/10 space-y-3 transition-all">
                             <div className="flex items-center justify-between gap-3 flex-wrap border-b border-blue-500/30 pb-2.5">
@@ -3693,6 +3949,434 @@ export default function GameDetailDrawer({
                                       ) : (
                                         <div className="p-4 bg-zinc-950 rounded-xl border border-zinc-800 text-center text-xs text-zinc-400">
                                           Nenhuma conquista encontrada com os filtros selecionados.
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* GOG Galaxy API Block - Only rendered for PC Platform games with a linked GOG Game ID */}
+                      {isPcPlatform(game.platform) && (game.integrationPlatform === "gog" || (!game.integrationPlatform && game.gogGameId)) && game.gogGameId && (
+                        <div className="col-span-2 sm:col-span-3 md:col-span-4 mt-1 text-left">
+                          <div className="bg-zinc-950/80 border-2 border-purple-500/50 hover:border-purple-500/80 rounded-2xl p-4.5 shadow-md shadow-purple-500/10 space-y-3 transition-all">
+                            <div className="flex items-center justify-between gap-3 flex-wrap border-b border-purple-500/30 pb-2.5">
+                              <div className="flex items-center gap-2">
+                                <Gamepad2 size={16} className="text-purple-400 shrink-0" />
+                                <span className="text-purple-300 text-xs uppercase tracking-wider font-extrabold font-mono">
+                                  Integração GOG Galaxy
+                                </span>
+                              </div>
+
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={handleSyncGogInDrawer}
+                                  disabled={isSyncingGogDrawer}
+                                  className="text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/60 hover:bg-purple-900/80 border border-purple-500/40 text-purple-200 transition-all cursor-pointer disabled:opacity-50 shadow-sm"
+                                  title="Atualizar horas, conquistas e última sessão direto do GOG Galaxy"
+                                >
+                                  {isSyncingGogDrawer ? (
+                                    <Loader2 size={12} className="animate-spin text-purple-400" />
+                                  ) : (
+                                    <RefreshCw size={12} />
+                                  )}
+                                  <span>Sincronizar</span>
+                                </button>
+
+                                <a
+                                  href={getGogGalaxyProtocolUrl(game.gogGameId)}
+                                  className="text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-purple-950/60 hover:bg-purple-900/80 border border-purple-500/40 text-purple-200 transition-all cursor-pointer shadow-sm"
+                                  title="Iniciar o jogo no aplicativo GOG Galaxy"
+                                >
+                                  <Play size={12} className="fill-current text-purple-400" />
+                                  <span>Abrir no GOG Galaxy</span>
+                                </a>
+                              </div>
+                            </div>
+
+                            {/* CELEBRATION BANNER FOR UNLOCKED GOG ACHIEVEMENTS */}
+                            <AnimatePresence>
+                              {gogCelebrationData && (
+                                <motion.div
+                                  initial={{ opacity: 0, scale: 0.95, y: -10 }}
+                                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                                  exit={{ opacity: 0, scale: 0.95, y: -10 }}
+                                  className="relative overflow-hidden p-4 rounded-2xl bg-gradient-to-r from-purple-950/90 via-fuchsia-950/80 to-zinc-950/90 border-2 border-purple-400/70 text-purple-100 shadow-2xl shadow-purple-500/20"
+                                >
+                                  <div className="absolute inset-0 pointer-events-none overflow-hidden">
+                                    <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-purple-400 via-fuchsia-200 to-purple-500 animate-pulse" />
+                                    <motion.div
+                                      animate={{ scale: [0.8, 1.2, 0.8], opacity: [0.3, 0.8, 0.3] }}
+                                      transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+                                      className="absolute -top-10 -right-10 w-32 h-32 bg-purple-400/20 rounded-full blur-2xl"
+                                    />
+                                  </div>
+
+                                  <div className="relative z-10 flex items-start justify-between gap-3">
+                                    <div className="flex items-start gap-3 min-w-0">
+                                      <div className="p-2.5 rounded-2xl bg-purple-500/20 border border-purple-400/40 text-purple-300 shrink-0">
+                                        <Trophy size={22} className="animate-bounce text-purple-300" />
+                                      </div>
+                                      <div className="space-y-1.5 min-w-0">
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          <h4 className="font-extrabold text-xs sm:text-sm text-white tracking-wide flex items-center gap-1.5">
+                                            <span>🎉 Novas Conquistas GOG Desbloqueadas!</span>
+                                          </h4>
+                                          <span className="text-[10px] font-mono font-bold px-2.5 py-0.5 rounded-full bg-purple-400/20 text-fuchsia-300 border border-purple-400/40 uppercase">
+                                            +{gogCelebrationData.diff} Conquista{gogCelebrationData.diff > 1 ? "s" : ""}
+                                          </span>
+                                        </div>
+                                        <p className="text-xs text-purple-200/90 leading-relaxed">
+                                          Parabéns pelo seu progresso em <strong className="text-white font-semibold">{gogCelebrationData.gameName}</strong>! Você conquistou <strong className="text-purple-300 font-bold font-mono">+{gogCelebrationData.diff}</strong> conquista(s) desde o último sync!
+                                        </p>
+
+                                        <div className="pt-1 flex items-center gap-3">
+                                          <div className="flex-1 bg-zinc-950/80 rounded-full h-2.5 overflow-hidden border border-purple-500/30">
+                                            <motion.div
+                                              initial={{ width: 0 }}
+                                              animate={{ width: `${Math.round((gogCelebrationData.unlockedCount / gogCelebrationData.totalCount) * 100)}%` }}
+                                              transition={{ duration: 1, ease: "easeOut" }}
+                                              className="h-full bg-gradient-to-r from-purple-500 via-fuchsia-400 to-purple-300"
+                                            />
+                                          </div>
+                                          <span className="text-xs font-mono font-bold text-purple-300 shrink-0">
+                                            {gogCelebrationData.unlockedCount} / {gogCelebrationData.totalCount} ({Math.round((gogCelebrationData.unlockedCount / gogCelebrationData.totalCount) * 100)}%)
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => setGogCelebrationData(null)}
+                                      className="p-1.5 text-purple-300/70 hover:text-white rounded-lg hover:bg-purple-400/20 transition-colors cursor-pointer shrink-0"
+                                      title="Fechar celebração"
+                                    >
+                                      <X size={16} />
+                                    </button>
+                                  </div>
+                                </motion.div>
+                              )}
+                            </AnimatePresence>
+
+                            {/* DISPLAY LINKED GOG DATA */}
+                            <div className="space-y-3">
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
+                                {/* GOG Playtime Card */}
+                                <div className="p-3 rounded-xl bg-zinc-900/90 border border-purple-500/20 flex flex-col justify-between gap-2">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <Clock size={14} className="text-purple-400" />
+                                      <span className="text-xs uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                        Tempo na GOG:
+                                      </span>
+                                    </div>
+                                    <span className="font-extrabold text-purple-300 font-mono text-sm sm:text-base">
+                                      {game.gogPlaytimeMinutes ? formatGogPlaytime(game.gogPlaytimeMinutes) : "0h 0m"}
+                                    </span>
+                                  </div>
+
+                                  {game.gogPlaytimeMinutes && game.gogPlaytimeMinutes > 0 && onUpdateGame && (
+                                    <button
+                                      type="button"
+                                      onClick={handleCopyGogPlaytimeToPersonal}
+                                      className="w-full mt-1 px-2.5 py-1.5 bg-purple-950/60 hover:bg-purple-900 border border-purple-500/40 text-purple-200 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm"
+                                      title="Importar as horas registradas na GOG para o seu atributo de Tempo Investido Pessoal"
+                                    >
+                                      <ArrowRight size={12} className="text-purple-400" />
+                                      <span>Copiar para Tempo Pessoal</span>
+                                    </button>
+                                  )}
+                                </div>
+
+                                {/* Last Session / Achievements */}
+                                <div className="p-3 rounded-xl bg-zinc-900/90 border border-purple-500/20 space-y-2">
+                                  <div className="flex items-center justify-between gap-2 text-xs">
+                                    <span className="uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                      Última Sessão:
+                                    </span>
+                                    <span className="font-mono font-semibold text-zinc-200">
+                                      {formatLastPlayedDate(game.gogLastPlayedTimestamp) || "Desconhecido / Antigo"}
+                                    </span>
+                                  </div>
+
+                                  {gogAchieveData && gogAchieveData.totalCount > 0 ? (
+                                    <div className="pt-1.5 border-t border-zinc-800/80 space-y-1">
+                                      <div className="flex items-center justify-between gap-2 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                          <Trophy size={13} className="text-purple-400 shrink-0" />
+                                          <span className="uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                            Conquistas:
+                                          </span>
+                                        </div>
+                                        <span className="font-extrabold text-purple-300 font-mono">
+                                          {gogAchieveData.unlockedCount} / {gogAchieveData.totalCount} ({gogAchieveData.percentage}%)
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                                        <div
+                                          className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-400 transition-all duration-500"
+                                          style={{ width: `${gogAchieveData.percentage}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  ) : game.gogAchievementsTotal && game.gogAchievementsTotal > 0 ? (
+                                    <div className="pt-1.5 border-t border-zinc-800/80 space-y-1">
+                                      <div className="flex items-center justify-between gap-2 text-xs">
+                                        <div className="flex items-center gap-1.5">
+                                          <Trophy size={13} className="text-purple-400 shrink-0" />
+                                          <span className="uppercase tracking-wider text-zinc-400 font-bold font-sans">
+                                            Conquistas:
+                                          </span>
+                                        </div>
+                                        <span className="font-extrabold text-purple-300 font-mono">
+                                          {game.gogAchievementsCount || 0} / {game.gogAchievementsTotal} ({Math.round(((game.gogAchievementsCount || 0) / game.gogAchievementsTotal) * 100)}%)
+                                        </span>
+                                      </div>
+                                      <div className="w-full h-2 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                                        <div
+                                          className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-400 transition-all duration-500"
+                                          style={{ width: `${Math.round(((game.gogAchievementsCount || 0) / game.gogAchievementsTotal) * 100)}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="pt-1 text-[11px] text-zinc-500 italic">
+                                      Conquistas não encontradas ou jogo sem conquistas na GOG.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="pt-1 text-xs text-zinc-400 flex items-center justify-between gap-2 flex-wrap">
+                                <div className="flex items-center gap-2">
+                                  <span>Game ID:</span>
+                                  <code className="bg-zinc-900 px-1.5 py-0.5 rounded text-zinc-300 font-mono text-xs">
+                                    {game.gogGameId}
+                                  </code>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <a
+                                    href={getGogStoreUrl(game.gogGameId)}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-purple-400 hover:text-purple-300 hover:underline inline-flex items-center gap-1 text-[11px] font-medium"
+                                  >
+                                    Página na GOG ↗
+                                  </a>
+                                </div>
+                              </div>
+
+                              {/* GOG ACHIEVEMENTS GALLERY */}
+                              {gogAchieveData && gogAchieveData.achievements && gogAchieveData.achievements.length > 0 && (
+                                <div className="mt-4 border-t border-zinc-800/80 pt-4 space-y-3">
+                                  {/* Section Title & Collapsible Header */}
+                                  <div
+                                    onClick={() => setIsGogAchievementsGalleryOpen((prev) => !prev)}
+                                    className="flex items-center justify-between gap-2 p-3 rounded-xl bg-zinc-950/90 border border-zinc-800 hover:border-purple-500/40 cursor-pointer transition-all select-none group"
+                                  >
+                                    <div className="flex items-center gap-2 min-w-0">
+                                      <Trophy size={16} className="text-purple-400 shrink-0 group-hover:scale-110 transition-transform" />
+                                      <h4 className="font-extrabold text-sm text-white tracking-wide uppercase font-mono flex items-center gap-2 truncate">
+                                        <span>Galeria de Conquistas GOG</span>
+                                        <span className="text-xs font-normal text-zinc-400 normal-case font-sans">
+                                          ({gogAchieveData.unlockedCount}/{gogAchieveData.totalCount})
+                                        </span>
+                                      </h4>
+                                    </div>
+
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      {/* 100% Perfect Game Badge */}
+                                      {gogAchieveData.percentage === 100 && (
+                                        <div className="px-2.5 py-0.5 bg-gradient-to-r from-purple-500/20 via-fuchsia-400/20 to-purple-500/20 border border-purple-400/50 rounded-full text-purple-300 text-[10px] sm:text-xs font-extrabold font-mono flex items-center gap-1.5 shadow-lg shadow-purple-500/10 animate-pulse">
+                                          <Sparkles size={12} className="text-fuchsia-300" />
+                                          <span>👑 100% Achiev.</span>
+                                        </div>
+                                      )}
+                                      <div className="p-1 rounded-lg bg-zinc-900 border border-zinc-700 text-zinc-300 group-hover:text-purple-400 transition-colors">
+                                        {isGogAchievementsGalleryOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  {/* Collapsible Content */}
+                                  {isGogAchievementsGalleryOpen && (
+                                    <div className="space-y-3 pt-1 animate-fade-in">
+                                      {/* Filter Controls Bar */}
+                                      <div className="flex items-center justify-between gap-2 flex-wrap bg-zinc-950/80 p-2.5 rounded-xl border border-zinc-800">
+                                        {/* Tabs */}
+                                        <div className="flex items-center gap-1 overflow-x-auto text-xs font-semibold">
+                                          <button
+                                            type="button"
+                                            onClick={() => setGogAchievementsFilter("all")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                              gogAchievementsFilter === "all"
+                                                ? "bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            Todas ({gogAchieveData.achievements.length})
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setGogAchievementsFilter("unlocked")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                              gogAchievementsFilter === "unlocked"
+                                                ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            Desbloqueadas ({gogAchieveData.unlockedCount})
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setGogAchievementsFilter("locked")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+                                              gogAchievementsFilter === "locked"
+                                                ? "bg-zinc-800 text-zinc-200 border border-zinc-700 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            Bloqueadas ({gogAchieveData.totalCount - gogAchieveData.unlockedCount})
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => setGogAchievementsFilter("rare")}
+                                            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer flex items-center gap-1 ${
+                                              gogAchievementsFilter === "rare"
+                                                ? "bg-purple-500/20 text-purple-300 border border-purple-500/30 font-bold"
+                                                : "text-zinc-400 hover:text-white hover:bg-zinc-900"
+                                            }`}
+                                          >
+                                            <Sparkles size={12} className="text-purple-400" />
+                                            <span>Ultra Raras</span>
+                                          </button>
+                                        </div>
+
+                                        {/* Search & Sort */}
+                                        <div className="flex items-center gap-2 text-xs w-full sm:w-auto">
+                                          <input
+                                            type="text"
+                                            placeholder="Buscar conquista..."
+                                            value={gogAchievementsSearch}
+                                            onChange={(e) => setGogAchievementsSearch(e.target.value)}
+                                            className="bg-zinc-900 border border-zinc-800 text-zinc-200 text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-purple-500/50 w-full sm:w-36"
+                                          />
+                                          <select
+                                            value={gogAchievementsSort}
+                                            onChange={(e) => setGogAchievementsSort(e.target.value as any)}
+                                            className="bg-zinc-900 border border-zinc-800 text-zinc-300 text-xs rounded-lg px-2 py-1 focus:outline-none focus:border-purple-500/50 cursor-pointer"
+                                          >
+                                            <option value="unlocked_first">Desbloqueadas 1º</option>
+                                            <option value="rare_first">Mais Raras 1º (%)</option>
+                                            <option value="recent">Recentes 1º</option>
+                                          </select>
+                                        </div>
+                                      </div>
+
+                                      {/* Achievements List Grid */}
+                                      {processedGogAchievements.length > 0 ? (
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-96 overflow-y-auto pr-1 custom-scrollbar">
+                                          {processedGogAchievements.map((ach) => {
+                                            const isUnlocked = ach.achieved === 1;
+                                            const isRare = ach.isUltraRare || (ach.globalPercent !== undefined && ach.globalPercent <= 10);
+                                            const unlockDate = ach.unlocktime
+                                              ? new Date(ach.unlocktime * 1000).toLocaleDateString("pt-BR", {
+                                                  day: "2-digit",
+                                                  month: "2-digit",
+                                                  year: "numeric",
+                                                  hour: "2-digit",
+                                                  minute: "2-digit",
+                                                })
+                                              : null;
+
+                                            return (
+                                              <div
+                                                key={ach.apiname || ach.name}
+                                                className={`p-2.5 rounded-xl border flex items-start gap-3 transition-all relative overflow-hidden ${
+                                                  isUnlocked
+                                                    ? isRare
+                                                      ? "bg-gradient-to-r from-purple-950/70 via-zinc-900 to-zinc-900 border-purple-500/50 shadow-md shadow-purple-500/10"
+                                                      : "bg-zinc-900/90 border-purple-500/30 hover:border-purple-500/60"
+                                                    : "bg-zinc-950/60 border-zinc-800/80 opacity-60 hover:opacity-85"
+                                                }`}
+                                              >
+                                                {/* Icon */}
+                                                <div className="relative shrink-0 w-12 h-12 rounded-lg bg-zinc-950 border border-zinc-800 overflow-hidden flex items-center justify-center">
+                                                  {isUnlocked ? (
+                                                    ach.icon ? (
+                                                      <CachedImage
+                                                        src={ach.icon}
+                                                        alt={ach.name}
+                                                        className="w-full h-full object-cover"
+                                                      />
+                                                    ) : (
+                                                      <Trophy size={20} className="text-purple-400" />
+                                                    )
+                                                  ) : ach.icongray ? (
+                                                    <CachedImage
+                                                      src={ach.icongray}
+                                                      alt={ach.name}
+                                                      className="w-full h-full object-cover grayscale opacity-50"
+                                                    />
+                                                  ) : (
+                                                    <Lock size={18} className="text-zinc-600" />
+                                                  )}
+
+                                                  {isUnlocked && (
+                                                    <div className="absolute -bottom-1 -right-1 bg-emerald-500 rounded-full p-0.5 border border-zinc-950">
+                                                      <Check size={10} className="text-white font-bold" />
+                                                    </div>
+                                                  )}
+                                                </div>
+
+                                                {/* Details */}
+                                                <div className="flex-1 min-w-0 space-y-0.5">
+                                                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                                                    <h5
+                                                      className={`font-bold text-xs truncate ${
+                                                        isUnlocked ? "text-zinc-100 font-semibold" : "text-zinc-400"
+                                                      }`}
+                                                    >
+                                                      {ach.name || ach.apiname}
+                                                    </h5>
+
+                                                    {ach.globalPercent !== undefined && (
+                                                      <span
+                                                        className={`text-[10px] font-mono font-bold px-1.5 py-0.2 rounded ${
+                                                          isRare
+                                                            ? "bg-purple-900/60 text-purple-300 border border-purple-500/40"
+                                                            : "bg-zinc-800 text-zinc-400"
+                                                        }`}
+                                                        title="Porcentagem global de jogadores que conquistaram"
+                                                      >
+                                                        {ach.globalPercent}%
+                                                      </span>
+                                                    )}
+                                                  </div>
+
+                                                  <p className="text-[11px] text-zinc-400 leading-snug line-clamp-2">
+                                                    {ach.description || (ach.hidden === 1 ? "Conquista Oculta" : "Sem descrição.")}
+                                                  </p>
+
+                                                  {isUnlocked && unlockDate && (
+                                                    <div className="pt-0.5 flex items-center gap-1 text-[10px] text-purple-300/80 font-mono">
+                                                      <span>Desbloqueada em: {unlockDate}</span>
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              </div>
+                                            );
+                                          })}
+                                        </div>
+                                      ) : (
+                                        <div className="text-center py-6 text-xs text-zinc-500 italic bg-zinc-950/40 rounded-xl border border-zinc-800/60">
+                                          Nenhuma conquista encontrada para os filtros selecionados.
                                         </div>
                                       )}
                                     </div>

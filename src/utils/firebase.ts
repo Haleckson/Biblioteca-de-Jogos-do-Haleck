@@ -1,5 +1,5 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
-import { getDatabase, ref, onValue, set } from "firebase/database";
+import { getDatabase, ref, onValue, set, update } from "firebase/database";
 import { getAuth } from "firebase/auth";
 import { Game } from "../types";
 import { summarizeError } from "./logger";
@@ -61,6 +61,21 @@ function parseArraySafely(raw: any): any[] {
   return [];
 }
 
+const safeNumber = (val: any): number | undefined => {
+  if (val === undefined || val === null || val === "") return undefined;
+  const n = typeof val === "number" ? val : Number(val);
+  return typeof n === "number" && !isNaN(n) && isFinite(n) ? n : undefined;
+};
+
+const safeStringOrNumber = (val: any): string | number | undefined => {
+  if (val === undefined || val === null || val === "") return undefined;
+  if (typeof val === "number") {
+    return !isNaN(val) && isFinite(val) ? val : undefined;
+  }
+  const str = String(val).trim();
+  return str.length > 0 ? str : undefined;
+};
+
 /**
  * Syncs the entire game library from Firebase Realtime Database in real-time.
  * If Firebase is not configured, it returns an unsubscribe function that does nothing.
@@ -101,22 +116,22 @@ export const syncFromFirebase = (
             publisher: game.publisher || "",
             studio: game.studio || "",
             developer: game.developer || "",
-            pricePaid: typeof game.pricePaid === "number" ? game.pricePaid : (game.pricePaid !== undefined && game.pricePaid !== null && game.pricePaid !== "" && !isNaN(Number(game.pricePaid)) ? Number(game.pricePaid) : undefined),
+            pricePaid: safeNumber(game.pricePaid),
             playtime: game.playtime || "",
             additionalPlaytime: game.additionalPlaytime || "",
             trophy: game.trophy || "none",
             trophies: Array.isArray(game.trophies) ? game.trophies : (game.trophy && game.trophy !== "none" ? [game.trophy] : []),
             pros: game.pros || "",
             cons: game.cons || "",
-            rating: typeof game.rating === "number" ? game.rating : (game.rating ? Number(game.rating) : 0),
+            rating: safeNumber(game.rating) ?? 0,
             startDate: game.startDate || "",
             endDate: game.endDate || "",
             releaseDate: game.releaseDate || "",
-            coverPosition: typeof game.coverPosition === "number" ? game.coverPosition : 50,
-            coverPositionX: typeof game.coverPositionX === "number" ? game.coverPositionX : 50,
-            coverZoom: typeof game.coverZoom === "number" ? game.coverZoom : 100,
+            coverPosition: safeNumber(game.coverPosition) ?? 50,
+            coverPositionX: safeNumber(game.coverPositionX) ?? 50,
+            coverZoom: safeNumber(game.coverZoom) ?? 100,
             replayed: !!game.replayed,
-            replayCount: typeof game.replayCount === "number" ? game.replayCount : undefined,
+            replayCount: safeNumber(game.replayCount),
             replayNote: game.replayNote || "",
             isGaaS: !!game.isGaaS,
             isDlc: (game.isDlc as any) === "plus_dlc" ? true : !!game.isDlc,
@@ -128,19 +143,19 @@ export const syncFromFirebase = (
             hltbCompletionist: game.hltbCompletionist || "",
             hltbId: game.hltbId || "",
             metacriticUrl: game.metacriticUrl || "",
-            metacriticCritScore: typeof game.metacriticCritScore === "number" ? game.metacriticCritScore : undefined,
-            metacriticUserScore: typeof game.metacriticUserScore === "number" ? game.metacriticUserScore : undefined,
+            metacriticCritScore: safeNumber(game.metacriticCritScore),
+            metacriticUserScore: safeNumber(game.metacriticUserScore),
             integrationPlatform: game.integrationPlatform || undefined,
-            steamAppId: typeof game.steamAppId === "number" ? game.steamAppId : (game.steamAppId ? Number(game.steamAppId) : undefined),
-            steamPlaytimeMinutes: typeof game.steamPlaytimeMinutes === "number" ? game.steamPlaytimeMinutes : undefined,
-            steamLastPlayedTimestamp: typeof game.steamLastPlayedTimestamp === "number" ? game.steamLastPlayedTimestamp : undefined,
-            steamAchievementsCount: typeof game.steamAchievementsCount === "number" ? game.steamAchievementsCount : undefined,
-            steamAchievementsTotal: typeof game.steamAchievementsTotal === "number" ? game.steamAchievementsTotal : undefined,
-            gogGameId: typeof game.gogGameId === "number" ? game.gogGameId : (game.gogGameId ? Number(game.gogGameId) : undefined),
-            gogPlaytimeMinutes: typeof game.gogPlaytimeMinutes === "number" ? game.gogPlaytimeMinutes : undefined,
-            gogLastPlayedTimestamp: typeof game.gogLastPlayedTimestamp === "number" ? game.gogLastPlayedTimestamp : undefined,
-            gogAchievementsCount: typeof game.gogAchievementsCount === "number" ? game.gogAchievementsCount : undefined,
-            gogAchievementsTotal: typeof game.gogAchievementsTotal === "number" ? game.gogAchievementsTotal : undefined,
+            steamAppId: safeNumber(game.steamAppId),
+            steamPlaytimeMinutes: safeNumber(game.steamPlaytimeMinutes),
+            steamLastPlayedTimestamp: safeNumber(game.steamLastPlayedTimestamp),
+            steamAchievementsCount: safeNumber(game.steamAchievementsCount),
+            steamAchievementsTotal: safeNumber(game.steamAchievementsTotal),
+            gogGameId: safeStringOrNumber(game.gogGameId),
+            gogPlaytimeMinutes: safeNumber(game.gogPlaytimeMinutes),
+            gogLastPlayedTimestamp: safeNumber(game.gogLastPlayedTimestamp),
+            gogAchievementsCount: safeNumber(game.gogAchievementsCount),
+            gogAchievementsTotal: safeNumber(game.gogAchievementsTotal),
             diary: diaryRaw.map((entry: any) => {
               const mediasRaw = parseArraySafely(entry.medias);
               const keyMomentsRaw = parseArraySafely(entry.keyMoments);
@@ -201,12 +216,18 @@ export const syncFromFirebase = (
 };
 
 /**
- * Recursively removes undefined values and strips raw base64/blob URIs from objects before sending to Firebase.
- * This prevents payload bloat (e.g., 200MB base64 arrays) that causes Firebase writes to fail/truncate.
+ * Recursively removes undefined values, NaNs, and strips raw base64/blob URIs from objects before sending to Firebase.
+ * This prevents payload bloat and Firebase NaN errors.
  */
 const sanitizeDataForFirebase = (val: any): any => {
-  if (val === undefined) {
+  if (val === undefined || val === null) {
     return null;
+  }
+  if (typeof val === "number") {
+    if (isNaN(val) || !isFinite(val)) {
+      return null;
+    }
+    return val;
   }
   if (typeof val === "string") {
     // Replace raw data: or blob: URIs with empty placeholder to keep payload lightweight until ImgBB URL is ready
@@ -218,12 +239,13 @@ const sanitizeDataForFirebase = (val: any): any => {
   if (Array.isArray(val)) {
     return val.map((v) => sanitizeDataForFirebase(v));
   }
-  if (val !== null && typeof val === "object") {
+  if (typeof val === "object") {
     const res: Record<string, any> = {};
     for (const key of Object.keys(val)) {
       const v = val[key];
-      if (v !== undefined) {
-        res[key] = sanitizeDataForFirebase(v);
+      const sanitized = sanitizeDataForFirebase(v);
+      if (sanitized !== undefined && sanitized !== null) {
+        res[key] = sanitized;
       }
     }
     return res;
@@ -349,7 +371,8 @@ export const saveToFirebase = async (
   // Verificação pré-envio: Garante que os dados higienizados não alteraram nem perderam nada do objeto original
   verifyGameDataIntegrity(games, sanitizedGames, "PreSendDiagnostic");
 
-  await set(dbRef, {
+  // Preserva outros nós filhos de 'library' como 'gog_auth' usando update
+  await update(dbRef, {
     games: sanitizedGames,
     globalTags: sanitizedTags,
     globalGenres: sanitizedGenres,
@@ -358,3 +381,82 @@ export const saveToFirebase = async (
 
   console.log("[saveToFirebase] Sucesso: Dados salvos e persistidos com sucesso no banco de dados Firebase.");
 };
+
+/**
+ * Saves GOG Galaxy authentication session securely to Firebase under library/gog_auth for cross-device persistence.
+ */
+export const saveGogAuthToFirebase = async (authData: {
+  username?: string;
+  userId?: string;
+  token?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  avatarUrl?: string;
+  gamesCount?: number;
+}): Promise<void> => {
+  if (!db) return;
+  try {
+    const dbRef = ref(db, "library/gog_auth");
+    const sanitized = sanitizeDataForFirebase({
+      ...authData,
+      lastUpdated: new Date().toISOString(),
+    });
+    await set(dbRef, sanitized);
+    console.log("[Firebase] Sessão da GOG Galaxy salva com sucesso em library/gog_auth.");
+  } catch (err) {
+    console.warn("Aviso ao salvar sessão GOG no Firebase:", summarizeError(err));
+  }
+};
+
+/**
+ * Clears GOG Galaxy authentication session from Firebase when unlinked.
+ */
+export const removeGogAuthFromFirebase = async (): Promise<void> => {
+  if (!db) return;
+  try {
+    const dbRef = ref(db, "library/gog_auth");
+    await set(dbRef, null);
+    console.log("[Firebase] Sessão da GOG Galaxy removida de library/gog_auth.");
+  } catch (err) {
+    console.warn("Aviso ao remover sessão GOG do Firebase:", summarizeError(err));
+  }
+};
+
+/**
+ * Listens in real-time or loads GOG Galaxy authentication session from Firebase under library/gog_auth.
+ */
+export const syncGogAuthFromFirebase = (
+  onAuthLoaded: (authData: {
+    username?: string;
+    userId?: string;
+    token?: string;
+    refreshToken?: string;
+    expiresAt?: number;
+    avatarUrl?: string;
+    gamesCount?: number;
+  } | null) => void
+): (() => void) => {
+  if (!db) return () => {};
+  try {
+    const dbRef = ref(db, "library/gog_auth");
+    const unsubscribe = onValue(
+      dbRef,
+      (snapshot) => {
+        const data = snapshot.val();
+        if (data && (data.token || data.username || data.userId)) {
+          onAuthLoaded(data);
+        } else {
+          onAuthLoaded(null);
+        }
+      },
+      (err) => {
+        console.warn("Aviso ao sincronizar sessão GOG do Firebase:", summarizeError(err));
+      }
+    );
+    return unsubscribe;
+  } catch (err) {
+    console.warn("Erro ao configurar listener do GOG no Firebase:", summarizeError(err));
+    return () => {};
+  }
+};
+

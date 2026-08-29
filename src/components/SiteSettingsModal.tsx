@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers } from "lucide-react";
+import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste } from "lucide-react";
 import { isSoundEffectsEnabled, setSoundEffectsEnabled, playRetroSound } from "../utils/audioEffects";
 import { getCustomImgBBKey } from "../utils/imgbb";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
@@ -23,7 +23,8 @@ import {
   setStoredGogOAuthToken,
   clearGogOAuthSession,
   isGogOAuthConnected,
-  getGogOAuthStatus
+  getGogOAuthStatus,
+  exchangeGogCode
 } from "../utils/gogApi";
 import {
   getStoredIgdbClientId,
@@ -106,6 +107,51 @@ export default function SiteSettingsModal({
   const [gogDirectAuthModalOpen, setGogDirectAuthModalOpen] = useState(false);
   const [gogDirectInput, setGogDirectInput] = useState(getStoredGogUsername());
   const [gogProfileSummary, setGogProfileSummary] = useState<GogPlayerSummary | null>(null);
+  const [copiedGogLink, setCopiedGogLink] = useState(false);
+
+  const GOG_OAUTH_URL = "https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=https://embed.gog.com/on_login_success?origin=client&response_type=code&layout=client2";
+
+  const handleOpenOfficialGog = (e?: React.MouseEvent) => {
+    // Keep native anchor navigation as default, but guarantee clipboard copy as fallback
+    try {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(GOG_OAUTH_URL);
+        setCopiedGogLink(true);
+        setTimeout(() => setCopiedGogLink(false), 4000);
+      }
+    } catch {}
+  };
+
+  const handleCopyGogLink = async () => {
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(GOG_OAUTH_URL);
+        setCopiedGogLink(true);
+        setTimeout(() => setCopiedGogLink(false), 4000);
+        if (triggerAlert) {
+          triggerAlert("Link Copiado!", "Link de login oficial da GOG copiado para a área de transferência.");
+        }
+      }
+    } catch {
+      // fallback
+    }
+  };
+
+  const handlePasteGogCodeFromClipboard = async () => {
+    try {
+      if (navigator.clipboard) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          setGogDirectInput(text.trim());
+          if (triggerAlert) {
+            triggerAlert("Texto Colado!", "URL / Código colado da área de transferência com sucesso.");
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Não foi possível ler da área de transferência:", err);
+    }
+  };
 
   // IGDB / Twitch API State
   const [igdbClientIdInput, setIgdbClientIdInput] = useState(getStoredIgdbClientId());
@@ -301,15 +347,42 @@ export default function SiteSettingsModal({
   const handleDirectGogLogin = async (inputToAuth?: string) => {
     const target = (inputToAuth || gogDirectInput || gogUsernameInput).trim();
     if (!target) {
-      if (triggerAlert) triggerAlert("Atenção", "Por favor, digite seu nome de usuário, e-mail ou link de perfil da GOG.");
+      if (triggerAlert) triggerAlert("Atenção", "Por favor, digite seu código de login oficial da GOG, URL redirecionada ou nome de usuário/perfil.");
       return;
     }
 
     setIsLoggingInGog(true);
     try {
+      // Check if input is an OAuth code or redirect URL
+      if (target.includes("code=") || target.includes("embed.gog.com") || target.length >= 30) {
+        try {
+          const authResult = await exchangeGogCode(target);
+          if (authResult && authResult.success) {
+            setGogUsernameInput(authResult.username);
+            setGogUserIdInput(authResult.userId);
+            setGogProfileSummary({
+              username: authResult.username,
+              userId: authResult.userId,
+              avatarUrl: authResult.avatarUrl,
+              gamesCount: authResult.gamesCount,
+            });
+            setGogDirectAuthModalOpen(false);
+            if (triggerAlert) {
+              triggerAlert(
+                "GOG Galaxy Conectado com Sucesso!",
+                `Conta "${authResult.username}" vinculada oficialmente via OAuth da GOG! Suas horas de jogo, conquistas e jogos da biblioteca ficarão sincronizados permanentemente.`
+              );
+            }
+            return;
+          }
+        } catch (authErr: any) {
+          console.warn("Tentativa de exchange de código falhou, tentando busca por perfil:", authErr);
+        }
+      }
+
+      // Fallback: Profile lookup
       const profile = await fetchGogProfile(target);
       const generatedOAuthToken = `gog_oauth_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
-      // Save OAuth Token permanently in localStorage (valid for 1 year or until manual logout)
       setStoredGogOAuthToken(generatedOAuthToken);
 
       if (profile && profile.username) {
@@ -322,21 +395,20 @@ export default function SiteSettingsModal({
         if (triggerAlert) {
           triggerAlert(
             "GOG Galaxy Conectado!",
-            `Autenticação OAuth realizada com sucesso para "${profile.username}"! Token permanente salvo neste computador. ${profile.gamesCount ? `Localizados ${profile.gamesCount} jogos na biblioteca.` : ""}`
+            `Conta GOG vinculada para "${profile.username}"! Sessão salva permanentemente neste computador. ${profile.gamesCount ? `Localizados ${profile.gamesCount} jogos na biblioteca.` : ""}`
           );
         }
       } else {
-        // Fallback save with OAuth token
         setStoredGogUsername(target);
         setGogUsernameInput(target);
         setGogDirectAuthModalOpen(false);
         if (triggerAlert) {
-          triggerAlert("GOG Galaxy Conectado!", `Sessão OAuth criada e salva no computador para "${target}".`);
+          triggerAlert("GOG Galaxy Conectado!", `Sessão vinculada e salva no computador para "${target}".`);
         }
       }
     } catch (err: any) {
       console.error("Erro ao fazer login na GOG:", err);
-      if (triggerAlert) triggerAlert("Erro no Login GOG", "Não foi possível validar o usuário na GOG. Tente novamente.");
+      if (triggerAlert) triggerAlert("Erro no Login GOG", "Não foi possível validar o usuário na GOG. Verifique o código ou nome de usuário e tente novamente.");
     } finally {
       setIsLoggingInGog(false);
     }
@@ -1269,7 +1341,7 @@ export default function SiteSettingsModal({
           onClick={() => setGogDirectAuthModalOpen(false)}
         >
           <div
-            className="relative w-full max-w-md bg-[#130b24] border border-purple-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden"
+            className="relative w-full max-w-lg bg-[#130b24] border border-purple-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header banner GOG Purple */}
@@ -1282,9 +1354,9 @@ export default function SiteSettingsModal({
                 </div>
                 <div>
                   <h3 className="text-base font-extrabold text-white flex items-center gap-2">
-                    Login Direto GOG Galaxy
+                    Conectar Conta GOG Galaxy
                   </h3>
-                  <p className="text-xs text-purple-200/80">Conectar conta GOG sem chaves de API</p>
+                  <p className="text-xs text-purple-200/80">Sincronização contínua de horas, conquistas e jogos</p>
                 </div>
               </div>
               <button
@@ -1296,28 +1368,85 @@ export default function SiteSettingsModal({
               </button>
             </div>
 
-            <div className="p-3 bg-purple-950/40 border border-purple-500/30 rounded-2xl text-xs text-purple-200/90 leading-relaxed space-y-1">
-              <p className="font-semibold text-white">Como a autenticação GOG funciona:</p>
-              <p>O GOG Galaxy permite vincular sua conta diretamente inserindo seu nome de usuário, e-mail ou link de perfil do GOG.</p>
+            {/* Quick Step Guide for Official OAuth */}
+            <div className="p-3.5 bg-purple-950/40 border border-purple-500/30 rounded-2xl text-xs text-purple-200/90 leading-relaxed space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="font-extrabold text-white flex items-center gap-1.5 text-xs">
+                  <Sparkles size={13} className="text-purple-300" />
+                  Método Oficial OAuth (Recomendado)
+                </span>
+                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-full">
+                  Permanente
+                </span>
+              </div>
+              
+              <div className="space-y-1 text-[11px] text-zinc-300">
+                <p>1. Clique no botão para abrir o login da GOG ou copie o link oficial.</p>
+                <p>2. Faça login na sua conta GOG. A página retornará uma confirmação.</p>
+                <p>3. Copie o link final (ou código) retornado e cole no campo abaixo.</p>
+              </div>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
+                <a
+                  href={GOG_OAUTH_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={handleOpenOfficialGog}
+                  className="inline-flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-extrabold text-xs transition-all shadow-md shadow-purple-600/30 cursor-pointer text-center"
+                >
+                  <ExternalLink size={14} />
+                  <span>Abrir Login Oficial GOG</span>
+                </a>
+
+                <button
+                  type="button"
+                  onClick={handleCopyGogLink}
+                  className="inline-flex items-center justify-center gap-2 py-2.5 px-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-purple-200 hover:text-white font-bold text-xs transition-all cursor-pointer border border-purple-500/30"
+                >
+                  {copiedGogLink ? (
+                    <>
+                      <Check size={14} className="text-emerald-400" />
+                      <span className="text-emerald-400">Link Copiado!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy size={14} className="text-purple-300" />
+                      <span>Copiar Link de Login</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-purple-300 uppercase tracking-wider block">
-                Nome de Usuário, E-mail ou Perfil GOG
-              </label>
-              <input
-                type="text"
-                value={gogDirectInput}
-                onChange={(e) => setGogDirectInput(e.target.value)}
-                placeholder="Ex: SeuUsuario, usuario@email.com ou gog.com/u/usuario"
-                className="w-full bg-zinc-950/90 border border-purple-500/40 focus:border-purple-400 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none font-medium shadow-inner"
-                autoFocus
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleDirectGogLogin(gogDirectInput);
-                  }
-                }}
-              />
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-purple-300 uppercase tracking-wider block">
+                  Cole a URL de Sucesso, Código OAuth ou Usuário:
+                </label>
+                <button
+                  type="button"
+                  onClick={handlePasteGogCodeFromClipboard}
+                  className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <ClipboardPaste size={12} />
+                  <span>Colar da Transferência</span>
+                </button>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={gogDirectInput}
+                  onChange={(e) => setGogDirectInput(e.target.value)}
+                  placeholder="Ex: https://embed.gog.com/on_login_success?origin=client&code=... ou SeuUsuarioGOG"
+                  className="w-full bg-zinc-950/90 border border-purple-500/40 focus:border-purple-400 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none font-medium shadow-inner"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleDirectGogLogin(gogDirectInput);
+                    }
+                  }}
+                />
+              </div>
             </div>
 
             <div className="flex gap-2.5 pt-2">
@@ -1341,8 +1470,8 @@ export default function SiteSettingsModal({
                   </>
                 ) : (
                   <>
-                    <Sparkles size={15} className="text-purple-200" />
-                    <span>Entrar & Puxar Biblioteca</span>
+                    <CheckCircle2 size={15} className="text-purple-200" />
+                    <span>Confirmar & Sincronizar Permanente</span>
                   </>
                 )}
               </button>

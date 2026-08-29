@@ -26,6 +26,7 @@ import {
   fetchGogOwnedGames,
   fetchGogAchievements,
   formatGogPlaytime,
+  resolveGogGame,
   GogOwnedGame,
   GogAchievementsResult,
 } from "../utils/gogApi";
@@ -1164,6 +1165,9 @@ export default function GameFormModal({
         setGogAchieveData(ach);
         setGogAchievementsCount(ach.unlockedCount);
         setGogAchievementsTotal(ach.totalCount);
+        if (typeof ach.playtime_minutes === "number" && ach.playtime_minutes > 0) {
+          setGogPlaytimeMinutes(ach.playtime_minutes);
+        }
       }
     } catch {}
     triggerAlert(
@@ -1175,11 +1179,34 @@ export default function GameFormModal({
   const handleLoadGogInput = async () => {
     const input = gogUrlInput.trim();
     if (!input) {
-      triggerAlert("Campo Vazio", "Por favor, digite o ID do jogo ou nome do jogo da GOG.");
+      triggerAlert("Campo Vazio", "Por favor, digite o nome do jogo, ID ou cole a URL da loja GOG.");
       return;
     }
     setIsFetchingGog(true);
     try {
+      // 1. Try smart resolver first (handles URLs, Slugs, Store links, IDs and maps to user library)
+      const resolved = await resolveGogGame(input);
+      if (resolved && resolved.success) {
+        setGogGameId(resolved.gameId);
+        setGogPlaytimeMinutes(resolved.playtime_minutes);
+        setGogLastPlayedTimestamp(resolved.last_played_timestamp);
+        if (resolved.achievements) {
+          setGogAchieveData(resolved.achievements);
+          setGogAchievementsCount(resolved.achievements.unlockedCount);
+          setGogAchievementsTotal(resolved.achievements.totalCount);
+        }
+        if (!coverUrl && resolved.coverUrl) {
+          setCoverUrl(resolved.coverUrl);
+        }
+        setShowGogImport(false);
+        triggerAlert(
+          "GOG Sincronizada",
+          `Jogo "${resolved.title}" vinculado com sucesso via GOG Galaxy! (${formatGogPlaytime(resolved.playtime_minutes)} e ${resolved.achievements?.unlockedCount || 0}/${resolved.achievements?.totalCount || 0} conquistas)`
+        );
+        return;
+      }
+
+      // 2. Fallback to searching user owned games locally
       let list = gogUserGamesList;
       if (list.length === 0) {
         list = await fetchGogOwnedGames();
@@ -1192,6 +1219,7 @@ export default function GameFormModal({
         await handleLinkGogGame(matchGame);
         return;
       }
+
       setGogGameId(input);
       setGogPlaytimeMinutes(0);
       setShowGogImport(false);
@@ -1207,18 +1235,32 @@ export default function GameFormModal({
     if (!gogGameId) return;
     setIsFetchingGog(true);
     try {
-      const owned = await fetchGogOwnedGames();
-      setGogUserGamesList(owned);
-      const match = owned.find((g) => String(g.id) === String(gogGameId));
-      if (match) {
-        setGogPlaytimeMinutes(match.playtime_minutes);
-        setGogLastPlayedTimestamp(match.last_played_timestamp);
-      }
-      const ach = await fetchGogAchievements(gogGameId);
-      if (ach) {
-        setGogAchieveData(ach);
-        setGogAchievementsCount(ach.unlockedCount);
-        setGogAchievementsTotal(ach.totalCount);
+      const resolved = await resolveGogGame(String(gogGameId));
+      if (resolved && resolved.success) {
+        setGogPlaytimeMinutes(resolved.playtime_minutes);
+        setGogLastPlayedTimestamp(resolved.last_played_timestamp);
+        if (resolved.achievements) {
+          setGogAchieveData(resolved.achievements);
+          setGogAchievementsCount(resolved.achievements.unlockedCount);
+          setGogAchievementsTotal(resolved.achievements.totalCount);
+        }
+      } else {
+        const owned = await fetchGogOwnedGames();
+        setGogUserGamesList(owned);
+        const match = owned.find((g) => String(g.id) === String(gogGameId));
+        if (match) {
+          setGogPlaytimeMinutes(match.playtime_minutes);
+          setGogLastPlayedTimestamp(match.last_played_timestamp);
+        }
+        const ach = await fetchGogAchievements(gogGameId);
+        if (ach) {
+          setGogAchieveData(ach);
+          setGogAchievementsCount(ach.unlockedCount);
+          setGogAchievementsTotal(ach.totalCount);
+          if (typeof ach.playtime_minutes === "number" && ach.playtime_minutes > 0) {
+            setGogPlaytimeMinutes(ach.playtime_minutes);
+          }
+        }
       }
       triggerAlert("Estatísticas GOG Atualizadas", `Estatísticas da GOG sincronizadas com sucesso!`);
     } catch (err: any) {
@@ -1723,23 +1765,23 @@ export default function GameFormModal({
       metacriticCritScore,
       metacriticUserScore,
       integrationPlatform,
-      steamAppId: integrationPlatform === "steam" ? steamAppId : undefined,
-      steamPlaytimeMinutes: integrationPlatform === "steam" ? steamPlaytimeMinutes : undefined,
-      steamLastPlayedTimestamp: integrationPlatform === "steam" ? steamLastPlayedTimestamp : undefined,
+      steamAppId: integrationPlatform === "steam" && steamAppId && !isNaN(Number(steamAppId)) ? Number(steamAppId) : undefined,
+      steamPlaytimeMinutes: integrationPlatform === "steam" && typeof steamPlaytimeMinutes === "number" && !isNaN(steamPlaytimeMinutes) ? steamPlaytimeMinutes : undefined,
+      steamLastPlayedTimestamp: integrationPlatform === "steam" && typeof steamLastPlayedTimestamp === "number" && !isNaN(steamLastPlayedTimestamp) ? steamLastPlayedTimestamp : undefined,
       steamAchievementsCount: integrationPlatform === "steam"
-        ? (steamAchieveData ? steamAchieveData.unlockedCount : (steamAchievementsCount !== undefined ? steamAchievementsCount : game?.steamAchievementsCount))
+        ? (steamAchieveData ? (!isNaN(steamAchieveData.unlockedCount) ? steamAchieveData.unlockedCount : undefined) : (typeof steamAchievementsCount === "number" && !isNaN(steamAchievementsCount) ? steamAchievementsCount : (game?.steamAchievementsCount && !isNaN(game.steamAchievementsCount) ? game.steamAchievementsCount : undefined)))
         : undefined,
       steamAchievementsTotal: integrationPlatform === "steam"
-        ? (steamAchieveData ? steamAchieveData.totalCount : (steamAchievementsTotal !== undefined ? steamAchievementsTotal : game?.steamAchievementsTotal))
+        ? (steamAchieveData ? (!isNaN(steamAchieveData.totalCount) ? steamAchieveData.totalCount : undefined) : (typeof steamAchievementsTotal === "number" && !isNaN(steamAchievementsTotal) ? steamAchievementsTotal : (game?.steamAchievementsTotal && !isNaN(game.steamAchievementsTotal) ? game.steamAchievementsTotal : undefined)))
         : undefined,
-      gogGameId: integrationPlatform === "gog" ? gogGameId : undefined,
-      gogPlaytimeMinutes: integrationPlatform === "gog" ? gogPlaytimeMinutes : undefined,
-      gogLastPlayedTimestamp: integrationPlatform === "gog" ? gogLastPlayedTimestamp : undefined,
+      gogGameId: integrationPlatform === "gog" && gogGameId ? (typeof gogGameId === "number" ? (!isNaN(gogGameId) ? gogGameId : undefined) : (String(gogGameId).trim() || undefined)) : undefined,
+      gogPlaytimeMinutes: integrationPlatform === "gog" && typeof gogPlaytimeMinutes === "number" && !isNaN(gogPlaytimeMinutes) ? gogPlaytimeMinutes : undefined,
+      gogLastPlayedTimestamp: integrationPlatform === "gog" && typeof gogLastPlayedTimestamp === "number" && !isNaN(gogLastPlayedTimestamp) ? gogLastPlayedTimestamp : undefined,
       gogAchievementsCount: integrationPlatform === "gog"
-        ? (gogAchieveData ? gogAchieveData.unlockedCount : (gogAchievementsCount !== undefined ? gogAchievementsCount : game?.gogAchievementsCount))
+        ? (gogAchieveData ? (!isNaN(gogAchieveData.unlockedCount) ? gogAchieveData.unlockedCount : undefined) : (typeof gogAchievementsCount === "number" && !isNaN(gogAchievementsCount) ? gogAchievementsCount : (game?.gogAchievementsCount && !isNaN(game.gogAchievementsCount) ? game.gogAchievementsCount : undefined)))
         : undefined,
       gogAchievementsTotal: integrationPlatform === "gog"
-        ? (gogAchieveData ? gogAchieveData.totalCount : (gogAchievementsTotal !== undefined ? gogAchievementsTotal : game?.gogAchievementsTotal))
+        ? (gogAchieveData ? (!isNaN(gogAchieveData.totalCount) ? gogAchieveData.totalCount : undefined) : (typeof gogAchievementsTotal === "number" && !isNaN(gogAchievementsTotal) ? gogAchievementsTotal : (game?.gogAchievementsTotal && !isNaN(game.gogAchievementsTotal) ? game.gogAchievementsTotal : undefined)))
         : undefined,
       igdbId,
       igdbRating,
@@ -4664,16 +4706,21 @@ export default function GameFormModal({
 
                     {showGogImport ? (
                       <div className="space-y-3 bg-zinc-950 p-3.5 border border-purple-900/40 rounded-xl">
-                        <p className="text-[10px] text-zinc-400">
-                          Selecione o jogo correspondente da sua biblioteca GOG ou digite o ID / nome:
-                        </p>
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-medium text-zinc-300">
+                            Pesquise na sua biblioteca GOG ou cole a URL do jogo na loja GOG:
+                          </p>
+                          <p className="text-[10px] text-zinc-500 font-mono">
+                            Ex: https://www.gog.com/en/game/the_witcher_3_wild_hunt ou Cyberpunk 2077
+                          </p>
+                        </div>
 
                         <div className="flex gap-2">
                           <input
                             type="text"
                             value={gogUrlInput}
                             onChange={(e) => setGogUrlInput(e.target.value)}
-                            placeholder="ID do jogo GOG ou nome do jogo..."
+                            placeholder="URL da GOG, título do jogo ou ID..."
                             className="flex-1 bg-zinc-900 border border-purple-900/40 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-purple-500"
                             onKeyDown={(e) => {
                               if (e.key === "Enter") {
@@ -4686,50 +4733,74 @@ export default function GameFormModal({
                             type="button"
                             onClick={handleLoadGogInput}
                             disabled={isFetchingGog}
-                            className="px-3 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
+                            className="px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer shrink-0 shadow-sm"
                           >
-                            {isFetchingGog ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
-                            <span>Vincular</span>
+                            {isFetchingGog ? <Loader2 size={13} className="animate-spin" /> : <Search size={13} />}
+                            <span>Buscar & Vincular</span>
                           </button>
                           <button
                             type="button"
                             onClick={() => setShowGogImport(false)}
-                            className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-colors cursor-pointer"
+                            className="px-3 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-colors cursor-pointer shrink-0"
                           >
                             Cancelar
                           </button>
                         </div>
 
                         {isLoadingGogGames ? (
-                          <div className="py-2 text-center text-xs text-zinc-400 flex items-center justify-center gap-2">
+                          <div className="py-3 text-center text-xs text-zinc-400 flex items-center justify-center gap-2">
                             <Loader2 size={14} className="animate-spin text-purple-400" />
-                            <span>Buscando jogos da sua conta GOG...</span>
+                            <span>Buscando jogos da sua conta GOG conectada...</span>
                           </div>
                         ) : gogUserGamesList.length > 0 ? (
                           <div className="space-y-1.5 pt-2 border-t border-zinc-800/80">
-                            <label className="block text-[10px] font-bold text-zinc-400 uppercase tracking-wider font-mono">
-                              Escolha um jogo da sua biblioteca GOG ({gogUserGamesList.length} jogos):
-                            </label>
-                            <div className="max-h-44 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                            <div className="flex items-center justify-between">
+                              <label className="block text-[10px] font-bold text-purple-300 uppercase tracking-wider font-mono">
+                                Jogos na sua conta GOG ({gogUserGamesList.length}):
+                              </label>
+                              <span className="text-[10px] text-zinc-500">Clique para vincular</span>
+                            </div>
+                            <div className="max-h-52 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
                               {gogUserGamesList
-                                .filter((gg) => !name || gg.title.toLowerCase().includes(name.toLowerCase()) || name.toLowerCase().includes(gg.title.toLowerCase()) || !gogUrlInput || gg.title.toLowerCase().includes(gogUrlInput.toLowerCase()))
-                                .slice(0, 20)
+                                .filter((gg) => {
+                                  const searchFilter = (gogUrlInput || name || "").toLowerCase().trim();
+                                  if (!searchFilter) return true;
+                                  return (
+                                    gg.title.toLowerCase().includes(searchFilter) ||
+                                    (gg.slug && gg.slug.toLowerCase().includes(searchFilter)) ||
+                                    String(gg.id) === searchFilter
+                                  );
+                                })
+                                .slice(0, 30)
                                 .map((gg) => (
                                   <div
                                     key={gg.id}
                                     onClick={() => handleLinkGogGame(gg)}
-                                    className="p-2 bg-zinc-900 hover:bg-purple-950/40 border border-zinc-800 hover:border-purple-500/40 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2 group"
+                                    className="p-2 bg-zinc-900 hover:bg-purple-950/50 border border-zinc-800 hover:border-purple-500/50 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2 group"
                                   >
                                     <div className="flex items-center gap-2 min-w-0">
-                                      <span className="text-xs font-bold text-zinc-200 group-hover:text-purple-300 truncate">
-                                        {gg.title}
-                                      </span>
+                                      {gg.img_icon_url && (
+                                        <img
+                                          src={gg.img_icon_url}
+                                          alt={gg.title}
+                                          className="w-8 h-8 rounded-lg object-cover border border-zinc-700/50 shrink-0"
+                                          referrerPolicy="no-referrer"
+                                        />
+                                      )}
+                                      <div className="min-w-0">
+                                        <span className="text-xs font-bold text-zinc-200 group-hover:text-purple-300 truncate block">
+                                          {gg.title}
+                                        </span>
+                                        <span className="text-[10px] font-mono text-zinc-500">
+                                          ID: {gg.id}
+                                        </span>
+                                      </div>
                                     </div>
                                     <div className="flex items-center gap-2 shrink-0">
-                                      <span className="text-[11px] font-mono font-bold text-fuchsia-400">
+                                      <span className="text-[11px] font-mono font-bold text-fuchsia-400 bg-fuchsia-950/30 px-2 py-0.5 rounded border border-fuchsia-800/30">
                                         {formatGogPlaytime(gg.playtime_minutes)}
                                       </span>
-                                      <span className="text-[10px] font-bold bg-purple-600 hover:bg-purple-500 text-white px-2 py-0.5 rounded-lg">
+                                      <span className="text-[10px] font-bold bg-purple-600 hover:bg-purple-500 text-white px-2.5 py-1 rounded-lg shadow-sm">
                                         Vincular
                                       </span>
                                     </div>

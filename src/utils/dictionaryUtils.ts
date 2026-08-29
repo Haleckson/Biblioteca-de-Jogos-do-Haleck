@@ -99,6 +99,33 @@ const createStyledElement = (matchedText: string, format: DictionaryFormat): HTM
   return span;
 };
 
+function isWordChar(char: string): boolean {
+  if (!char) return false;
+  return /[\p{L}\p{N}_]/u.test(char);
+}
+
+/**
+ * Finds the index of an isolated term in fullText (case-insensitive)
+ * ensuring the match is not a substring inside another word.
+ */
+function findIsolatedTermIndex(fullText: string, termLower: string, termLen: number): number {
+  const fullTextLower = fullText.toLowerCase();
+  let searchFrom = 0;
+  while (searchFrom <= fullTextLower.length - termLen) {
+    const idx = fullTextLower.indexOf(termLower, searchFrom);
+    if (idx === -1) return -1;
+
+    const charBefore = idx > 0 ? fullText[idx - 1] : "";
+    const charAfter = idx + termLen < fullText.length ? fullText[idx + termLen] : "";
+
+    if (!isWordChar(charBefore) && !isWordChar(charAfter)) {
+      return idx;
+    }
+    searchFrom = idx + 1;
+  }
+  return -1;
+}
+
 /**
  * Processes a single dictionary term across the entire container,
  * searching text nodes even if phrases span across inline formatting tags,
@@ -151,7 +178,7 @@ function processTermInContainer(
 
     if (fullText.length === 0) break;
 
-    const matchIndex = fullText.toLowerCase().indexOf(termLower);
+    const matchIndex = findIsolatedTermIndex(fullText, termLower, termNorm.length);
     if (matchIndex === -1) break;
 
     const matchStart = matchIndex;

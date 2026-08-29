@@ -16,7 +16,7 @@ import { CustomAlert, CustomConfirm, CustomPasswordPrompt, CustomDriveConnectPro
 import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock, Mail, Move, ArrowUp, RotateCcw, Key, Settings, BarChart3, Sparkles, Wifi, WifiOff } from "lucide-react";
 import GlobalSearchModal from "./components/GlobalSearchModal";
 import { DashboardView } from "./components/DashboardView";
-import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, verifyGameDataIntegrity, auth } from "./utils/firebase";
+import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, verifyGameDataIntegrity, auth, syncGogAuthFromFirebase } from "./utils/firebase";
 import { uploadToImgBB, getCustomImgBBKey } from "./utils/imgbb";
 import {
   signInWithGoogleDrive,
@@ -33,7 +33,7 @@ import { GlobalUploadProgressWidget } from "./components/GlobalUploadProgressWid
 import { mediaUploadQueueManager } from "./utils/mediaUploadManager";
 import SiteSettingsModal from "./components/SiteSettingsModal";
 import { formatSteamPlaytime, fetchSteamOwnedGames, fetchSteamAchievements, fetchSteamProfile, SteamPlayerSummary } from "./utils/steamApi";
-import { fetchGogOwnedGames, fetchGogAchievements, formatGogPlaytime } from "./utils/gogApi";
+import { fetchGogOwnedGames, fetchGogAchievements, formatGogPlaytime, fetchGogProfile, resolveGogGame, setStoredGogOAuthToken, setStoredGogUsername, setStoredGogUserId, GogPlayerSummary } from "./utils/gogApi";
 import ImageZoomLightbox from "./components/ImageZoomLightbox";
 import { repairAllGameMedias, recoverAndReindexImgBBMedias, deduplicateAndSanitizeGameMedias } from "./utils/mediaRepair";
 import { GlobalTooltip } from "./components/GlobalTooltip";
@@ -597,24 +597,57 @@ export default function App() {
   const [isBatchSyncingSteam, setIsBatchSyncingSteam] = useState(false);
   const [isBatchSyncingGog, setIsBatchSyncingGog] = useState(false);
   const [steamProfile, setSteamProfile] = useState<SteamPlayerSummary | null>(null);
+  const [gogProfile, setGogProfile] = useState<GogPlayerSummary | null>(null);
 
   useEffect(() => {
     let mounted = true;
-    const loadSteamProfile = async () => {
+
+    // Sincronizar credenciais de autenticação da GOG armazenadas no Firebase (Cross-Device)
+    let unsubscribeGogAuth: (() => void) | undefined;
+    if (isFirebaseConfigured()) {
       try {
-        const prof = await fetchSteamProfile();
-        if (mounted && prof) {
-          setSteamProfile(prof);
+        unsubscribeGogAuth = syncGogAuthFromFirebase((authData) => {
+          if (authData) {
+            console.log("[CrossDeviceGOG] Sessão GOG sincronizada da nuvem:", authData.username || authData.userId);
+            if (authData.token) setStoredGogOAuthToken(authData.token, authData.expiresAt, authData.refreshToken, true);
+            if (authData.username) setStoredGogUsername(authData.username, true);
+            if (authData.userId) setStoredGogUserId(authData.userId, true);
+            
+            // Recarrega o perfil da GOG imediatamente
+            fetchGogProfile().then((prof) => {
+              if (mounted && prof) setGogProfile(prof);
+            }).catch(() => {});
+          }
+        });
+      } catch (err) {
+        console.warn("Erro ao escutar sessão GOG no Firebase:", err);
+      }
+    }
+
+    const loadGamingProfiles = async () => {
+      try {
+        const steamProf = await fetchSteamProfile();
+        if (mounted && steamProf) {
+          setSteamProfile(steamProf);
         }
       } catch (e) {
-        // ignore profile error
+        // ignore steam profile error
+      }
+      try {
+        const gogProf = await fetchGogProfile();
+        if (mounted && gogProf) {
+          setGogProfile(gogProf);
+        }
+      } catch (e) {
+        // ignore gog profile error
       }
     };
-    loadSteamProfile();
-    const interval = setInterval(loadSteamProfile, 2 * 60 * 1000);
+    loadGamingProfiles();
+    const interval = setInterval(loadGamingProfiles, 2 * 60 * 1000);
     return () => {
       mounted = false;
       clearInterval(interval);
+      if (unsubscribeGogAuth) unsubscribeGogAuth();
     };
   }, []);
 
@@ -690,33 +723,76 @@ export default function App() {
 
     setIsBatchSyncingGog(true);
     try {
-      const ownedList = await fetchGogOwnedGames();
+      let ownedList: any[] = [];
+      try {
+        ownedList = await fetchGogOwnedGames();
+      } catch (e) {
+        console.warn("Aviso ao buscar owned games:", e);
+      }
+
       let updatedCount = 0;
 
       const newGames = await Promise.all(
         games.map(async (g) => {
           if (g.integrationPlatform !== "gog" && !g.gogGameId) return g;
-          const match = ownedList.find(
-            (o) => String(o.id) === String(g.gogGameId) || o.title.toLowerCase() === g.name.toLowerCase()
-          );
           let updated = { ...g };
-          if (match) {
-            updated.gogPlaytimeMinutes = match.playtime_minutes;
-            if (match.last_played_timestamp) {
-              updated.gogLastPlayedTimestamp = match.last_played_timestamp;
+          let newPlaytime = updated.gogPlaytimeMinutes || 0;
+          let newLastPlayed = updated.gogLastPlayedTimestamp;
+
+          // 1. Tenta resolver profundamente pela API da GOG
+          try {
+            const resolved = await resolveGogGame(String(updated.gogGameId || updated.name));
+            if (resolved && resolved.success) {
+              if (!updated.gogGameId && resolved.gameId) {
+                updated.gogGameId = resolved.gameId;
+              }
+              if (resolved.playtime_minutes > 0) {
+                newPlaytime = resolved.playtime_minutes;
+              }
+              if (resolved.last_played_timestamp) {
+                newLastPlayed = resolved.last_played_timestamp;
+              }
+              if (resolved.achievements) {
+                const prevCount = g.gogAchievementsCount;
+                const currentCount = resolved.achievements.unlockedCount;
+                if (prevCount !== undefined && currentCount > prevCount) {
+                  const diff = currentCount - prevCount;
+                  showToast({
+                    title: `🏆 Novas Conquistas GOG em "${g.name}"!`,
+                    message: `Você conquistou +${diff} nova(s) conquista(s) na GOG! Total: ${currentCount} / ${resolved.achievements.totalCount}`,
+                    type: "achievement",
+                    duration: 8000,
+                  });
+                }
+                updated.gogAchievementsCount = resolved.achievements.unlockedCount;
+                updated.gogAchievementsTotal = resolved.achievements.totalCount;
+              }
             }
-            if (!updated.gogGameId) {
-              updated.gogGameId = String(match.id);
-            }
-            // Update main playtime string if GOG is the primary integration platform
-            if (g.integrationPlatform === "gog") {
-              updated.playtime = formatGogPlaytime(match.playtime_minutes);
+          } catch (e) {
+            console.warn(`Aviso ao resolver jogo ${g.name} na GOG:`, e);
+          }
+
+          // 2. Fallback na lista de jogos adquiridos
+          if (newPlaytime === 0 && ownedList.length > 0) {
+            const match = ownedList.find(
+              (o) => (updated.gogGameId && String(o.id) === String(updated.gogGameId)) ||
+                     o.title.toLowerCase().trim() === g.name.toLowerCase().trim()
+            );
+            if (match) {
+              if (match.playtime_minutes > 0) newPlaytime = match.playtime_minutes;
+              if (match.last_played_timestamp) newLastPlayed = match.last_played_timestamp;
+              if (!updated.gogGameId) updated.gogGameId = String(match.id);
             }
           }
-          try {
-            if (updated.gogGameId) {
+
+          // 3. Fallback de conquistas se ainda não tiverem sido computadas
+          if (updated.gogGameId && updated.gogAchievementsCount === undefined) {
+            try {
               const ach = await fetchGogAchievements(updated.gogGameId);
               if (ach) {
+                if (ach.playtime_minutes && ach.playtime_minutes > 0 && newPlaytime === 0) {
+                  newPlaytime = ach.playtime_minutes;
+                }
                 const prevCount = g.gogAchievementsCount;
                 const currentCount = ach.unlockedCount;
                 if (prevCount !== undefined && currentCount > prevCount) {
@@ -731,10 +807,21 @@ export default function App() {
                 updated.gogAchievementsCount = ach.unlockedCount;
                 updated.gogAchievementsTotal = ach.totalCount;
               }
+            } catch {
+              // Ignore individual achievement fetch failure
             }
-          } catch {
-            // Ignore individual achievement fetch failure
           }
+
+          if (newPlaytime > 0) {
+            updated.gogPlaytimeMinutes = newPlaytime;
+            if (g.integrationPlatform === "gog") {
+              updated.playtime = formatGogPlaytime(newPlaytime);
+            }
+          }
+          if (newLastPlayed) {
+            updated.gogLastPlayedTimestamp = newLastPlayed;
+          }
+
           updatedCount++;
           return updated;
         })
@@ -748,7 +835,7 @@ export default function App() {
       );
     } catch (err: any) {
       console.error(err);
-      triggerAlert("Erro na Sincronização GOG", "Não foi possível buscar a biblioteca GOG do usuário.");
+      triggerAlert("Erro na Sincronização GOG", "Não foi possível sincronizar todos os dados da GOG do usuário.");
     } finally {
       setIsBatchSyncingGog(false);
     }

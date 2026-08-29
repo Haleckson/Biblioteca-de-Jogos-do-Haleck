@@ -12,6 +12,7 @@ import TrophyBadge, { TrophiesList } from "./TrophyBadge";
 import { formatHoursAndMinutes, getTotalGamePlaytimeHours, getGameTimeBreakdown } from "../utils/playtime";
 import { startLiveSessionForGame } from "./LiveSessionWidget";
 import { formatSteamPlaytime } from "../utils/steamApi";
+import { formatGogPlaytime } from "../utils/gogApi";
 import CachedImage from "./CachedImage";
 
 export interface GameCardProps {
@@ -1197,7 +1198,7 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
           )}
 
           {/* Steam Badge & Mini Achievements Bar */}
-          {(game.steamAppId || (game.steamPlaytimeMinutes && game.steamPlaytimeMinutes > 0)) && (
+          {(game.integrationPlatform === "steam" || (!game.integrationPlatform && game.steamAppId) || (game.steamPlaytimeMinutes && game.steamPlaytimeMinutes > 0)) && (game.steamAppId || (game.steamPlaytimeMinutes && game.steamPlaytimeMinutes > 0)) && (
             <div className="mt-2.5 pt-2 border-t border-zinc-800/80">
               <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-blue-950/40 border border-blue-500/30 rounded-xl shadow-inner">
                 <div className="flex items-center gap-1.5 min-w-0">
@@ -1224,6 +1225,44 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                           <div
                             className="h-full bg-gradient-to-r from-amber-500 to-yellow-400"
                             style={{ width: `${Math.round((game.steamAchievementsCount / game.steamAchievementsTotal) * 100)}%` }}
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          )}
+
+          {/* GOG Badge & Mini Achievements Bar */}
+          {(game.integrationPlatform === "gog" || (!game.integrationPlatform && game.gogGameId) || (game.gogPlaytimeMinutes && game.gogPlaytimeMinutes > 0)) && (game.gogGameId || (game.gogPlaytimeMinutes && game.gogPlaytimeMinutes > 0)) && (
+            <div className="mt-2.5 pt-2 border-t border-zinc-800/80">
+              <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 bg-purple-950/40 border border-purple-500/30 rounded-xl shadow-inner">
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <Gamepad2 size={13} className="text-purple-400 shrink-0" />
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-purple-300 font-mono truncate">
+                    GOG: {game.gogPlaytimeMinutes ? formatGogPlaytime(game.gogPlaytimeMinutes) : "Vinculado"}
+                  </span>
+                </div>
+
+                {game.gogAchievementsCount !== undefined && game.gogAchievementsTotal !== undefined && game.gogAchievementsTotal > 0 ? (
+                  <div className="flex items-center gap-1.5 shrink-0" title={`Conquistas GOG: ${game.gogAchievementsCount}/${game.gogAchievementsTotal}`}>
+                    {game.gogAchievementsCount === game.gogAchievementsTotal ? (
+                      <span className="text-[10px] font-mono font-extrabold text-fuchsia-300 bg-gradient-to-r from-purple-500/30 to-fuchsia-400/30 border border-purple-400/60 px-1.5 py-0.5 rounded-full flex items-center gap-1 animate-pulse shadow-sm">
+                        <Sparkles size={10} className="text-fuchsia-300" />
+                        <span>👑 100% Achiev.</span>
+                      </span>
+                    ) : (
+                      <>
+                        <Trophy size={11} className="text-purple-400 shrink-0" />
+                        <span className="text-[10px] font-mono font-bold text-purple-300">
+                          {Math.round((game.gogAchievementsCount / game.gogAchievementsTotal) * 100)}%
+                        </span>
+                        <div className="w-10 h-1.5 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
+                          <div
+                            className="h-full bg-gradient-to-r from-purple-500 to-fuchsia-400"
+                            style={{ width: `${Math.round((game.gogAchievementsCount / game.gogAchievementsTotal) * 100)}%` }}
                           />
                         </div>
                       </>
