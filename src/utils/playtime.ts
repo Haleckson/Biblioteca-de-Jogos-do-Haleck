@@ -27,24 +27,29 @@ export function parsePlaytimeHours(val: string | number | undefined | null): num
   if (hmMatch) {
     const hours = parseFloat(hmMatch[1]) || 0;
     const mins = parseFloat(hmMatch[2]) || 0;
-    return hours + mins / 60 + (hasHalf ? 0.5 : 0);
+    const total = hours + mins / 60 + (hasHalf ? 0.5 : 0);
+    return total > 25000 ? 0 : total;
   }
 
   // Handle "Xh" or "X hours" or "X horas"
   const hMatch = str.match(/(\d+(?:\.\d+)?)\s*(?:h|hora|horas|hour|hours)?/i);
   if (hMatch && hMatch[1]) {
     const hours = parseFloat(hMatch[1]) || 0;
-    return hours + (hasHalf ? 0.5 : 0);
+    const total = hours + (hasHalf ? 0.5 : 0);
+    return total > 25000 ? 0 : total;
   }
 
   // Handle plain numbers e.g. "20.5" or "20,5"
   const cleaned = str.replace(/,/g, ".").replace(/[^\d.]/g, "");
   const num = parseFloat(cleaned);
+  let total = 0;
   if (!isNaN(num)) {
-    return num + (hasHalf ? 0.5 : 0);
+    total = num + (hasHalf ? 0.5 : 0);
   }
 
-  return 0;
+  // Reject impossible hours (> 25,000 hours, e.g. product IDs or epoch timestamps stored by mistake)
+  if (total > 25000) return 0;
+  return total;
 }
 
 /**

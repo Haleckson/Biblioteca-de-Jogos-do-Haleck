@@ -1955,24 +1955,35 @@ const GOG_CLIENT_ID = "46899977096215655";
 const GOG_CLIENT_SECRET = "9d85c43b1482497dbbce61f6e4aa173a433796eeae2ca8c5f6129f2dc4de46d9";
 const GOG_REDIRECT_URI = "https://embed.gog.com/on_login_success?origin=client";
 
-// Known GOG store ID <-> client product ID mappings for popular games
+// Known GOG store ID <-> Galaxy client product ID mappings for popular games
 const GOG_GAME_ID_ALIASES: Record<string, string[]> = {
-  // Cyberpunk 2077
-  "2093619782": ["1423049311", "1274966284", "1256837418", "2093619782"],
-  "1423049311": ["2093619782", "1274966284", "1256837418", "1423049311"],
-  "1274966284": ["1423049311", "2093619782", "1256837418", "1274966284"],
-  "1256837418": ["2093619782", "1423049311", "1274966284", "1256837418"],
-  // The Witcher: Enhanced Edition (Witcher 1) - GOG Store ID: 1207658924
-  "1207658924": ["1207658924"],
-  // The Witcher 2: Assassins of Kings Enhanced Edition - GOG Store ID: 1207658930
-  "1207658930": ["1207658930"],
+  // Cyberpunk 2077 (Base, Phantom Liberty, Ultimate Edition, Galaxy Client IDs)
+  "2093619782": ["1423049311", "1274966284", "1256837418", "1728135898", "2093619782", "51254394747352345", "51457199105436657"],
+  "1423049311": ["2093619782", "1274966284", "1256837418", "1728135898", "1423049311", "51254394747352345", "51457199105436657"],
+  "1274966284": ["1423049311", "2093619782", "1256837418", "1728135898", "1274966284", "51254394747352345", "51457199105436657"],
+  "1256837418": ["2093619782", "1423049311", "1274966284", "1728135898", "1256837418", "51254394747352345", "51457199105436657"],
+  "1728135898": ["2093619782", "1423049311", "1274966284", "1256837418", "1728135898", "51254394747352345", "51457199105436657"],
+  "51254394747352345": ["2093619782", "1423049311", "1274966284", "1256837418", "1728135898", "51254394747352345", "51457199105436657"],
+  "51457199105436657": ["2093619782", "1423049311", "1274966284", "1256837418", "1728135898", "51254394747352345", "51457199105436657"],
+  // The Witcher: Enhanced Edition (Witcher 1)
+  "1207658924": ["1207658924", "49733479681143810"],
+  "49733479681143810": ["1207658924", "49733479681143810"],
+  // The Witcher 2: Assassins of Kings Enhanced Edition
+  "1207658930": ["1207658930", "49733479681143820"],
+  "49733479681143820": ["1207658930", "49733479681143820"],
   // The Witcher 3: Wild Hunt & Complete / GOTY Editions
-  "1495134320": ["1640424747", "1640498114", "1207658934", "1495134320"],
-  "1640424747": ["1495134320", "1640498114", "1207658934", "1640424747"],
-  "1640498114": ["1495134320", "1640424747", "1207658934", "1640498114"],
-  "1207658934": ["1495134320", "1640424747", "1640498114", "1207658934"],
+  "1495134320": ["1640424747", "1640498114", "1207658934", "1495134320", "49733479681143825", "49733479681143826"],
+  "1640424747": ["1495134320", "1640498114", "1207658934", "1640424747", "49733479681143825", "49733479681143826"],
+  "1640498114": ["1495134320", "1640424747", "1207658934", "1640498114", "49733479681143825", "49733479681143826"],
+  "1207658934": ["1495134320", "1640424747", "1640498114", "1207658934", "49733479681143825", "49733479681143826"],
+  "49733479681143825": ["1495134320", "1640424747", "1640498114", "1207658934", "49733479681143825", "49733479681143826"],
+  "49733479681143826": ["1495134320", "1640424747", "1640498114", "1207658934", "49733479681143825", "49733479681143826"],
   // Thronebreaker: The Witcher Tales
-  "1297352383": ["1297352383"],
+  "1297352383": ["1297352383", "51351187425251412"],
+  "51351187425251412": ["1297352383", "51351187425251412"],
+  // Gwent
+  "1971471926": ["1971471926", "51010355152220194"],
+  "51010355152220194": ["1971471926", "51010355152220194"],
   // The Witcher Adventure Game
   "1207666883": ["1207666883"],
 };
@@ -1994,6 +2005,104 @@ function parseGogUsername(raw: string): string {
     clean = clean.split("@")[0];
   }
   return clean.replace(/^@/, "");
+}
+
+function isValidGogBearerToken(token: string): boolean {
+  if (!token || typeof token !== "string") return false;
+  const trimmed = token.trim();
+  if (!trimmed || trimmed.startsWith("gog_oauth_") || trimmed.length < 20) return false;
+  return true;
+}
+
+function extractGogPlaytimeMinutes(obj: any): number {
+  if (!obj) return 0;
+
+  const sanitizeMinutes = (val: any): number => {
+    if (typeof val === "number" && !isNaN(val) && val > 0 && val < 500000) {
+      // Reject if value is equal to known GOG IDs (> 100,000 or in aliases) or epoch timestamps (> 1,000,000)
+      const strVal = String(Math.round(val));
+      if (GOG_GAME_ID_ALIASES[strVal] || val > 300000) {
+        return 0;
+      }
+      return Math.round(val);
+    }
+    return 0;
+  };
+
+  if (typeof obj === "number") {
+    return sanitizeMinutes(obj);
+  }
+
+  if (typeof obj !== "object") return 0;
+
+  // 1. Direct minutes candidates
+  const minuteCandidates = [
+    obj.stats?.playtime,
+    obj.stats?.playtime_minutes,
+    obj.stats?.total_playtime,
+    obj.playtime_minutes,
+    obj.total_playtime,
+    obj.playtime,
+    obj.minutes,
+    obj.gameplay?.playtime,
+    obj.gameplay?.minutes,
+    obj.gameplay?.total_playtime,
+  ];
+
+  for (const c of minuteCandidates) {
+    if (typeof c === "number") {
+      const sanitized = sanitizeMinutes(c);
+      if (sanitized > 0) return sanitized;
+    }
+    if (typeof c === "string" && c.trim()) {
+      const match = c.match(/(\d+(?:\.\d+)?)/);
+      if (match) {
+        const parsed = parseFloat(match[1]);
+        if (parsed > 0) {
+          const inMin = c.toLowerCase().includes("h") ? Math.round(parsed * 60) : Math.round(parsed);
+          const sanitized = sanitizeMinutes(inMin);
+          if (sanitized > 0) return sanitized;
+        }
+      }
+    }
+  }
+
+  // 2. Direct hours candidates
+  if (typeof obj.stats?.hours === "number") {
+    const sanitized = sanitizeMinutes(obj.stats.hours * 60);
+    if (sanitized > 0) return sanitized;
+  }
+  if (typeof obj.hours === "number") {
+    const sanitized = sanitizeMinutes(obj.hours * 60);
+    if (sanitized > 0) return sanitized;
+  }
+
+  // 3. Duration in seconds (GOG sessions API sometimes returns seconds)
+  if (typeof obj.duration === "number" && obj.duration > 0 && obj.duration < 18000000) {
+    const sanitized = sanitizeMinutes(obj.duration / 60);
+    if (sanitized > 0) return sanitized;
+  }
+
+  // 4. Sum of sessions/items
+  const sessions = obj.sessions || obj.items || obj.stats?.sessions;
+  if (Array.isArray(sessions) && sessions.length > 0) {
+    let sumMin = 0;
+    for (const s of sessions) {
+      if (typeof s?.time === "number") {
+        const sm = sanitizeMinutes(s.time);
+        if (sm > 0) sumMin += sm;
+      } else if (typeof s?.duration === "number" && s.duration > 0 && s.duration < 18000000) {
+        const sm = sanitizeMinutes(s.duration / 60);
+        if (sm > 0) sumMin += sm;
+      } else if (typeof s?.minutes === "number") {
+        const sm = sanitizeMinutes(s.minutes);
+        if (sm > 0) sumMin += sm;
+      }
+    }
+    if (sumMin > 0 && sumMin < 300000) return sumMin;
+  }
+
+  return 0;
 }
 
 function extractGogAuthCode(rawInput: string): string {
@@ -2147,7 +2256,8 @@ app.get("/api/gog/profile", async (req, res) => {
     const rawUser = (req.query.username as string) || "";
     const username = parseGogUsername(rawUser);
     const userId = (req.query.userId as string) || "";
-    const token = (req.query.token as string) || "";
+    const rawToken = (req.query.token as string) || "";
+    const token = isValidGogBearerToken(rawToken) ? rawToken : "";
 
     if (!username && !userId && !token) {
       res.status(400).json({ error: "Nome de usuário, token ou perfil da GOG é obrigatório." });
@@ -2218,7 +2328,8 @@ app.get("/api/gog/owned-games", async (req, res) => {
     const rawUser = (req.query.username as string) || "";
     const username = parseGogUsername(rawUser);
     const userId = (req.query.userId as string) || "";
-    const token = (req.query.token as string) || "";
+    const rawToken = (req.query.token as string) || "";
+    const token = isValidGogBearerToken(rawToken) ? rawToken : "";
     const query = (req.query.query as string) || "";
 
     const cacheKey = `gog:owned:${token || username || userId}:${query}`;
@@ -2229,6 +2340,98 @@ app.get("/api/gog/owned-games", async (req, res) => {
     }
 
     let games: any[] = [];
+    const statsMap = new Map<string, { playtime: number; lastPlayed?: number; title?: string }>();
+
+    // Helper to extract products from stats response
+    const processStatsData = (sData: any) => {
+      const products = sData?.products || (Array.isArray(sData) ? sData : []);
+      if (Array.isArray(products)) {
+        for (const p of products) {
+          const pId = String(p.id || p.productId || "");
+          const pt = extractGogPlaytimeMinutes(p);
+          const pTitle = p.title || p.name || "";
+          let lastPlayed: number | undefined = undefined;
+          if (p.stats?.last_played) {
+            lastPlayed = Math.floor(new Date(p.stats.last_played).getTime() / 1000);
+          } else if (p.last_played) {
+            lastPlayed = Math.floor(new Date(p.last_played).getTime() / 1000);
+          }
+
+          if (pId) {
+            const existing = statsMap.get(pId);
+            const maxPt = Math.max(existing?.playtime || 0, pt);
+            statsMap.set(pId, {
+              playtime: maxPt,
+              lastPlayed: lastPlayed || existing?.lastPlayed,
+              title: pTitle || existing?.title,
+            });
+
+            // Also map all known aliases
+            if (GOG_GAME_ID_ALIASES[pId]) {
+              for (const alias of GOG_GAME_ID_ALIASES[pId]) {
+                if (alias !== pId) {
+                  const exAlias = statsMap.get(alias);
+                  statsMap.set(alias, {
+                    playtime: Math.max(exAlias?.playtime || 0, maxPt),
+                    lastPlayed: lastPlayed || exAlias?.lastPlayed,
+                    title: pTitle || exAlias?.title,
+                  });
+                }
+              }
+            }
+          }
+        }
+      }
+    };
+
+    // If username or token is present, fetch user stats feed (multi-page)
+    if (username || token) {
+      const statsUser = username || (token ? "current" : "");
+      if (statsUser) {
+        const pagesToFetch = [1, 2, 3, 4, 5];
+        for (const page of pagesToFetch) {
+          const statsUrls = [
+            `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=${page}`,
+            `https://embed.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=${page}`,
+            query ? `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?search=${encodeURIComponent(query)}&page=${page}` : null,
+          ].filter(Boolean) as string[];
+
+          for (const sUrl of statsUrls) {
+            try {
+              // Try with token if available
+              if (token) {
+                try {
+                  const sRes = await fetchWithTimeout(sUrl, {
+                    headers: {
+                      "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                      "Accept": "application/json",
+                      "Authorization": `Bearer ${token}`,
+                    }
+                  }, 4000);
+                  if (sRes.ok) {
+                    const sData = await sRes.json();
+                    processStatsData(sData);
+                    continue;
+                  }
+                } catch {}
+              }
+
+              // Public fallback without auth header
+              const publicRes = await fetchWithTimeout(sUrl, {
+                headers: {
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                  "Accept": "application/json",
+                }
+              }, 4000);
+              if (publicRes.ok) {
+                const sData = await publicRes.json();
+                processStatsData(sData);
+              }
+            } catch {}
+          }
+        }
+      }
+    }
 
     if (token) {
       try {
@@ -2245,18 +2448,24 @@ app.get("/api/gog/owned-games", async (req, res) => {
           if (Array.isArray(rawOwned) && rawOwned.length > 0) {
             games = rawOwned.map((g: any) => {
               if (typeof g === "number" || typeof g === "string") {
+                const sId = String(g);
+                const sStat = statsMap.get(sId);
                 return {
-                  id: String(g),
-                  title: `Jogo GOG (${g})`,
-                  playtime_minutes: 0,
+                  id: sId,
+                  title: sStat?.title || `Jogo GOG (${sId})`,
+                  playtime_minutes: sStat?.playtime || 0,
+                  last_played_timestamp: sStat?.lastPlayed,
                 };
               }
+              const sId = String(g.id || g.productId);
+              const sStat = statsMap.get(sId);
+              const playtime = Math.max(extractGogPlaytimeMinutes(g), sStat?.playtime || 0);
               return {
-                id: String(g.id || g.productId),
-                title: g.title || g.name || "Jogo GOG",
+                id: sId,
+                title: g.title || g.name || sStat?.title || "Jogo GOG",
                 slug: g.slug || "",
-                playtime_minutes: typeof g.playtime === "number" ? Math.round(g.playtime) : 0,
-                last_played_timestamp: g.last_played ? Math.floor(new Date(g.last_played).getTime() / 1000) : undefined,
+                playtime_minutes: playtime,
+                last_played_timestamp: g.last_played ? Math.floor(new Date(g.last_played).getTime() / 1000) : sStat?.lastPlayed,
                 img_icon_url: g.image || g.cover || (g.images ? (g.images.logo || g.images.box) : undefined),
               };
             });
@@ -2267,22 +2476,43 @@ app.get("/api/gog/owned-games", async (req, res) => {
       }
     }
 
+    // If games is still empty but statsMap has games, convert statsMap into games array
+    if (games.length === 0 && statsMap.size > 0) {
+      const addedIds = new Set<string>();
+      statsMap.forEach((stat, pId) => {
+        if (!addedIds.has(pId)) {
+          addedIds.add(pId);
+          games.push({
+            id: pId,
+            title: stat.title || `Jogo GOG (${pId})`,
+            playtime_minutes: stat.playtime,
+            last_played_timestamp: stat.lastPlayed,
+          });
+        }
+      });
+    }
+
     if (query || games.length === 0) {
       try {
-        const searchQuery = query || "The Witcher Cyberpunk";
+        const searchQuery = query || "Cyberpunk Witcher";
         const catRes = await fetchWithTimeout(`https://catalog.gog.com/v1/catalog?limit=30&query=${encodeURIComponent(searchQuery)}`, {
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" }
         }, 6000);
         if (catRes.ok) {
           const catData = await catRes.json();
           const products = catData?.products || [];
-          const catalogGames = products.map((p: any) => ({
-            id: String(p.id),
-            title: p.title,
-            slug: p.slug || "",
-            playtime_minutes: 0,
-            img_icon_url: p.coverHorizontal || p.coverVertical,
-          }));
+          const catalogGames = products.map((p: any) => {
+            const pId = String(p.id);
+            const sStat = statsMap.get(pId);
+            return {
+              id: pId,
+              title: p.title,
+              slug: p.slug || "",
+              playtime_minutes: sStat?.playtime || 0,
+              last_played_timestamp: sStat?.lastPlayed,
+              img_icon_url: p.coverHorizontal || p.coverVertical,
+            };
+          });
 
           if (games.length === 0) {
             games = catalogGames;
@@ -2313,7 +2543,8 @@ app.get("/api/gog/achievements", async (req, res) => {
     const rawGameId = (req.query.gameId as string) || "";
     const username = parseGogUsername((req.query.username as string) || "");
     const userId = (req.query.userId as string) || "";
-    const token = (req.query.token as string) || "";
+    const rawToken = (req.query.token as string) || "";
+    const token = isValidGogBearerToken(rawToken) ? rawToken : "";
 
     if (!rawGameId) {
       res.status(400).json({ error: "ID do jogo na GOG é obrigatório." });
@@ -2408,7 +2639,39 @@ app.get("/api/gog/achievements", async (req, res) => {
     }
 
     let playtimeMinutes = 0;
-    if (token) {
+
+    // 1. Check user stats feed
+    if (username || token) {
+      const statsUser = username || (token ? "current" : "");
+      if (statsUser) {
+        for (const p of [1, 2, 3]) {
+          if (playtimeMinutes > 0) break;
+          const statsUrl = `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=${p}`;
+          try {
+            const sRes = await fetchWithTimeout(statsUrl, {
+              headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept": "application/json" }
+            }, 4000);
+            if (sRes.ok) {
+              const sData = await sRes.json();
+              const prods = sData?.products || [];
+              for (const pr of prods) {
+                const prId = String(pr.id || pr.productId || "");
+                if (idsToCheck.includes(prId) || (pr.title && gameName && pr.title.toLowerCase().includes(gameName.toLowerCase()))) {
+                  const pt = extractGogPlaytimeMinutes(pr);
+                  if (pt > 0) {
+                    playtimeMinutes = pt;
+                    break;
+                  }
+                }
+              }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    // 2. Check embed user data games
+    if (playtimeMinutes === 0 && token) {
       try {
         const userGamesRes = await fetchWithTimeout("https://embed.gog.com/user/data/games", {
           headers: {
@@ -2425,20 +2688,22 @@ app.get("/api/gog/achievements", async (req, res) => {
               if (typeof g === "number" || typeof g === "string") return idsToCheck.includes(String(g));
               return idsToCheck.includes(String(g.id || g.productId));
             });
-            if (found && typeof found === "object" && typeof found.playtime === "number" && found.playtime > 0) {
-              playtimeMinutes = Math.round(found.playtime);
+            if (found && typeof found === "object") {
+              playtimeMinutes = extractGogPlaytimeMinutes(found);
             }
           }
         }
       } catch {}
     }
 
+    // 3. Check gameplay.gog.com session APIs
     if (playtimeMinutes === 0 && (token || userId)) {
       for (const gid of idsToCheck) {
         if (playtimeMinutes > 0) break;
         const sessionUrls = [
           userId ? `https://gameplay.gog.com/clients/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/sessions` : null,
           userId ? `https://gameplay.gog.com/games/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/sessions` : null,
+          userId ? `https://gameplay.gog.com/clients/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/gameplay` : null,
           `https://gameplay.gog.com/clients/${encodeURIComponent(gid)}/sessions`,
         ].filter(Boolean) as string[];
 
@@ -2447,23 +2712,10 @@ app.get("/api/gog/achievements", async (req, res) => {
             const sRes = await fetchWithTimeout(sUrl, { headers: authHeaders }, 3500);
             if (sRes.ok) {
               const sData = await sRes.json();
-              if (typeof sData?.total_playtime === "number" && sData.total_playtime > 0) {
-                playtimeMinutes = Math.round(sData.total_playtime);
+              const pt = extractGogPlaytimeMinutes(sData);
+              if (pt > 0) {
+                playtimeMinutes = pt;
                 break;
-              } else if (typeof sData?.playtime === "number" && sData.playtime > 0) {
-                playtimeMinutes = Math.round(sData.playtime);
-                break;
-              } else if (Array.isArray(sData?.sessions) || Array.isArray(sData?.items)) {
-                const list = sData.sessions || sData.items;
-                let sumMin = 0;
-                for (const item of list) {
-                  if (typeof item?.time === "number") sumMin += item.time;
-                  else if (typeof item?.duration === "number") sumMin += Math.round(item.duration / 60);
-                }
-                if (sumMin > 0) {
-                  playtimeMinutes = sumMin;
-                  break;
-                }
               }
             }
           } catch {}
@@ -2536,7 +2788,8 @@ app.get("/api/gog/resolve-game", async (req, res) => {
     const rawUser = (req.query.username as string) || "";
     const username = parseGogUsername(rawUser);
     const userId = (req.query.userId as string) || "";
-    const token = (req.query.token as string) || "";
+    const rawToken = (req.query.token as string) || "";
+    const token = isValidGogBearerToken(rawToken) ? rawToken : "";
 
     if (!rawInput.trim()) {
       res.status(400).json({ error: "Informe a URL, título ou ID do jogo da GOG." });
@@ -2564,7 +2817,7 @@ app.get("/api/gog/resolve-game", async (req, res) => {
     let resolvedPlaytime = 0;
     let resolvedLastPlayed: number | undefined = undefined;
 
-    // 1. Direct Numeric ID Lookup: query api.gog.com directly for instant 100% exact match
+    // 1. Direct Numeric ID Lookup
     if (/^\d+$/.test(input)) {
       try {
         const prodRes = await fetchWithTimeout(`https://api.gog.com/products/${encodeURIComponent(input)}?expand=description`, {
@@ -2656,7 +2909,7 @@ app.get("/api/gog/resolve-game", async (req, res) => {
       return;
     }
 
-    // 3. Resolve Playtime across all known aliases & sessions
+    // 3. Resolve Playtime across all known aliases, web stats & sessions
     const idsToCheck = [resolvedId];
     if (GOG_GAME_ID_ALIASES[resolvedId]) {
       for (const alias of GOG_GAME_ID_ALIASES[resolvedId]) {
@@ -2664,7 +2917,75 @@ app.get("/api/gog/resolve-game", async (req, res) => {
       }
     }
 
-    if (token) {
+    // 3.1 Check user stats feed across multiple pages
+    if (token || username) {
+      try {
+        const statsUser = username || (token ? "current" : "");
+        if (statsUser) {
+          const statsUrls = [
+            `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?query=${encodeURIComponent(resolvedTitle || cleanSearchQuery)}`,
+            `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=1`,
+            `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=2`,
+            `https://www.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=3`,
+            `https://embed.gog.com/u/${encodeURIComponent(statsUser)}/games/stats?sort=recent_playtime&order=desc&page=1`,
+          ];
+
+          for (const sUrl of statsUrls) {
+            if (resolvedPlaytime > 0) break;
+            try {
+              const headersToTry: Record<string, string>[] = [];
+              if (token) {
+                headersToTry.push({
+                  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                  "Accept": "application/json",
+                  "Authorization": `Bearer ${token}`,
+                });
+              }
+              headersToTry.push({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                "Accept": "application/json",
+              });
+
+              for (const headers of headersToTry) {
+                if (resolvedPlaytime > 0) break;
+                try {
+                  const sRes = await fetchWithTimeout(sUrl, { headers }, 4000);
+                  if (sRes.ok) {
+                    const sData = await sRes.json();
+                    const products = sData?.products || (Array.isArray(sData) ? sData : []);
+                    if (Array.isArray(products)) {
+                      const match = products.find((p: any) => {
+                        const pId = String(p.id || p.productId || "");
+                        const pTitle = (p.title || p.name || "").toLowerCase().trim();
+                        const targetTitle = (resolvedTitle || "").toLowerCase().trim();
+                        const isMatchId = idsToCheck.includes(pId);
+                        const isMatchTitle = pTitle && targetTitle && (pTitle === targetTitle || pTitle.includes(targetTitle) || targetTitle.includes(pTitle));
+                        return isMatchId || isMatchTitle;
+                      });
+                      if (match) {
+                        const pt = extractGogPlaytimeMinutes(match);
+                        if (pt > 0) {
+                          resolvedPlaytime = pt;
+                          if (match.stats?.last_played) {
+                            resolvedLastPlayed = Math.floor(new Date(match.stats.last_played).getTime() / 1000);
+                          } else if (match.last_played) {
+                            resolvedLastPlayed = Math.floor(new Date(match.last_played).getTime() / 1000);
+                          }
+                          break;
+                        }
+                      }
+                    }
+                  }
+                } catch {}
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    }
+
+    // 3.2 Check embed user data games
+    if (resolvedPlaytime === 0 && token) {
       try {
         const userGamesRes = await fetchWithTimeout("https://embed.gog.com/user/data/games", {
           headers: {
@@ -2682,17 +3003,21 @@ app.get("/api/gog/resolve-game", async (req, res) => {
               if (typeof g === "number" || typeof g === "string") {
                 return idsToCheck.includes(String(g));
               }
-              return idsToCheck.includes(String(g.id || g.productId));
+              const gId = String(g.id || g.productId);
+              const gTitle = (g.title || g.name || "").toLowerCase().trim();
+              const targetTitle = (resolvedTitle || "").toLowerCase().trim();
+              return idsToCheck.includes(gId) || (gTitle && targetTitle && (gTitle === targetTitle || gTitle.includes(targetTitle) || targetTitle.includes(gTitle)));
             });
-            if (found && typeof found === "object" && typeof found.playtime === "number" && found.playtime > 0) {
-              resolvedPlaytime = Math.round(found.playtime);
+            if (found && typeof found === "object") {
+              const pt = extractGogPlaytimeMinutes(found);
+              if (pt > 0) resolvedPlaytime = pt;
             }
           }
         }
       } catch (e) {}
     }
 
-    // If playtime is still 0 and user is authenticated, query Galaxy sessions API
+    // 3.3 Query Galaxy sessions and gameplay endpoints
     if (resolvedPlaytime === 0 && (token || userId)) {
       const authHeaders: Record<string, string> = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
@@ -2708,6 +3033,7 @@ app.get("/api/gog/resolve-game", async (req, res) => {
           userId ? `https://gameplay.gog.com/clients/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/sessions` : null,
           userId ? `https://gameplay.gog.com/games/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/sessions` : null,
           userId ? `https://gameplay.gog.com/clients/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/gameplay` : null,
+          userId ? `https://gameplay.gog.com/v2/games/${encodeURIComponent(gid)}/users/${encodeURIComponent(userId)}/gameplay` : null,
           `https://gameplay.gog.com/clients/${encodeURIComponent(gid)}/sessions`,
         ].filter(Boolean) as string[];
 
@@ -2716,26 +3042,10 @@ app.get("/api/gog/resolve-game", async (req, res) => {
             const sRes = await fetchWithTimeout(sUrl, { headers: authHeaders }, 4000);
             if (sRes.ok) {
               const sData = await sRes.json();
-              if (typeof sData?.total_playtime === "number" && sData.total_playtime > 0) {
-                resolvedPlaytime = Math.round(sData.total_playtime);
+              const pt = extractGogPlaytimeMinutes(sData);
+              if (pt > 0) {
+                resolvedPlaytime = pt;
                 break;
-              } else if (typeof sData?.playtime === "number" && sData.playtime > 0) {
-                resolvedPlaytime = Math.round(sData.playtime);
-                break;
-              } else if (typeof sData?.minutes === "number" && sData.minutes > 0) {
-                resolvedPlaytime = Math.round(sData.minutes);
-                break;
-              } else if (Array.isArray(sData?.sessions) || Array.isArray(sData?.items)) {
-                const list = sData.sessions || sData.items;
-                let sumMin = 0;
-                for (const item of list) {
-                  if (typeof item?.time === "number") sumMin += item.time;
-                  else if (typeof item?.duration === "number") sumMin += Math.round(item.duration / 60);
-                }
-                if (sumMin > 0) {
-                  resolvedPlaytime = sumMin;
-                  break;
-                }
               }
             }
           } catch {}

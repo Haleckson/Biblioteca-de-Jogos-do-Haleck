@@ -19,7 +19,7 @@ import { DiaryMediaGrid } from "./DiaryMediaGrid";
 import { formatHltbTime } from "../utils/hltbFormatter";
 import { cleanHTMLText } from "../utils/htmlSanitizer";
 import TrophyBadge, { TrophiesList } from "./TrophyBadge";
-import { formatHoursAndMinutes, getTotalGamePlaytimeHours, getGameTimeBreakdown } from "../utils/playtime";
+import { formatHoursAndMinutes, getTotalGamePlaytimeHours, getGameTimeBreakdown, parsePlaytimeHours } from "../utils/playtime";
 import { startLiveSessionForGame } from "./LiveSessionWidget";
 import GameDictionaryModal from "./GameDictionaryModal";
 import { getDictionaryWordCount, applyDictionaryToHtml } from "../utils/dictionaryUtils";
@@ -1103,9 +1103,22 @@ export default function GameDetailDrawer({
 
       if (newPlaytime > 0) {
         updatedGame.gogPlaytimeMinutes = newPlaytime;
-        if (updatedGame.integrationPlatform === "gog") {
+        if (
+          updatedGame.integrationPlatform === "gog" ||
+          !updatedGame.playtime ||
+          updatedGame.playtime === "0h" ||
+          updatedGame.playtime === "0 horas" ||
+          updatedGame.playtime === "0m" ||
+          parsePlaytimeHours(updatedGame.playtime) > 25000
+        ) {
           updatedGame.playtime = formatGogPlaytime(newPlaytime);
+          if (!updatedGame.integrationPlatform || updatedGame.integrationPlatform === "none") {
+            updatedGame.integrationPlatform = "gog";
+          }
         }
+      } else if (parsePlaytimeHours(updatedGame.playtime) > 25000) {
+        updatedGame.playtime = "0h";
+        updatedGame.gogPlaytimeMinutes = 0;
       }
       if (newLastPlayed) {
         updatedGame.gogLastPlayedTimestamp = newLastPlayed;

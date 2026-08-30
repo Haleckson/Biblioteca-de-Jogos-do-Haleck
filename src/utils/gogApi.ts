@@ -65,7 +65,9 @@ export function setStoredGogApiKey(val: string): void {
 
 export function getStoredGogOAuthToken(): string {
   if (typeof window === "undefined") return "";
-  return localStorage.getItem(GOG_OAUTH_TOKEN_STORAGE) || "";
+  const token = localStorage.getItem(GOG_OAUTH_TOKEN_STORAGE) || "";
+  if (token.startsWith("gog_oauth_") || token.length < 20) return "";
+  return token;
 }
 
 export function getStoredGogRefreshToken(): string {
@@ -364,7 +366,7 @@ export async function fetchGogAchievements(
  * Formats GOG playtime in minutes to readable string (e.g. "42h 15m")
  */
 export function formatGogPlaytime(minutes: number): string {
-  if (!minutes || minutes <= 0) return "0h";
+  if (!minutes || minutes <= 0 || isNaN(minutes) || minutes > 300000) return "0h";
   const hours = Math.floor(minutes / 60);
   const remainingMins = minutes % 60;
   if (hours === 0) return `${remainingMins}m`;

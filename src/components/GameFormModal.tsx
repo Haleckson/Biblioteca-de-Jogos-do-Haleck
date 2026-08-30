@@ -1156,9 +1156,12 @@ export default function GameFormModal({
 
   const handleLinkGogGame = async (gogGame: GogOwnedGame) => {
     setGogGameId(gogGame.id);
-    setGogPlaytimeMinutes(gogGame.playtime_minutes);
+    let finalPlaytime = gogGame.playtime_minutes || 0;
+    setGogPlaytimeMinutes(finalPlaytime);
     setGogLastPlayedTimestamp(gogGame.last_played_timestamp);
+    setIntegrationPlatform("gog");
     setShowGogImport(false);
+
     try {
       const ach = await fetchGogAchievements(gogGame.id);
       if (ach) {
@@ -1166,13 +1169,19 @@ export default function GameFormModal({
         setGogAchievementsCount(ach.unlockedCount);
         setGogAchievementsTotal(ach.totalCount);
         if (typeof ach.playtime_minutes === "number" && ach.playtime_minutes > 0) {
-          setGogPlaytimeMinutes(ach.playtime_minutes);
+          finalPlaytime = Math.max(finalPlaytime, ach.playtime_minutes);
+          setGogPlaytimeMinutes(finalPlaytime);
         }
       }
     } catch {}
+
+    if (finalPlaytime > 0 && (!playtime || playtime.trim() === "" || playtime.trim() === "0h")) {
+      setPlaytime(formatGogPlaytime(finalPlaytime));
+    }
+
     triggerAlert(
       "GOG Vinculada",
-      `Jogo "${gogGame.title}" vinculado com sucesso! (${formatGogPlaytime(gogGame.playtime_minutes)} registrados na GOG)`
+      `Jogo "${gogGame.title}" vinculado com sucesso! (${formatGogPlaytime(finalPlaytime)} registrados na GOG)`
     );
   };
 
@@ -1188,8 +1197,10 @@ export default function GameFormModal({
       const resolved = await resolveGogGame(input);
       if (resolved && resolved.success) {
         setGogGameId(resolved.gameId);
-        setGogPlaytimeMinutes(resolved.playtime_minutes);
+        let finalPlaytime = resolved.playtime_minutes || 0;
+        setGogPlaytimeMinutes(finalPlaytime);
         setGogLastPlayedTimestamp(resolved.last_played_timestamp);
+        setIntegrationPlatform("gog");
         if (resolved.achievements) {
           setGogAchieveData(resolved.achievements);
           setGogAchievementsCount(resolved.achievements.unlockedCount);
@@ -1198,10 +1209,13 @@ export default function GameFormModal({
         if (!coverUrl && resolved.coverUrl) {
           setCoverUrl(resolved.coverUrl);
         }
+        if (finalPlaytime > 0 && (!playtime || playtime.trim() === "" || playtime.trim() === "0h")) {
+          setPlaytime(formatGogPlaytime(finalPlaytime));
+        }
         setShowGogImport(false);
         triggerAlert(
           "GOG Sincronizada",
-          `Jogo "${resolved.title}" vinculado com sucesso via GOG Galaxy! (${formatGogPlaytime(resolved.playtime_minutes)} e ${resolved.achievements?.unlockedCount || 0}/${resolved.achievements?.totalCount || 0} conquistas)`
+          `Jogo "${resolved.title}" vinculado com sucesso via GOG Galaxy! (${formatGogPlaytime(finalPlaytime)} e ${resolved.achievements?.unlockedCount || 0}/${resolved.achievements?.totalCount || 0} conquistas)`
         );
         return;
       }
@@ -1222,6 +1236,7 @@ export default function GameFormModal({
 
       setGogGameId(input);
       setGogPlaytimeMinutes(0);
+      setIntegrationPlatform("gog");
       setShowGogImport(false);
       triggerAlert("GOG Vinculada", `ID de jogo GOG ${input} vinculado com sucesso!`);
     } catch (err: any) {
@@ -1235,9 +1250,13 @@ export default function GameFormModal({
     if (!gogGameId) return;
     setIsFetchingGog(true);
     try {
+      let finalPlaytime = gogPlaytimeMinutes || 0;
       const resolved = await resolveGogGame(String(gogGameId));
       if (resolved && resolved.success) {
-        setGogPlaytimeMinutes(resolved.playtime_minutes);
+        if (typeof resolved.playtime_minutes === "number" && resolved.playtime_minutes > 0) {
+          finalPlaytime = resolved.playtime_minutes;
+        }
+        setGogPlaytimeMinutes(finalPlaytime);
         setGogLastPlayedTimestamp(resolved.last_played_timestamp);
         if (resolved.achievements) {
           setGogAchieveData(resolved.achievements);
@@ -1249,7 +1268,10 @@ export default function GameFormModal({
         setGogUserGamesList(owned);
         const match = owned.find((g) => String(g.id) === String(gogGameId));
         if (match) {
-          setGogPlaytimeMinutes(match.playtime_minutes);
+          if (typeof match.playtime_minutes === "number" && match.playtime_minutes > 0) {
+            finalPlaytime = match.playtime_minutes;
+          }
+          setGogPlaytimeMinutes(finalPlaytime);
           setGogLastPlayedTimestamp(match.last_played_timestamp);
         }
         const ach = await fetchGogAchievements(gogGameId);
@@ -1258,11 +1280,16 @@ export default function GameFormModal({
           setGogAchievementsCount(ach.unlockedCount);
           setGogAchievementsTotal(ach.totalCount);
           if (typeof ach.playtime_minutes === "number" && ach.playtime_minutes > 0) {
-            setGogPlaytimeMinutes(ach.playtime_minutes);
+            finalPlaytime = Math.max(finalPlaytime, ach.playtime_minutes);
+            setGogPlaytimeMinutes(finalPlaytime);
           }
         }
       }
-      triggerAlert("Estatísticas GOG Atualizadas", `Estatísticas da GOG sincronizadas com sucesso!`);
+      if (finalPlaytime > 0 && (!playtime || playtime.trim() === "" || playtime.trim() === "0h")) {
+        setPlaytime(formatGogPlaytime(finalPlaytime));
+      }
+      setIntegrationPlatform("gog");
+      triggerAlert("Estatísticas GOG Atualizadas", `Estatísticas da GOG sincronizadas com sucesso! (${formatGogPlaytime(finalPlaytime)})`);
     } catch (err: any) {
       triggerAlert("Erro de Sincronização", "Não foi possível atualizar dados da GOG.");
     } finally {
@@ -1292,7 +1319,12 @@ export default function GameFormModal({
       setIsGaaS(!!game.isGaaS);
       setDlcMode(getDlcMode(game));
       setDlcNames(game.dlcNames || "");
-      setPlaytime(game.playtime || "");
+      const rawPlaytime = game.playtime || "";
+      if (parsePlaytimeHours(rawPlaytime) > 25000) {
+        setPlaytime("0h");
+      } else {
+        setPlaytime(rawPlaytime);
+      }
       setAdditionalPlaytime(game.additionalPlaytime || "");
       setTrophy(game.trophy || "none");
       setSelectedTrophyItems(getGameTrophyItems(game));
@@ -1362,7 +1394,8 @@ export default function GameFormModal({
 
       // GOG values
       setGogGameId(game.gogGameId);
-      setGogPlaytimeMinutes(game.gogPlaytimeMinutes);
+      const safeGogMins = game.gogPlaytimeMinutes && game.gogPlaytimeMinutes > 300000 ? 0 : game.gogPlaytimeMinutes;
+      setGogPlaytimeMinutes(safeGogMins);
       setGogLastPlayedTimestamp(game.gogLastPlayedTimestamp);
       setGogAchievementsCount(game.gogAchievementsCount);
       setGogAchievementsTotal(game.gogAchievementsTotal);
@@ -1764,25 +1797,17 @@ export default function GameFormModal({
       metacriticUrl,
       metacriticCritScore,
       metacriticUserScore,
-      integrationPlatform,
-      steamAppId: integrationPlatform === "steam" && steamAppId && !isNaN(Number(steamAppId)) ? Number(steamAppId) : undefined,
-      steamPlaytimeMinutes: integrationPlatform === "steam" && typeof steamPlaytimeMinutes === "number" && !isNaN(steamPlaytimeMinutes) ? steamPlaytimeMinutes : undefined,
-      steamLastPlayedTimestamp: integrationPlatform === "steam" && typeof steamLastPlayedTimestamp === "number" && !isNaN(steamLastPlayedTimestamp) ? steamLastPlayedTimestamp : undefined,
-      steamAchievementsCount: integrationPlatform === "steam"
-        ? (steamAchieveData ? (!isNaN(steamAchieveData.unlockedCount) ? steamAchieveData.unlockedCount : undefined) : (typeof steamAchievementsCount === "number" && !isNaN(steamAchievementsCount) ? steamAchievementsCount : (game?.steamAchievementsCount && !isNaN(game.steamAchievementsCount) ? game.steamAchievementsCount : undefined)))
-        : undefined,
-      steamAchievementsTotal: integrationPlatform === "steam"
-        ? (steamAchieveData ? (!isNaN(steamAchieveData.totalCount) ? steamAchieveData.totalCount : undefined) : (typeof steamAchievementsTotal === "number" && !isNaN(steamAchievementsTotal) ? steamAchievementsTotal : (game?.steamAchievementsTotal && !isNaN(game.steamAchievementsTotal) ? game.steamAchievementsTotal : undefined)))
-        : undefined,
-      gogGameId: integrationPlatform === "gog" && gogGameId ? (typeof gogGameId === "number" ? (!isNaN(gogGameId) ? gogGameId : undefined) : (String(gogGameId).trim() || undefined)) : undefined,
-      gogPlaytimeMinutes: integrationPlatform === "gog" && typeof gogPlaytimeMinutes === "number" && !isNaN(gogPlaytimeMinutes) ? gogPlaytimeMinutes : undefined,
-      gogLastPlayedTimestamp: integrationPlatform === "gog" && typeof gogLastPlayedTimestamp === "number" && !isNaN(gogLastPlayedTimestamp) ? gogLastPlayedTimestamp : undefined,
-      gogAchievementsCount: integrationPlatform === "gog"
-        ? (gogAchieveData ? (!isNaN(gogAchieveData.unlockedCount) ? gogAchieveData.unlockedCount : undefined) : (typeof gogAchievementsCount === "number" && !isNaN(gogAchievementsCount) ? gogAchievementsCount : (game?.gogAchievementsCount && !isNaN(game.gogAchievementsCount) ? game.gogAchievementsCount : undefined)))
-        : undefined,
-      gogAchievementsTotal: integrationPlatform === "gog"
-        ? (gogAchieveData ? (!isNaN(gogAchieveData.totalCount) ? gogAchieveData.totalCount : undefined) : (typeof gogAchievementsTotal === "number" && !isNaN(gogAchievementsTotal) ? gogAchievementsTotal : (game?.gogAchievementsTotal && !isNaN(game.gogAchievementsTotal) ? game.gogAchievementsTotal : undefined)))
-        : undefined,
+      integrationPlatform: integrationPlatform || (gogGameId ? "gog" : (steamAppId ? "steam" : "none")),
+      steamAppId: steamAppId && !isNaN(Number(steamAppId)) ? Number(steamAppId) : undefined,
+      steamPlaytimeMinutes: typeof steamPlaytimeMinutes === "number" && !isNaN(steamPlaytimeMinutes) ? steamPlaytimeMinutes : undefined,
+      steamLastPlayedTimestamp: typeof steamLastPlayedTimestamp === "number" && !isNaN(steamLastPlayedTimestamp) ? steamLastPlayedTimestamp : undefined,
+      steamAchievementsCount: steamAchieveData ? (!isNaN(steamAchieveData.unlockedCount) ? steamAchieveData.unlockedCount : undefined) : (typeof steamAchievementsCount === "number" && !isNaN(steamAchievementsCount) ? steamAchievementsCount : (game?.steamAchievementsCount && !isNaN(game.steamAchievementsCount) ? game.steamAchievementsCount : undefined)),
+      steamAchievementsTotal: steamAchieveData ? (!isNaN(steamAchieveData.totalCount) ? steamAchieveData.totalCount : undefined) : (typeof steamAchievementsTotal === "number" && !isNaN(steamAchievementsTotal) ? steamAchievementsTotal : (game?.steamAchievementsTotal && !isNaN(game.steamAchievementsTotal) ? game.steamAchievementsTotal : undefined)),
+      gogGameId: gogGameId ? (typeof gogGameId === "number" ? (!isNaN(gogGameId) ? gogGameId : undefined) : (String(gogGameId).trim() || undefined)) : undefined,
+      gogPlaytimeMinutes: typeof gogPlaytimeMinutes === "number" && !isNaN(gogPlaytimeMinutes) ? gogPlaytimeMinutes : undefined,
+      gogLastPlayedTimestamp: typeof gogLastPlayedTimestamp === "number" && !isNaN(gogLastPlayedTimestamp) ? gogLastPlayedTimestamp : undefined,
+      gogAchievementsCount: gogAchieveData ? (!isNaN(gogAchieveData.unlockedCount) ? gogAchieveData.unlockedCount : undefined) : (typeof gogAchievementsCount === "number" && !isNaN(gogAchievementsCount) ? gogAchievementsCount : (game?.gogAchievementsCount && !isNaN(game.gogAchievementsCount) ? game.gogAchievementsCount : undefined)),
+      gogAchievementsTotal: gogAchieveData ? (!isNaN(gogAchieveData.totalCount) ? gogAchieveData.totalCount : undefined) : (typeof gogAchievementsTotal === "number" && !isNaN(gogAchievementsTotal) ? gogAchievementsTotal : (game?.gogAchievementsTotal && !isNaN(game.gogAchievementsTotal) ? game.gogAchievementsTotal : undefined)),
       igdbId,
       igdbRating,
       igdbSlug,

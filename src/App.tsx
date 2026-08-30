@@ -34,6 +34,7 @@ import { mediaUploadQueueManager } from "./utils/mediaUploadManager";
 import SiteSettingsModal from "./components/SiteSettingsModal";
 import { formatSteamPlaytime, fetchSteamOwnedGames, fetchSteamAchievements, fetchSteamProfile, SteamPlayerSummary } from "./utils/steamApi";
 import { fetchGogOwnedGames, fetchGogAchievements, formatGogPlaytime, fetchGogProfile, resolveGogGame, setStoredGogOAuthToken, setStoredGogUsername, setStoredGogUserId, GogPlayerSummary } from "./utils/gogApi";
+import { parsePlaytimeHours } from "./utils/playtime";
 import ImageZoomLightbox from "./components/ImageZoomLightbox";
 import { repairAllGameMedias, recoverAndReindexImgBBMedias, deduplicateAndSanitizeGameMedias } from "./utils/mediaRepair";
 import { GlobalTooltip } from "./components/GlobalTooltip";
@@ -714,10 +715,14 @@ export default function App() {
 
   const handleBatchSyncGog = async () => {
     const gogLinkedGames = games.filter(
-      (g) => g.integrationPlatform === "gog" || g.gogGameId || (g.gogPlaytimeMinutes && g.gogPlaytimeMinutes > 0)
+      (g) =>
+        g.integrationPlatform === "gog" ||
+        g.gogGameId ||
+        (g.gogPlaytimeMinutes && g.gogPlaytimeMinutes > 0) ||
+        (g.platform && g.platform.toLowerCase().includes("gog"))
     );
     if (gogLinkedGames.length === 0) {
-      triggerAlert("Nenhum Jogo GOG Vinculado", "Não há jogos com dados ou ID da GOG na sua biblioteca para sincronizar.");
+      triggerAlert("Nenhum Jogo GOG Vinculado", "Não há jogos com dados, ID da GOG ou plataforma GOG na sua biblioteca para sincronizar.");
       return;
     }
 
@@ -731,22 +736,30 @@ export default function App() {
       }
 
       let updatedCount = 0;
+      let totalPlaytimeUpdated = 0;
 
       const newGames = await Promise.all(
         games.map(async (g) => {
-          if (g.integrationPlatform !== "gog" && !g.gogGameId) return g;
+          const isGogTarget =
+            g.integrationPlatform === "gog" ||
+            g.gogGameId ||
+            (g.gogPlaytimeMinutes && g.gogPlaytimeMinutes > 0) ||
+            (g.platform && g.platform.toLowerCase().includes("gog"));
+
+          if (!isGogTarget) return g;
           let updated = { ...g };
           let newPlaytime = updated.gogPlaytimeMinutes || 0;
           let newLastPlayed = updated.gogLastPlayedTimestamp;
 
           // 1. Tenta resolver profundamente pela API da GOG
           try {
-            const resolved = await resolveGogGame(String(updated.gogGameId || updated.name));
+            const queryKey = String(updated.gogGameId || updated.name).trim();
+            const resolved = await resolveGogGame(queryKey);
             if (resolved && resolved.success) {
               if (!updated.gogGameId && resolved.gameId) {
                 updated.gogGameId = resolved.gameId;
               }
-              if (resolved.playtime_minutes > 0) {
+              if (typeof resolved.playtime_minutes === "number" && resolved.playtime_minutes > 0) {
                 newPlaytime = resolved.playtime_minutes;
               }
               if (resolved.last_played_timestamp) {
@@ -773,25 +786,33 @@ export default function App() {
           }
 
           // 2. Fallback na lista de jogos adquiridos
-          if (newPlaytime === 0 && ownedList.length > 0) {
+          if (ownedList.length > 0) {
             const match = ownedList.find(
-              (o) => (updated.gogGameId && String(o.id) === String(updated.gogGameId)) ||
-                     o.title.toLowerCase().trim() === g.name.toLowerCase().trim()
+              (o) =>
+                (updated.gogGameId && String(o.id) === String(updated.gogGameId)) ||
+                (o.title && o.title.toLowerCase().trim() === g.name.toLowerCase().trim()) ||
+                (o.slug && g.name.toLowerCase().includes(o.slug.toLowerCase().replace(/[-_]/g, " ")))
             );
             if (match) {
-              if (match.playtime_minutes > 0) newPlaytime = match.playtime_minutes;
-              if (match.last_played_timestamp) newLastPlayed = match.last_played_timestamp;
-              if (!updated.gogGameId) updated.gogGameId = String(match.id);
+              if (typeof match.playtime_minutes === "number" && match.playtime_minutes > 0) {
+                newPlaytime = Math.max(newPlaytime, match.playtime_minutes);
+              }
+              if (match.last_played_timestamp) {
+                newLastPlayed = match.last_played_timestamp;
+              }
+              if (!updated.gogGameId) {
+                updated.gogGameId = String(match.id);
+              }
             }
           }
 
-          // 3. Fallback de conquistas se ainda não tiverem sido computadas
-          if (updated.gogGameId && updated.gogAchievementsCount === undefined) {
+          // 3. Fallback de conquistas e tempo via endpoint dedicado de achievements
+          if (updated.gogGameId) {
             try {
               const ach = await fetchGogAchievements(updated.gogGameId);
               if (ach) {
-                if (ach.playtime_minutes && ach.playtime_minutes > 0 && newPlaytime === 0) {
-                  newPlaytime = ach.playtime_minutes;
+                if (typeof ach.playtime_minutes === "number" && ach.playtime_minutes > 0) {
+                  newPlaytime = Math.max(newPlaytime, ach.playtime_minutes);
                 }
                 const prevCount = g.gogAchievementsCount;
                 const currentCount = ach.unlockedCount;
@@ -812,11 +833,17 @@ export default function App() {
             }
           }
 
-          if (newPlaytime > 0) {
+          // Atribuição garantida do tempo de jogo formatado e persistido
+          if (newPlaytime > 0 && newPlaytime < 300000) {
             updated.gogPlaytimeMinutes = newPlaytime;
-            if (g.integrationPlatform === "gog") {
-              updated.playtime = formatGogPlaytime(newPlaytime);
+            updated.playtime = formatGogPlaytime(newPlaytime);
+            if (!updated.integrationPlatform || updated.integrationPlatform === "none") {
+              updated.integrationPlatform = "gog";
             }
+            totalPlaytimeUpdated++;
+          } else if (parsePlaytimeHours(updated.playtime) > 25000) {
+            updated.playtime = "0h";
+            updated.gogPlaytimeMinutes = 0;
           }
           if (newLastPlayed) {
             updated.gogLastPlayedTimestamp = newLastPlayed;
@@ -829,9 +856,21 @@ export default function App() {
 
       setGames(newGames);
       setHasUnsavedChanges(true);
+
+      // Auto-salva no Firebase Realtime Database para persistência na nuvem
+      if (isFirebaseConfigured()) {
+        try {
+          await saveToFirebase(newGames, globalTags, globalGenres);
+          setHasUnsavedChanges(false);
+          console.log("[BatchSyncGOG] Jogos e tempos GOG salvos no Firebase com sucesso.");
+        } catch (saveErr) {
+          console.warn("Aviso ao salvar sincronização GOG no Firebase:", saveErr);
+        }
+      }
+
       triggerAlert(
         "Sincronização em Lote GOG Concluída",
-        `Sucesso! Tempo de jogo e conquistas da GOG Galaxy sincronizados para ${updatedCount} ${updatedCount === 1 ? "jogo" : "jogos"}.`
+        `Sucesso! Dados e estatísticas da GOG Galaxy sincronizados para ${updatedCount} ${updatedCount === 1 ? "jogo" : "jogos"} (Tempo de jogo atualizado em ${totalPlaytimeUpdated} jogos).`
       );
     } catch (err: any) {
       console.error(err);

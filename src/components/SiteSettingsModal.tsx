@@ -382,8 +382,6 @@ export default function SiteSettingsModal({
 
       // Fallback: Profile lookup
       const profile = await fetchGogProfile(target);
-      const generatedOAuthToken = `gog_oauth_${Math.random().toString(36).substring(2, 12)}_${Date.now()}`;
-      setStoredGogOAuthToken(generatedOAuthToken);
 
       if (profile && profile.username) {
         setStoredGogUsername(profile.username);
