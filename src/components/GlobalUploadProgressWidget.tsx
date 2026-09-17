@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Upload, ChevronDown, ChevronUp, CheckCircle, AlertCircle, Loader2, Pause, Play, X, Trash2, CloudUpload, HardDrive, Video, LogIn } from "lucide-react";
 import { mediaUploadQueueManager, UploadBatchTask } from "../utils/mediaUploadManager";
-import { isDriveAuthenticated, signInWithGoogleDrive } from "../utils/googleDrive";
+import { isDriveAuthenticated, signInWithGoogleDrive, isPopupCancelledOrClosedError } from "../utils/googleDrive";
 
 export function GlobalUploadProgressWidget() {
   const [tasks, setTasks] = useState<UploadBatchTask[]>([]);
@@ -261,8 +261,12 @@ export function GlobalUploadProgressWidget() {
                           try {
                             await signInWithGoogleDrive();
                             setIsAuth(true);
-                          } catch (err) {
-                            console.error("Erro ao autenticar Google:", err);
+                          } catch (err: any) {
+                            if (isPopupCancelledOrClosedError(err)) {
+                              console.info("[Widget] Autenticação Google cancelada pelo usuário.");
+                            } else {
+                              console.warn("[Widget] Aviso ao autenticar Google:", err);
+                            }
                           }
                         }}
                         className="flex items-center gap-1 bg-amber-500 hover:bg-amber-400 text-zinc-950 font-bold px-2 py-1 rounded cursor-pointer transition-colors shrink-0"

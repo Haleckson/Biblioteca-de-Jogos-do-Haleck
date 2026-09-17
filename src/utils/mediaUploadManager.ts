@@ -1,6 +1,13 @@
 import { uploadToImgBB } from "./imgbb";
 import { uploadVideoToYoutube } from "./youtube";
-import { isDriveAuthenticated, signInWithGoogleDrive, uploadSingleMediaBackup } from "./googleDrive";
+import {
+  isDriveAuthenticated,
+  signInWithGoogleDrive,
+  uploadSingleMediaBackup,
+  isPopupCancelledOrClosedError,
+  isYouTubeAuthenticated,
+  signInWithYouTube,
+} from "./googleDrive";
 import { Game, MediaItem } from "../types";
 import { showToast } from "./toast";
 import { saveFailedUploadLog } from "./failedUploadLogs";
@@ -312,13 +319,16 @@ class MediaUploadQueueManager {
           this.notify();
 
           // Auto-prompt for YouTube login if user is not authenticated
-          if (!isDriveAuthenticated()) {
+          if (!isYouTubeAuthenticated()) {
             try {
-              currentTask.currentFileName = `${item.file.name} - Solicitando login no YouTube/Google...`;
+              currentTask.currentFileName = `${item.file.name} - Solicitando autorização no YouTube/Google...`;
               this.notify();
-              await signInWithGoogleDrive();
+              await signInWithYouTube();
             } catch (authErr: any) {
-              throw new Error(`Login no YouTube necessário para o upload do vídeo: ${authErr.message || authErr}`);
+              if (isPopupCancelledOrClosedError(authErr)) {
+                throw new Error("Upload de vídeo cancelado: a janela de autorização do YouTube foi fechada.");
+              }
+              throw new Error(`Autorização no YouTube necessária para o upload do vídeo: ${authErr.message || authErr}`);
             }
           }
 

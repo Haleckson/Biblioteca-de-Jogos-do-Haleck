@@ -967,6 +967,22 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 ) : null}
               </span>
             )}
+
+            {game.integrationPlatform === "battlenet" && (
+              <span 
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-sky-950/80 text-sky-300 border border-sky-500/40 shadow-sm shadow-sky-500/20"
+                title={`Integrado com Battle.net API (${game.blizzardGameName || game.blizzardGameId || 'Blizzard'})`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                <span>Battle.net</span>
+                {((game.blizzardProfileData?.selectedCharacter) || game.blizzardCharacterName || game.blizzardProfileData?.name) && (
+                  <span className="text-[9px] font-mono font-normal text-sky-200 opacity-90">
+                    ({game.blizzardProfileData?.name || game.blizzardProfileData?.selectedCharacter?.name || game.blizzardCharacterName}
+                    {(game.blizzardProfileData?.equippedItemLevel || game.blizzardProfileData?.selectedCharacter?.equippedItemLevel) ? ` • ilvl ${game.blizzardProfileData?.equippedItemLevel || game.blizzardProfileData?.selectedCharacter?.equippedItemLevel}` : (game.blizzardProfileData?.level || game.blizzardProfileData?.selectedCharacter?.level) ? ` • lvl ${game.blizzardProfileData?.level || game.blizzardProfileData?.selectedCharacter?.level}` : ""})
+                  </span>
+                )}
+              </span>
+            )}
             {game.difficulty && splitEntities(game.difficulty).map((d, dIdx) => {
               const parsed = parseContextNote(d);
               return (

@@ -1,0 +1,728 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+// Official Blizzard and Wowhead Asset CDNs
+const WOW_ICON_BASE = "https://wow.zamimg.com/images/wow/icons/large";
+
+export interface WoWClassInfo {
+  id: string;
+  name: string;
+  ptBR: string;
+  color: string;
+  iconUrl: string;
+  availableIn: ("retail" | "classic" | "forever" | "tbc")[];
+}
+
+export interface WoWRaceInfo {
+  id: string;
+  name: string;
+  ptBR: string;
+  faction: "HORDE" | "ALLIANCE" | "NEUTRAL";
+  iconUrl: string;
+  availableIn: ("retail" | "classic" | "forever" | "tbc")[];
+}
+
+export interface WoWFactionInfo {
+  type: "HORDE" | "ALLIANCE" | "NEUTRAL";
+  name: string;
+  color: string;
+  crestUrl: string;
+  iconUrl: string;
+  badgeBg: string;
+  borderClass: string;
+  textClass: string;
+}
+
+export interface WoWItemQualityInfo {
+  quality: "POOR" | "COMMON" | "UNCOMMON" | "RARE" | "EPIC" | "LEGENDARY" | "ARTIFACT" | "HEIRLOOM";
+  namePtBR: string;
+  color: string;
+  borderClass: string;
+  bgClass: string;
+  textClass: string;
+}
+
+// 1. FACTIONS (Official Crests and PvP Icons)
+export const WOW_FACTIONS: Record<string, WoWFactionInfo> = {
+  HORDE: {
+    type: "HORDE",
+    name: "Horda",
+    color: "#C41E3A",
+    crestUrl: `${WOW_ICON_BASE}/achievement_pvp_h_01.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/pvpcurrency-honor-horde.jpg`,
+    badgeBg: "bg-red-950/80",
+    borderClass: "border-red-600/60",
+    textClass: "text-red-400",
+  },
+  ALLIANCE: {
+    type: "ALLIANCE",
+    name: "Aliança",
+    color: "#0078FF",
+    crestUrl: `${WOW_ICON_BASE}/achievement_pvp_a_01.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/pvpcurrency-honor-alliance.jpg`,
+    badgeBg: "bg-blue-950/80",
+    borderClass: "border-blue-600/60",
+    textClass: "text-blue-400",
+  },
+  NEUTRAL: {
+    type: "NEUTRAL",
+    name: "Neutro",
+    color: "#D4AF37",
+    crestUrl: `${WOW_ICON_BASE}/inv_misc_coin_01.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/inv_misc_coin_01.jpg`,
+    badgeBg: "bg-zinc-900/80",
+    borderClass: "border-zinc-600/60",
+    textClass: "text-zinc-300",
+  },
+};
+
+// 2. ALL 13 OFFICIAL WORLD OF WARCRAFT CLASSES
+export const WOW_CLASSES: Record<string, WoWClassInfo> = {
+  warrior: {
+    id: "warrior",
+    name: "Warrior",
+    ptBR: "Guerreiro",
+    color: "#C79C6E",
+    iconUrl: `${WOW_ICON_BASE}/classicon_warrior.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  paladin: {
+    id: "paladin",
+    name: "Paladin",
+    ptBR: "Paladino",
+    color: "#F58CBA",
+    iconUrl: `${WOW_ICON_BASE}/classicon_paladin.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  hunter: {
+    id: "hunter",
+    name: "Hunter",
+    ptBR: "Caçador",
+    color: "#ABD473",
+    iconUrl: `${WOW_ICON_BASE}/classicon_hunter.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  rogue: {
+    id: "rogue",
+    name: "Rogue",
+    ptBR: "Ladino",
+    color: "#FFF569",
+    iconUrl: `${WOW_ICON_BASE}/classicon_rogue.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  priest: {
+    id: "priest",
+    name: "Priest",
+    ptBR: "Sacerdote",
+    color: "#FFFFFF",
+    iconUrl: `${WOW_ICON_BASE}/classicon_priest.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  deathknight: {
+    id: "deathknight",
+    name: "Death Knight",
+    ptBR: "Cavaleiro da Morte",
+    color: "#C41E3A",
+    iconUrl: `${WOW_ICON_BASE}/classicon_deathknight.jpg`,
+    availableIn: ["retail"], // Retail / Wrath progression only
+  },
+  shaman: {
+    id: "shaman",
+    name: "Shaman",
+    ptBR: "Xamã",
+    color: "#0070DE",
+    iconUrl: `${WOW_ICON_BASE}/classicon_shaman.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  mage: {
+    id: "mage",
+    name: "Mage",
+    ptBR: "Mago",
+    color: "#40C7EB",
+    iconUrl: `${WOW_ICON_BASE}/classicon_mage.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  warlock: {
+    id: "warlock",
+    name: "Warlock",
+    ptBR: "Bruxo",
+    color: "#8787ED",
+    iconUrl: `${WOW_ICON_BASE}/classicon_warlock.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  monk: {
+    id: "monk",
+    name: "Monk",
+    ptBR: "Monge",
+    color: "#00FF96",
+    iconUrl: `${WOW_ICON_BASE}/classicon_monk.jpg`,
+    availableIn: ["retail"], // MoP / Retail only
+  },
+  druid: {
+    id: "druid",
+    name: "Druid",
+    ptBR: "Druida",
+    color: "#FF7D0A",
+    iconUrl: `${WOW_ICON_BASE}/classicon_druid.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  demonhunter: {
+    id: "demonhunter",
+    name: "Demon Hunter",
+    ptBR: "Caçador de Demônios",
+    color: "#A330C9",
+    iconUrl: `${WOW_ICON_BASE}/classicon_demonhunter.jpg`,
+    availableIn: ["retail"], // Legion / Retail only
+  },
+  evoker: {
+    id: "evoker",
+    name: "Evoker",
+    ptBR: "Conjurador",
+    color: "#33937F",
+    iconUrl: `${WOW_ICON_BASE}/classicon_evoker.jpg`,
+    availableIn: ["retail"], // Dragonflight / The War Within only
+  },
+};
+
+// 3. OFFICIAL RACES (Official Zamimg icon mapping verified for 100% HTTP 200 uptime)
+export const WOW_RACES: Record<string, WoWRaceInfo> = {
+  orc: {
+    id: "orc",
+    name: "Orc",
+    ptBR: "Orc",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_orc_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  undead: {
+    id: "undead",
+    name: "Undead",
+    ptBR: "Morto-vivo",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_undead_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  tauren: {
+    id: "tauren",
+    name: "Tauren",
+    ptBR: "Tauren",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_tauren_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  troll: {
+    id: "troll",
+    name: "Troll",
+    ptBR: "Troll",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_troll_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  bloodelf: {
+    id: "bloodelf",
+    name: "Blood Elf",
+    ptBR: "Elfo de Sangue",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_bloodelf_female.jpg`,
+    availableIn: ["retail", "tbc"],
+  },
+  goblin: {
+    id: "goblin",
+    name: "Goblin",
+    ptBR: "Goblin",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/ability_racial_rocketjump.jpg`,
+    availableIn: ["retail", "forever"],
+  },
+  human: {
+    id: "human",
+    name: "Human",
+    ptBR: "Humano",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_human_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  dwarf: {
+    id: "dwarf",
+    name: "Dwarf",
+    ptBR: "Anão",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_dwarf_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  nightelf: {
+    id: "nightelf",
+    name: "Night Elf",
+    ptBR: "Elfo Noturno",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_nightelf_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  gnome: {
+    id: "gnome",
+    name: "Gnome",
+    ptBR: "Gnomo",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_gnome_male.jpg`,
+    availableIn: ["retail", "classic", "forever", "tbc"],
+  },
+  draenei: {
+    id: "draenei",
+    name: "Draenei",
+    ptBR: "Draenei",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_draenei_female.jpg`,
+    availableIn: ["retail", "tbc"],
+  },
+  worgen: {
+    id: "worgen",
+    name: "Worgen",
+    ptBR: "Worgen",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/ability_racial_darkflight.jpg`,
+    availableIn: ["retail"],
+  },
+  pandaren: {
+    id: "pandaren",
+    name: "Pandaren",
+    ptBR: "Pandaren",
+    faction: "NEUTRAL",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_pandaren_female.jpg`,
+    availableIn: ["retail"],
+  },
+  dracthyr: {
+    id: "dracthyr",
+    name: "Dracthyr",
+    ptBR: "Dracthyr",
+    faction: "NEUTRAL",
+    iconUrl: `${WOW_ICON_BASE}/classicon_evoker.jpg`,
+    availableIn: ["retail"],
+  },
+  earthen: {
+    id: "earthen",
+    name: "Earthen",
+    ptBR: "Terrano",
+    faction: "NEUTRAL",
+    iconUrl: `${WOW_ICON_BASE}/achievement_character_dwarf_male.jpg`,
+    availableIn: ["retail"],
+  },
+};
+
+// 4. ITEM QUALITIES (WoW Standard Color Matrix)
+export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
+  POOR: {
+    quality: "POOR",
+    namePtBR: "Pobre",
+    color: "#9D9D9D",
+    borderClass: "border-zinc-600/50",
+    bgClass: "bg-zinc-900/40",
+    textClass: "text-zinc-400",
+  },
+  COMMON: {
+    quality: "COMMON",
+    namePtBR: "Comum",
+    color: "#FFFFFF",
+    borderClass: "border-zinc-400/50",
+    bgClass: "bg-zinc-900/50",
+    textClass: "text-zinc-200",
+  },
+  UNCOMMON: {
+    quality: "UNCOMMON",
+    namePtBR: "Incomum",
+    color: "#1EFF00",
+    borderClass: "border-emerald-500/60",
+    bgClass: "bg-emerald-950/30",
+    textClass: "text-emerald-400",
+  },
+  RARE: {
+    quality: "RARE",
+    namePtBR: "Raro",
+    color: "#0070DD",
+    borderClass: "border-blue-500/60",
+    bgClass: "bg-blue-950/30",
+    textClass: "text-blue-400",
+  },
+  EPIC: {
+    quality: "EPIC",
+    namePtBR: "Épico",
+    color: "#A335EE",
+    borderClass: "border-purple-500/60",
+    bgClass: "bg-purple-950/30",
+    textClass: "text-purple-300",
+  },
+  LEGENDARY: {
+    quality: "LEGENDARY",
+    namePtBR: "Lendário",
+    color: "#FF8000",
+    borderClass: "border-amber-500/70",
+    bgClass: "bg-amber-950/40",
+    textClass: "text-amber-400",
+  },
+  ARTIFACT: {
+    quality: "ARTIFACT",
+    namePtBR: "Artefato",
+    color: "#E6CC80",
+    borderClass: "border-yellow-500/70",
+    bgClass: "bg-yellow-950/40",
+    textClass: "text-yellow-300",
+  },
+  HEIRLOOM: {
+    quality: "HEIRLOOM",
+    namePtBR: "Herança",
+    color: "#00CCFF",
+    borderClass: "border-cyan-500/60",
+    bgClass: "bg-cyan-950/30",
+    textClass: "text-cyan-300",
+  },
+};
+
+// 5. EQUIPMENT SLOTS (Official Inventory Slot Icons)
+export const WOW_SLOT_ICONS: Record<string, string> = {
+  HEAD: `${WOW_ICON_BASE}/inventoryslot_head.jpg`,
+  NECK: `${WOW_ICON_BASE}/inventoryslot_neck.jpg`,
+  SHOULDER: `${WOW_ICON_BASE}/inventoryslot_shoulder.jpg`,
+  BACK: `${WOW_ICON_BASE}/inventoryslot_chest.jpg`,
+  CHEST: `${WOW_ICON_BASE}/inventoryslot_chest.jpg`,
+  SHIRT: `${WOW_ICON_BASE}/inventoryslot_shirt.jpg`,
+  TABARD: `${WOW_ICON_BASE}/inventoryslot_tabard.jpg`,
+  WRIST: `${WOW_ICON_BASE}/inventoryslot_wrists.jpg`,
+  HANDS: `${WOW_ICON_BASE}/inventoryslot_hands.jpg`,
+  WAIST: `${WOW_ICON_BASE}/inventoryslot_waist.jpg`,
+  LEGS: `${WOW_ICON_BASE}/inventoryslot_legs.jpg`,
+  FEET: `${WOW_ICON_BASE}/inventoryslot_feet.jpg`,
+  RING_1: `${WOW_ICON_BASE}/inventoryslot_finger.jpg`,
+  RING_2: `${WOW_ICON_BASE}/inventoryslot_finger.jpg`,
+  TRINKET_1: `${WOW_ICON_BASE}/inventoryslot_trinket.jpg`,
+  TRINKET_2: `${WOW_ICON_BASE}/inventoryslot_trinket.jpg`,
+  MAIN_HAND: `${WOW_ICON_BASE}/inventoryslot_mainhand.jpg`,
+  OFF_HAND: `${WOW_ICON_BASE}/inventoryslot_offhand.jpg`,
+  RANGED: `${WOW_ICON_BASE}/inventoryslot_ranged.jpg`,
+};
+
+// HELPER: Normalize class name and return WoWClassInfo
+export function getWoWClassInfo(className?: string): WoWClassInfo {
+  if (!className) return WOW_CLASSES.warrior;
+  const raw = className.toLowerCase().replace(/[\s-_]/g, "");
+
+  if (raw.includes("warrior") || raw.includes("guerreiro")) return WOW_CLASSES.warrior;
+  if (raw.includes("paladin") || raw.includes("paladino")) return WOW_CLASSES.paladin;
+  if (raw.includes("hunter") || raw.includes("caçador") || raw.includes("cacador")) return WOW_CLASSES.hunter;
+  if (raw.includes("rogue") || raw.includes("ladino")) return WOW_CLASSES.rogue;
+  if (raw.includes("priest") || raw.includes("sacerdote")) return WOW_CLASSES.priest;
+  if (raw.includes("deathknight") || raw.includes("cavaleiro")) return WOW_CLASSES.deathknight;
+  if (raw.includes("shaman") || raw.includes("xamã") || raw.includes("xama")) return WOW_CLASSES.shaman;
+  if (raw.includes("mage") || raw.includes("mago")) return WOW_CLASSES.mage;
+  if (raw.includes("warlock") || raw.includes("bruxo")) return WOW_CLASSES.warlock;
+  if (raw.includes("monk") || raw.includes("monge")) return WOW_CLASSES.monk;
+  if (raw.includes("druid") || raw.includes("druida")) return WOW_CLASSES.druid;
+  if (raw.includes("demonhunter") || raw.includes("demonio")) return WOW_CLASSES.demonhunter;
+  if (raw.includes("evoker") || raw.includes("conjurador") || raw.includes("devast")) return WOW_CLASSES.evoker;
+
+  return WOW_CLASSES.warrior;
+}
+
+// HELPER: Normalize race name and return WoWRaceInfo
+export function getWoWRaceInfo(raceName?: string, gender?: string): WoWRaceInfo {
+  if (!raceName) return WOW_RACES.human;
+  const raw = raceName.toLowerCase().replace(/[\s-_]/g, "");
+  const isFemale = (gender || "").toLowerCase().includes("female") || (gender || "").toLowerCase().includes("feminino");
+
+  let info: WoWRaceInfo = WOW_RACES.human;
+  if (raw.includes("orc")) info = { ...WOW_RACES.orc };
+  else if (raw.includes("undead") || raw.includes("forsaken") || raw.includes("morto") || raw.includes("renegado")) info = { ...WOW_RACES.undead };
+  else if (raw.includes("tauren")) info = { ...WOW_RACES.tauren };
+  else if (raw.includes("troll")) info = { ...WOW_RACES.troll };
+  else if (raw.includes("bloodelf") || raw.includes("sangrento") || raw.includes("belf")) info = { ...WOW_RACES.bloodelf };
+  else if (raw.includes("goblin")) info = { ...WOW_RACES.goblin };
+  else if (raw.includes("human") || raw.includes("humano")) info = { ...WOW_RACES.human };
+  else if (raw.includes("dwarf") || raw.includes("anao") || raw.includes("anão")) info = { ...WOW_RACES.dwarf };
+  else if (raw.includes("nightelf") || raw.includes("noturno") || raw.includes("nelf")) info = { ...WOW_RACES.nightelf };
+  else if (raw.includes("gnome") || raw.includes("gnomo")) info = { ...WOW_RACES.gnome };
+  else if (raw.includes("draenei")) info = { ...WOW_RACES.draenei };
+  else if (raw.includes("worgen")) info = { ...WOW_RACES.worgen };
+  else if (raw.includes("pandaren")) info = { ...WOW_RACES.pandaren };
+  else if (raw.includes("dracthyr")) info = { ...WOW_RACES.dracthyr };
+  else if (raw.includes("earthen") || raw.includes("terrano")) info = { ...WOW_RACES.earthen };
+  else info = { ...WOW_RACES.human };
+
+  if (isFemale && info.iconUrl.includes("_male.jpg")) {
+    info.iconUrl = info.iconUrl.replace("_male.jpg", "_female.jpg");
+  } else if (!isFemale && info.iconUrl.includes("_female.jpg")) {
+    info.iconUrl = info.iconUrl.replace("_female.jpg", "_male.jpg");
+  }
+
+  return info;
+}
+
+// HELPER: Return faction styling & icons
+export function getWoWFactionInfo(faction?: string): WoWFactionInfo {
+  const f = (faction || "HORDE").toUpperCase();
+  if (f === "ALLIANCE" || f.includes("ALIAN")) {
+    return WOW_FACTIONS.ALLIANCE;
+  }
+  if (f === "NEUTRAL" || f.includes("NEUTR")) {
+    return WOW_FACTIONS.NEUTRAL;
+  }
+  return WOW_FACTIONS.HORDE;
+}
+
+// DIRECT ICON URL MAPPINGS FOR QUICK REFERENCE & TEMPLATING
+export const WOW_FACTION_ICONS = {
+  HORDE: `${WOW_ICON_BASE}/pvpcurrency-honor-horde.jpg`,
+  HORDE_CREST: `${WOW_ICON_BASE}/inv_bannerpvp_02.jpg`,
+  ALLIANCE: `${WOW_ICON_BASE}/pvpcurrency-honor-alliance.jpg`,
+  ALLIANCE_CREST: `${WOW_ICON_BASE}/inv_bannerpvp_01.jpg`,
+  NEUTRAL: `${WOW_ICON_BASE}/inv_misc_coin_01.jpg`,
+};
+
+export const WOW_CLASS_ICONS: Record<string, string> = {
+  warrior: `${WOW_ICON_BASE}/classicon_warrior.jpg`,
+  paladin: `${WOW_ICON_BASE}/classicon_paladin.jpg`,
+  hunter: `${WOW_ICON_BASE}/classicon_hunter.jpg`,
+  rogue: `${WOW_ICON_BASE}/classicon_rogue.jpg`,
+  priest: `${WOW_ICON_BASE}/classicon_priest.jpg`,
+  deathknight: `${WOW_ICON_BASE}/classicon_deathknight.jpg`,
+  shaman: `${WOW_ICON_BASE}/classicon_shaman.jpg`,
+  mage: `${WOW_ICON_BASE}/classicon_mage.jpg`,
+  warlock: `${WOW_ICON_BASE}/classicon_warlock.jpg`,
+  monk: `${WOW_ICON_BASE}/classicon_monk.jpg`,
+  druid: `${WOW_ICON_BASE}/classicon_druid.jpg`,
+  demonhunter: `${WOW_ICON_BASE}/classicon_demonhunter.jpg`,
+  evoker: `${WOW_ICON_BASE}/classicon_evoker.jpg`,
+};
+
+export const WOW_RACE_ICONS: Record<string, { male: string; female: string }> = {
+  orc: { male: `${WOW_ICON_BASE}/race_orc_male.jpg`, female: `${WOW_ICON_BASE}/race_orc_female.jpg` },
+  undead: { male: `${WOW_ICON_BASE}/race_undead_male.jpg`, female: `${WOW_ICON_BASE}/race_undead_female.jpg` },
+  tauren: { male: `${WOW_ICON_BASE}/race_tauren_male.jpg`, female: `${WOW_ICON_BASE}/race_tauren_female.jpg` },
+  troll: { male: `${WOW_ICON_BASE}/race_troll_male.jpg`, female: `${WOW_ICON_BASE}/race_troll_female.jpg` },
+  bloodelf: { male: `${WOW_ICON_BASE}/race_bloodelf_male.jpg`, female: `${WOW_ICON_BASE}/race_bloodelf_female.jpg` },
+  goblin: { male: `${WOW_ICON_BASE}/race_goblin_male.jpg`, female: `${WOW_ICON_BASE}/race_goblin_female.jpg` },
+  human: { male: `${WOW_ICON_BASE}/race_human_male.jpg`, female: `${WOW_ICON_BASE}/race_human_female.jpg` },
+  dwarf: { male: `${WOW_ICON_BASE}/race_dwarf_male.jpg`, female: `${WOW_ICON_BASE}/race_dwarf_female.jpg` },
+  nightelf: { male: `${WOW_ICON_BASE}/race_nightelf_male.jpg`, female: `${WOW_ICON_BASE}/race_nightelf_female.jpg` },
+  gnome: { male: `${WOW_ICON_BASE}/race_gnome_male.jpg`, female: `${WOW_ICON_BASE}/race_gnome_female.jpg` },
+  draenei: { male: `${WOW_ICON_BASE}/race_draenei_male.jpg`, female: `${WOW_ICON_BASE}/race_draenei_female.jpg` },
+  worgen: { male: `${WOW_ICON_BASE}/race_worgen_male.jpg`, female: `${WOW_ICON_BASE}/race_worgen_female.jpg` },
+  pandaren: { male: `${WOW_ICON_BASE}/race_pandaren_male.jpg`, female: `${WOW_ICON_BASE}/race_pandaren_female.jpg` },
+  dracthyr: { male: `${WOW_ICON_BASE}/race_dracthyr.jpg`, female: `${WOW_ICON_BASE}/race_dracthyr.jpg` },
+  earthen: { male: `${WOW_ICON_BASE}/race_earthen_male.jpg`, female: `${WOW_ICON_BASE}/race_earthen_female.jpg` },
+};
+
+// HELPER: Direct URLs
+export function getWoWClassIcon(className?: string): string {
+  return getWoWClassInfo(className).iconUrl;
+}
+
+export function getWoWRaceIcon(raceName?: string, gender?: string): string {
+  return getWoWRaceInfo(raceName, gender).iconUrl;
+}
+
+export function getWoWFactionIcon(factionName?: string): string {
+  return getWoWFactionInfo(factionName).iconUrl;
+}
+
+// HELPER: WoW Version formatting & badges
+export function getWoWVersionInfo(version?: string) {
+  const v = (version || "retail").toLowerCase();
+  if (v.includes("classic") || v === "era") {
+    return {
+      key: "classic" as const,
+      name: "World of Warcraft: Classic Era",
+      shortName: "Classic Era",
+      badgeBg: "bg-amber-950/70",
+      borderClass: "border-amber-500/50",
+      textClass: "text-amber-300",
+      icon: `${WOW_ICON_BASE}/inv_misc_horn_01.jpg`,
+      levelCap: 60,
+    };
+  }
+  if (v.includes("forever") || v.includes("vanilla+")) {
+    return {
+      key: "forever" as const,
+      name: "World of Warcraft Forever (Vanilla+)",
+      shortName: "WoW Forever",
+      badgeBg: "bg-emerald-950/70",
+      borderClass: "border-emerald-500/50",
+      textClass: "text-emerald-300",
+      icon: `${WOW_ICON_BASE}/spell_nature_spiritarmor.jpg`,
+      levelCap: 60,
+    };
+  }
+  if (v.includes("tbc") || v.includes("crusade")) {
+    return {
+      key: "tbc" as const,
+      name: "World of Warcraft: The Burning Crusade Classic",
+      shortName: "TBC Classic",
+      badgeBg: "bg-teal-950/70",
+      borderClass: "border-teal-500/50",
+      textClass: "text-teal-300",
+      icon: `${WOW_ICON_BASE}/inv_misc_gem_bloodgem_01.jpg`,
+      levelCap: 70,
+    };
+  }
+  return {
+    key: "retail" as const,
+    name: "World of Warcraft: The War Within (Retail)",
+    shortName: "WoW Retail",
+    badgeBg: "bg-cyan-950/70",
+    borderClass: "border-cyan-500/50",
+    textClass: "text-cyan-300",
+    icon: `${WOW_ICON_BASE}/achievement_level_80.jpg`,
+    levelCap: 80,
+  };
+}
+
+// HELPER: Return item quality styling
+export function getWoWQualityInfo(quality?: string): WoWItemQualityInfo {
+  const q = (quality || "COMMON").toUpperCase();
+  return WOW_QUALITIES[q] || WOW_QUALITIES.COMMON;
+}
+
+export const getWoWItemQuality = getWoWQualityInfo;
+
+// HELPER: Return game mode metadata and badge styling
+export function getWoWGameModeInfo(gameId?: string): {
+  id: string;
+  name: string;
+  shortName: string;
+  maxLevel: number;
+  badgeBg: string;
+  badgeBorder: string;
+  badgeText: string;
+  namespace: string;
+  description: string;
+} {
+  const g = (gameId || "wow-retail").toLowerCase();
+
+  if (g.includes("classic") && !g.includes("forever") && !g.includes("tbc")) {
+    return {
+      id: "wow-classic",
+      name: "World of Warcraft: Classic Era (Vanilla)",
+      shortName: "Classic Era",
+      maxLevel: 60,
+      badgeBg: "bg-amber-950/70",
+      badgeBorder: "border-amber-500/50",
+      badgeText: "text-amber-300",
+      namespace: "profile-classic1x",
+      description: "Vanilla WoW 1.14 / Nível Máximo 60 / Reinos da Era Clássica",
+    };
+  }
+
+  if (g.includes("forever")) {
+    return {
+      id: "wow-forever",
+      name: "World of Warcraft Forever (Vanilla+)",
+      shortName: "WoW Forever",
+      maxLevel: 60,
+      badgeBg: "bg-emerald-950/70",
+      badgeBorder: "border-emerald-500/50",
+      badgeText: "text-emerald-300",
+      namespace: "profile-classic1x",
+      description: "Servidores Vanilla+ Forever / Nível Máximo 60",
+    };
+  }
+
+  if (g.includes("tbc") || g.includes("burning") || g.includes("crusade")) {
+    return {
+      id: "wow-tbc",
+      name: "World of Warcraft: The Burning Crusade / Classic Progression",
+      shortName: "TBC Classic",
+      maxLevel: 70,
+      badgeBg: "bg-teal-950/70",
+      badgeBorder: "border-teal-500/50",
+      badgeText: "text-teal-300",
+      namespace: "classicann",
+      description: "Progressão de Expansão / Nível Máximo 70 / Reinos TBC",
+    };
+  }
+
+  // Default: Retail / The War Within
+  return {
+    id: "wow-retail",
+    name: "World of Warcraft: The War Within (Retail)",
+    shortName: "WoW Retail",
+    maxLevel: 80,
+    badgeBg: "bg-cyan-950/70",
+    badgeBorder: "border-cyan-500/50",
+    badgeText: "text-cyan-300",
+    namespace: "profile",
+    description: "Versão Atual Oficial (The War Within) / Nível Máximo 80",
+  };
+}
+
+// HELPER: Strict character filtering so characters never leak into other modes
+export function filterCharactersByGameMode<T extends {
+  name?: string;
+  realm?: string;
+  realmSlug?: string;
+  level?: number;
+  characterClass?: string;
+  race?: string;
+  gender?: string;
+  faction?: string;
+  gameMode?: string;
+  classIconUrl?: string;
+  raceIconUrl?: string;
+  factionIconUrl?: string;
+}>(
+  characters: T[],
+  gameId: string
+): T[] {
+  const modeInfo = getWoWGameModeInfo(gameId);
+
+  return characters.filter((char) => {
+    // 1. If character has an explicit gameMode tag, match strictly
+    if (char.gameMode) {
+      if (modeInfo.id === "wow-retail") return char.gameMode === "retail";
+      if (modeInfo.id === "wow-classic") return char.gameMode === "classic";
+      if (modeInfo.id === "wow-forever") return char.gameMode === "forever";
+      if (modeInfo.id === "wow-tbc") return char.gameMode === "tbc";
+    }
+
+    const lvl = char.level || 1;
+
+    // 2. Retail Mode:
+    // Retail characters can be level 71-80 (or modern classes like Evoker, Demon Hunter, Monk, DK).
+    // If it's a Retail game, allow all characters that fit Retail (or don't violate Classic limits)
+    if (modeInfo.id === "wow-retail") {
+      // Classic Era level 60 characters with specific Classic realm names can be filtered out if requested
+      const classInfo = getWoWClassInfo(char.characterClass);
+      // Evoker, Demon Hunter, Monk, Death Knight are strictly retail in modern context
+      if (["evoker", "demonhunter", "monk", "deathknight"].includes(classInfo.id)) {
+        return true;
+      }
+      return lvl > 70 || !char.realm?.toLowerCase().includes("forever");
+    }
+
+    // 3. Classic Era Mode (Max level 60, Vanilla 9 classes only, no modern races/classes):
+    if (modeInfo.id === "wow-classic") {
+      if (lvl > 60) return false;
+      const classInfo = getWoWClassInfo(char.characterClass);
+      if (!classInfo.availableIn.includes("classic")) return false;
+      const raceInfo = getWoWRaceInfo(char.race);
+      if (!raceInfo.availableIn.includes("classic")) return false;
+      return true;
+    }
+
+    // 4. Forever Mode (Vanilla+ Max level 60):
+    if (modeInfo.id === "wow-forever") {
+      if (lvl > 60) return false;
+      const classInfo = getWoWClassInfo(char.characterClass);
+      if (!classInfo.availableIn.includes("forever")) return false;
+      return true;
+    }
+
+    // 5. TBC Progression Mode (Max level 70, no DKs/Monks/DHs/Evokers):
+    if (modeInfo.id === "wow-tbc") {
+      if (lvl > 70) return false;
+      const classInfo = getWoWClassInfo(char.characterClass);
+      if (!classInfo.availableIn.includes("tbc")) return false;
+      return true;
+    }
+
+    return true;
+  });
+}

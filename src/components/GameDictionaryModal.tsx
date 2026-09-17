@@ -59,8 +59,9 @@ export default function GameDictionaryModal({
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [deleteConfirmGroup, setDeleteConfirmGroup] = useState<string | null>(null);
 
-  // Collapsible groups state (key: groupName, value: true if collapsed)
-  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  // Collapsible groups state (key: groupName, value: true if expanded)
+  // Default is COLLAPSED (empty object means all groups start collapsed)
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   // Quick Inline Add state
   const [quickWordInputs, setQuickWordInputs] = useState<Record<string, string>>({});
@@ -138,20 +139,22 @@ export default function GameDictionaryModal({
   };
 
   const toggleGroupCollapse = (groupName: string) => {
-    setCollapsedGroups((prev) => ({
+    setExpandedGroups((prev) => ({
       ...prev,
       [groupName]: !prev[groupName],
     }));
   };
 
-  const expandAllGroups = () => setCollapsedGroups({});
-
-  const collapseAllGroups = (groupsList: string[]) => {
+  const expandAllGroups = (groupsList: string[]) => {
     const map: Record<string, boolean> = {};
     groupsList.forEach((g) => {
       map[g] = true;
     });
-    setCollapsedGroups(map);
+    setExpandedGroups(map);
+  };
+
+  const collapseAllGroups = () => {
+    setExpandedGroups({});
   };
 
   // Open Form to create a Word (Standalone or inside a specified Group)
@@ -173,7 +176,7 @@ export default function GameDictionaryModal({
         setStrikethrough(!!groupItem.format.strikethrough);
       }
       // Ensure the group is expanded when adding a word to it
-      setCollapsedGroups((prev) => ({ ...prev, [initialGroup]: false }));
+      setExpandedGroups((prev) => ({ ...prev, [initialGroup]: true }));
     }
 
     setIsEditing(true);
@@ -292,8 +295,8 @@ export default function GameDictionaryModal({
     const updatedDict = [...dictionary, newItem];
     saveDictionaryToGame(updatedDict);
     setQuickWordInputs((prev) => ({ ...prev, [groupName]: "" }));
-    // Ensure folder is uncollapsed
-    setCollapsedGroups((prev) => ({ ...prev, [groupName]: false }));
+    // Ensure folder is expanded to show the newly added word
+    setExpandedGroups((prev) => ({ ...prev, [groupName]: true }));
     showToast(`✨ "${mainTerm}" adicionado ao conjunto "${groupName}"!`);
   };
 
@@ -605,17 +608,15 @@ export default function GameDictionaryModal({
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.2 }}
-      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-5 bg-black/85 backdrop-blur-md cursor-pointer"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-4 bg-black/85 backdrop-blur-md"
+      /* Backdrop click intentionally does NOT close the modal per user requirements */
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.96, y: 12 }}
+        initial={{ opacity: 0, scale: 0.97, y: 10 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.96, y: 12 }}
+        exit={{ opacity: 0, scale: 0.97, y: 10 }}
         transition={{ type: "spring", damping: 26, stiffness: 360 }}
-        className="relative w-full max-w-[1300px] w-[98vw] max-h-[95vh] bg-zinc-950 border border-zinc-800/90 rounded-2xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden cursor-default"
+        className="relative w-[90vw] h-[90vh] max-w-[95vw] max-h-[92vh] bg-zinc-950 border border-zinc-800/90 rounded-2xl sm:rounded-3xl shadow-2xl flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         
@@ -797,8 +798,8 @@ export default function GameDictionaryModal({
                     )}
                   </div>
                 ) : (
-                  <div className="sm:col-span-2 space-y-3">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="sm:col-span-2">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       <div>
                         <label className="block text-[10px] uppercase font-bold text-zinc-400 mb-1">
                           Palavra ou Termo Principal *
@@ -827,204 +828,222 @@ export default function GameDictionaryModal({
                           type="text"
                           value={variantsInput}
                           onChange={(e) => setVariantsInput(e.target.value)}
-                          placeholder="Ex: Korok Seeds, Sementes Korok, Kakariko Village"
+                          placeholder="Ex: Korok Seeds, Sementes Korok"
                           className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 outline-none focus:border-cyan-500 font-medium"
                         />
                         <p className="text-[10px] text-zinc-500 mt-1">
-                          Separe por vírgula. Todas receberão o mesmo destaque!
+                          Separe por vírgula. Todas recebem o mesmo estilo!
                         </p>
                       </div>
-                    </div>
 
-                    <div>
-                      <label className="block text-[10px] uppercase font-bold text-zinc-400 mb-1">
-                        Pertence ao Conjunto (Opcional)
-                      </label>
-                      <select
-                        value={group}
-                        onChange={(e) => {
-                          const selectedG = e.target.value;
-                          setGroup(selectedG);
-                          if (selectedG) {
-                            const groupItem = dictionary.find(
-                              (i) => i.group && i.group.trim().toLowerCase() === selectedG.trim().toLowerCase()
-                            );
-                            if (groupItem) {
-                              setTextColor(groupItem.format.textColor || "#22d3ee");
-                              setBgColor(groupItem.format.bgColor || "");
-                              setBold(!!groupItem.format.bold);
-                              setItalic(!!groupItem.format.italic);
+                      <div>
+                        <label className="block text-[10px] uppercase font-bold text-zinc-400 mb-1">
+                          Pertence ao Conjunto (Opcional)
+                        </label>
+                        <select
+                          value={group}
+                          onChange={(e) => {
+                            const selectedG = e.target.value;
+                            setGroup(selectedG);
+                            if (selectedG) {
+                              const groupItem = dictionary.find(
+                                (i) => i.group && i.group.trim().toLowerCase() === selectedG.trim().toLowerCase()
+                              );
+                              if (groupItem) {
+                                setTextColor(groupItem.format.textColor || "#22d3ee");
+                                setBgColor(groupItem.format.bgColor || "");
+                                setBold(!!groupItem.format.bold);
+                                setItalic(!!groupItem.format.italic);
+                              }
                             }
-                          }
-                        }}
-                        className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 outline-none focus:border-cyan-500 font-bold cursor-pointer"
-                      >
-                        <option value="">Nenhum (Palavra Solta)</option>
-                        {allGroups.map((gName) => (
-                          <option key={gName} value={gName}>
-                            📁 {gName}
-                          </option>
-                        ))}
-                      </select>
+                          }}
+                          className="w-full px-3.5 py-2 rounded-xl bg-zinc-950 border border-zinc-800 text-xs text-zinc-100 outline-none focus:border-cyan-500 font-bold cursor-pointer"
+                        >
+                          <option value="">Nenhum (Palavra Solta)</option>
+                          {allGroups.map((gName) => (
+                            <option key={gName} value={gName}>
+                              📁 {gName}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-[10px] text-zinc-500 mt-1">
+                          Agrupe para herdar a cor e organizar em A-Z.
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* Formatting Controls */}
-              <div className="space-y-2.5 pt-2 border-t border-zinc-800">
+              {/* Formatting Controls - 3 Columns in Wide Modal */}
+              <div className="pt-2.5 border-t border-zinc-800 space-y-2">
                 <label className="block text-[10px] uppercase font-bold text-zinc-400">
                   {formType === "group" ? "Estilização Padrão para este Conjunto" : "Estilização e Formatação da Palavra"}
                 </label>
 
-                {/* Text Color Selection */}
-                <div>
-                  <span className="text-[11px] font-semibold text-zinc-300 block mb-1">
-                    Cor do Texto
-                  </span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {PRESET_TEXT_COLORS.map((p) => (
-                      <button
-                        key={p.name}
-                        type="button"
-                        onClick={() => setTextColor(p.color)}
-                        className={`px-2 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-                          textColor === p.color
-                            ? "border-cyan-400 bg-cyan-950/70 text-white font-bold shadow-sm"
-                            : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700"
-                        }`}
-                      >
-                        <span
-                          className="w-3 h-3 rounded-full border border-zinc-600 shrink-0"
-                          style={{ backgroundColor: p.color }}
-                        />
-                        <span className="text-[10px]">{p.name}</span>
-                      </button>
-                    ))}
-                    <div className="flex items-center gap-1 ml-auto">
-                      <span className="text-[10px] text-zinc-500">Personalizada:</span>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                  {/* Column 1: Text Color Selection */}
+                  <div className="p-3 rounded-xl bg-zinc-950/80 border border-zinc-800/80 space-y-2">
+                    <span className="text-[11px] font-semibold text-zinc-300 block">
+                      Cor do Texto
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {PRESET_TEXT_COLORS.map((p) => (
+                        <button
+                          key={p.name}
+                          type="button"
+                          onClick={() => setTextColor(p.color)}
+                          className={`px-2 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                            textColor === p.color
+                              ? "border-cyan-400 bg-cyan-950/70 text-white font-bold shadow-sm"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700"
+                          }`}
+                        >
+                          <span
+                            className="w-3 h-3 rounded-full border border-zinc-600 shrink-0"
+                            style={{ backgroundColor: p.color }}
+                          />
+                          <span className="text-[10px]">{p.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2 pt-1 border-t border-zinc-900">
+                      <span className="text-[10px] text-zinc-500">Cor Personalizada:</span>
                       <input
                         type="color"
                         value={textColor}
                         onChange={(e) => setTextColor(e.target.value)}
                         className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0"
                       />
+                      <span className="text-[10px] font-mono text-zinc-400 uppercase">{textColor}</span>
                     </div>
                   </div>
-                </div>
 
-                {/* Background / Highlight Color Selection */}
-                <div>
-                  <span className="text-[11px] font-semibold text-zinc-300 block mb-1">
-                    Cor de Fundo / Destaque
-                  </span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {PRESET_BG_COLORS.map((p) => (
-                      <button
-                        key={p.name}
-                        type="button"
-                        onClick={() => setBgColor(p.color)}
-                        className={`px-2 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
-                          bgColor === p.color
-                            ? "border-amber-400 bg-amber-950/70 text-white font-bold shadow-sm"
-                            : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700"
-                        }`}
-                      >
-                        <span
-                          className="w-3 h-3 rounded border border-zinc-600 shrink-0"
-                          style={{ backgroundColor: p.color || "transparent" }}
-                        />
-                        <span className="text-[10px]">{p.name}</span>
-                      </button>
-                    ))}
-                    <div className="flex items-center gap-1 ml-auto">
-                      <span className="text-[10px] text-zinc-500">Personalizada:</span>
+                  {/* Column 2: Background / Highlight Color Selection */}
+                  <div className="p-3 rounded-xl bg-zinc-950/80 border border-zinc-800/80 space-y-2">
+                    <span className="text-[11px] font-semibold text-zinc-300 block">
+                      Cor de Fundo / Destaque
+                    </span>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {PRESET_BG_COLORS.map((p) => (
+                        <button
+                          key={p.name}
+                          type="button"
+                          onClick={() => setBgColor(p.color)}
+                          className={`px-2 py-1 rounded-lg border text-xs flex items-center gap-1.5 transition-all cursor-pointer ${
+                            bgColor === p.color
+                              ? "border-amber-400 bg-amber-950/70 text-white font-bold shadow-sm"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:border-zinc-700"
+                          }`}
+                        >
+                          <span
+                            className="w-3 h-3 rounded border border-zinc-600 shrink-0"
+                            style={{ backgroundColor: p.color || "transparent" }}
+                          />
+                          <span className="text-[10px]">{p.name}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2 pt-1 border-t border-zinc-900">
+                      <span className="text-[10px] text-zinc-500">Fundo Personalizado:</span>
                       <input
                         type="color"
                         value={bgColor || "#000000"}
                         onChange={(e) => setBgColor(e.target.value)}
                         className="w-6 h-6 rounded cursor-pointer border-0 bg-transparent p-0"
                       />
+                      {bgColor ? (
+                        <button
+                          type="button"
+                          onClick={() => setBgColor("")}
+                          className="text-[10px] text-rose-400 hover:text-rose-300 ml-auto cursor-pointer"
+                        >
+                          Remover fundo
+                        </button>
+                      ) : (
+                        <span className="text-[10px] font-mono text-zinc-500">Transparente</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Column 3: Font Styles & Integrated Live Preview */}
+                  <div className="p-3 rounded-xl bg-zinc-950/80 border border-zinc-800/80 flex flex-col justify-between space-y-2">
+                    <div>
+                      <span className="text-[11px] font-semibold text-zinc-300 block mb-1.5">
+                        Estilos de Tipografia
+                      </span>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => setBold(!bold)}
+                          className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
+                            bold
+                              ? "border-cyan-500 bg-cyan-950 text-cyan-300"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          N (Negrito)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setItalic(!italic)}
+                          className={`px-2.5 py-1 rounded-lg border text-xs italic transition-all cursor-pointer ${
+                            italic
+                              ? "border-cyan-500 bg-cyan-950 text-cyan-300"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          I (Itálico)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setUnderline(!underline)}
+                          className={`px-2.5 py-1 rounded-lg border text-xs underline transition-all cursor-pointer ${
+                            underline
+                              ? "border-cyan-500 bg-cyan-950 text-cyan-300"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          U (Sublinhado)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStrikethrough(!strikethrough)}
+                          className={`px-2.5 py-1 rounded-lg border text-xs line-through transition-all cursor-pointer ${
+                            strikethrough
+                              ? "border-cyan-500 bg-cyan-950 text-cyan-300"
+                              : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
+                          }`}
+                        >
+                          S (Tachado)
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Integrated Live Preview inside Column 3 */}
+                    <div className="p-2.5 rounded-lg bg-zinc-900 border border-zinc-800">
+                      <div className="flex items-center justify-between text-[10px] uppercase font-bold text-zinc-400 mb-1">
+                        <span>Pré-visualização</span>
+                        <span className="text-zinc-500 font-normal">Ao vivo</span>
+                      </div>
+                      <div className="text-xs truncate">
+                        <span
+                          style={formatToStyleObject({
+                            textColor,
+                            bgColor,
+                            bold,
+                            italic,
+                            underline,
+                            strikethrough,
+                          })}
+                          className="px-2 py-0.5 rounded font-medium inline-block max-w-full truncate"
+                        >
+                          {formType === "group" ? (groupNameInput.trim() || "Exemplo do Conjunto") : (term.trim() || "Exemplo de Palavra")}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
-
-                {/* Toggles for Bold, Italic, Underline, Strikethrough */}
-                <div>
-                  <span className="text-[11px] font-semibold text-zinc-300 block mb-1">
-                    Estilos de Fonte
-                  </span>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => setBold(!bold)}
-                      className={`px-3 py-1 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
-                        bold
-                          ? "border-cyan-500 bg-cyan-950 text-cyan-300"
-                          : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
-                      }`}
-                    >
-                      N (Negrito)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setItalic(!italic)}
-                      className={`px-3 py-1 rounded-lg border text-xs italic transition-all cursor-pointer ${
-                        italic
-                          ? "border-cyan-500 bg-cyan-950 text-cyan-300"
-                          : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
-                      }`}
-                    >
-                      I (Itálico)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setUnderline(!underline)}
-                      className={`px-3 py-1 rounded-lg border text-xs underline transition-all cursor-pointer ${
-                        underline
-                          ? "border-cyan-500 bg-cyan-950 text-cyan-300"
-                          : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
-                      }`}
-                    >
-                      U (Sublinhado)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setStrikethrough(!strikethrough)}
-                      className={`px-3 py-1 rounded-lg border text-xs line-through transition-all cursor-pointer ${
-                        strikethrough
-                          ? "border-cyan-500 bg-cyan-950 text-cyan-300"
-                          : "border-zinc-800 bg-zinc-950 text-zinc-500 hover:text-zinc-300"
-                      }`}
-                    >
-                      S (Tachado)
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {/* Live Preview Box */}
-              <div className="p-3 rounded-xl bg-zinc-950 border border-zinc-800 space-y-1">
-                <span className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">
-                  Pré-visualização de Destaque:
-                </span>
-                <p className="text-xs text-zinc-300 leading-relaxed">
-                  No diário de bordo:{" "}
-                  <span
-                    style={formatToStyleObject({
-                      textColor,
-                      bgColor,
-                      bold,
-                      italic,
-                      underline,
-                      strikethrough,
-                    })}
-                    className="px-2 py-0.5 rounded font-medium"
-                  >
-                    {formType === "group" ? (groupNameInput.trim() || "Exemplo do Conjunto") : (term.trim() || "Exemplo de Palavra")}
-                  </span>{" "}
-                  será renderizado com estas cores e formatação.
-                </p>
               </div>
 
               {/* Form Save / Cancel Buttons */}
@@ -1100,14 +1119,14 @@ export default function GameDictionaryModal({
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={expandAllGroups}
+                          onClick={() => expandAllGroups(allGroups)}
                           className="text-[11px] font-semibold text-purple-300 hover:text-white bg-purple-950/40 hover:bg-purple-950 border border-purple-500/20 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
                         >
                           Expandir Todos
                         </button>
                         <button
                           type="button"
-                          onClick={() => collapseAllGroups(allGroups)}
+                          onClick={collapseAllGroups}
                           className="text-[11px] font-semibold text-zinc-400 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
                         >
                           Recolher Todos
@@ -1120,8 +1139,8 @@ export default function GameDictionaryModal({
                     {allGroups.map((groupName) => {
                       const groupWords = itemsByGroup[groupName] || [];
                       const sampleItem = dictionary.find((i) => i.group === groupName);
-                      // Auto expand if search term is active or if user hasn't collapsed it
-                      const isCollapsed = searchTerm.trim() ? false : !!collapsedGroups[groupName];
+                      // Auto expand if search term is active, otherwise default to collapsed unless user expanded it
+                      const isExpanded = searchTerm.trim() ? true : !!expandedGroups[groupName];
 
                       return (
                         <div
@@ -1135,7 +1154,7 @@ export default function GameDictionaryModal({
                           >
                             <div className="flex items-center gap-2.5 min-w-0">
                               <motion.div
-                                animate={{ rotate: isCollapsed ? 0 : 90 }}
+                                animate={{ rotate: isExpanded ? 90 : 0 }}
                                 transition={{ duration: 0.2 }}
                                 className="p-1 rounded-lg text-purple-400 hover:bg-purple-950/80 transition-colors"
                               >
@@ -1143,7 +1162,7 @@ export default function GameDictionaryModal({
                               </motion.div>
                               
                               <div className="p-1.5 rounded-lg bg-purple-950 border border-purple-500/30 text-purple-300 shrink-0">
-                                {isCollapsed ? <Folder size={16} /> : <FolderOpen size={16} />}
+                                {isExpanded ? <FolderOpen size={16} /> : <Folder size={16} />}
                               </div>
 
                               <div className="flex items-center gap-2 flex-wrap min-w-0">
@@ -1202,7 +1221,7 @@ export default function GameDictionaryModal({
 
                           {/* Collapsible Body with Smooth Motion Transition */}
                           <AnimatePresence initial={false}>
-                            {!isCollapsed && (
+                            {isExpanded && (
                               <motion.div
                                 initial={{ opacity: 0, height: 0 }}
                                 animate={{ opacity: 1, height: "auto" }}
@@ -1236,14 +1255,14 @@ export default function GameDictionaryModal({
                                     </button>
                                   </form>
 
-                                  {/* Words inside this Group in 2-Column Grid */}
+                                  {/* Words inside this Group in 3-Column Grid */}
                                   {groupWords.length === 0 ? (
                                     <div className="p-3 rounded-xl bg-zinc-950/60 border border-dashed border-zinc-800/80 text-center text-xs text-zinc-500 flex items-center justify-center gap-2">
                                       <Info size={14} className="text-purple-400 shrink-0" />
                                       <span>Nenhuma palavra cadastrada neste conjunto ainda. Adicione acima!</span>
                                     </div>
                                   ) : (
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
                                       {groupWords.map((item) => (
                                         <motion.div
                                           key={item.id}
@@ -1350,7 +1369,7 @@ export default function GameDictionaryModal({
                       Nenhuma palavra solta cadastrada.
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
                       {standaloneItems.map((item) => (
                         <motion.div
                           key={item.id}

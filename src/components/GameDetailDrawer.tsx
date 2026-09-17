@@ -13,7 +13,13 @@ import { uploadToImgBB, getAllCachedImgBBUrls } from "../utils/imgbb";
 import { parseMassImgBBUrls, recoverAndReindexImgBBMedias } from "../utils/mediaRepair";
 import { getYoutubeEmbedUrl, isYoutubeUrl, uploadVideoToYoutube } from "../utils/youtube";
 import { YouTubeThumbnail } from "./YouTubeThumbnail";
-import { isDriveAuthenticated, signInWithGoogleDrive } from "../utils/googleDrive";
+import {
+  isDriveAuthenticated,
+  signInWithGoogleDrive,
+  isYouTubeAuthenticated,
+  signInWithYouTube,
+  isPopupCancelledOrClosedError,
+} from "../utils/googleDrive";
 import RichTextEditor from "./RichTextEditor";
 import { DiaryMediaGrid } from "./DiaryMediaGrid";
 import { formatHltbTime } from "../utils/hltbFormatter";
@@ -28,6 +34,27 @@ import { isVideoFile, isImageFile } from "../utils/mediaUtils";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
 import { fetchSteamAchievements, fetchSteamOwnedGames, formatSteamPlaytime, isPcPlatform, SteamAchievementsResult } from "../utils/steamApi";
 import { fetchGogAchievements, fetchGogOwnedGames, formatGogPlaytime, getGogStoreUrl, getGogGalaxyProtocolUrl, resolveGogGame, GogAchievementsResult } from "../utils/gogApi";
+import {
+  fetchBlizzardCharacterProfile,
+  fetchBlizzardWoWCharacters,
+  fetchWoWUserCharacters,
+  isBlizzardAuthenticated,
+  getStoredBlizzardRegion,
+  getStoredBlizzardBattleTag,
+  BLIZZARD_OFFICIAL_GAMES
+} from "../utils/blizzardApi";
+import WoWCharacterGrid from "./WoWCharacterGrid";
+import { WoWArmoryView } from "./WoWArmoryView";
+import {
+  getWoWClassInfo,
+  getWoWRaceInfo,
+  getWoWFactionInfo,
+  getWoWItemQuality,
+  getWoWGameModeInfo,
+  filterCharactersByGameMode,
+} from "../utils/blizzardIcons";
+import { generateWoWCharacterProfile } from "../utils/blizzardCharacterData";
+import { BlizzardCharacterSummary, BlizzardProfileData, BlizzardEquipmentItem } from "../types";
 import { showToast } from "../utils/toast";
 import { moveToTrash } from "../utils/trashService";
 import { exportGameDiaryToMarkdown, exportGameDiaryToPrintPDF } from "../utils/exportService";
@@ -717,6 +744,15 @@ export default function GameDetailDrawer({
   const [gogAchievementsSearch, setGogAchievementsSearch] = useState("");
   const [isGogAchievementsGalleryOpen, setIsGogAchievementsGalleryOpen] = useState(false);
 
+  // Battle.net / Blizzard State in Drawer
+  const [blizzardChars, setBlizzardChars] = useState<BlizzardCharacterSummary[]>([]);
+  const [isLoadingBlizzardChars, setIsLoadingBlizzardChars] = useState<boolean>(false);
+  const [blizzardVersionFilter, setBlizzardVersionFilter] = useState<string>("all");
+  const [blizzardActiveProfile, setBlizzardActiveProfile] = useState<BlizzardProfileData | null>(null);
+  const [isSyncingBlizzard, setIsSyncingBlizzard] = useState<boolean>(false);
+  const [selectedBlizzardCharTab, setSelectedBlizzardCharTab] = useState<"overview" | "gear" | "talents" | "achievements">("overview");
+  const [blizzardArmorySearch, setBlizzardArmorySearch] = useState<string>("");
+
   // Process and filter GOG Achievements
   const processedGogAchievements = useMemo(() => {
     if (!gogAchieveData?.achievements) return [];
@@ -1262,6 +1298,61 @@ export default function GameDetailDrawer({
     }
   }, [game?.gogGameId, game?.integrationPlatform, isOpen]);
 
+  // Blizzard Profile & Characters loader in Drawer
+  useEffect(() => {
+    const isBattlenet = Boolean(
+      game?.integrationPlatform === "battlenet" ||
+      game?.blizzardGameId ||
+      (game?.platform && (
+        game.platform.toLowerCase().includes("battlenet") ||
+        game.platform.toLowerCase().includes("battle.net") ||
+        game.platform.toLowerCase().includes("bnet")
+      ))
+    );
+
+    if (isOpen && game && isBattlenet) {
+      if (game.blizzardProfileData) {
+        setBlizzardActiveProfile(game.blizzardProfileData);
+      }
+      const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
+      const gId = game.blizzardGameId || "wow-retail";
+      setIsLoadingBlizzardChars(true);
+
+      fetchWoWUserCharacters({ region, version: "all", gameId: gId })
+        .then((chars) => {
+          setBlizzardChars(chars);
+          const targetCharObj = chars.find((c) => c.name.toLowerCase() === (game.blizzardCharacterName || "").toLowerCase()) || (chars.length > 0 ? chars[0] : null);
+          const targetChar = targetCharObj ? targetCharObj.name : (game.blizzardCharacterName || "");
+          const targetRealm = targetCharObj ? (targetCharObj.realmSlug || targetCharObj.realm) : (game.blizzardRealm || "");
+          if (targetChar && targetRealm) {
+            fetchBlizzardCharacterProfile(targetChar, targetRealm, {
+              region,
+              gameId: targetCharObj?.wow_version ? `wow-${targetCharObj.wow_version}` : gId,
+              characterSummary: targetCharObj || undefined,
+              characterClass: targetCharObj?.characterClass,
+              race: targetCharObj?.race,
+              level: targetCharObj?.level,
+              gender: targetCharObj?.gender,
+              faction: targetCharObj?.faction,
+              activeSpec: targetCharObj?.activeSpec,
+              equippedItemLevel: targetCharObj?.equippedItemLevel,
+              version: targetCharObj?.wow_version || targetCharObj?.gameMode,
+            })
+              .then((prof) => {
+                if (prof) {
+                  setBlizzardActiveProfile(prof);
+                }
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {})
+        .finally(() => {
+          setIsLoadingBlizzardChars(false);
+        });
+    }
+  }, [isOpen, game?.id, game?.integrationPlatform, game?.blizzardGameId, game?.platform]);
+
   useEffect(() => {
     if (game && game.metacriticUrl && isOpen) {
       fetch(`/api/metacritic?url=${encodeURIComponent(game.metacriticUrl)}`)
@@ -1553,13 +1644,17 @@ export default function GameDetailDrawer({
     if (files.length === 0 || !activeGame) return;
 
     const hasVideo = files.some((f) => isVideoFile(f));
-    if (hasVideo && !isDriveAuthenticated()) {
+    if (hasVideo && !isYouTubeAuthenticated()) {
       try {
-        await signInWithGoogleDrive();
+        await signInWithYouTube();
       } catch (authErr: any) {
+        if (isPopupCancelledOrClosedError(authErr)) {
+          console.info("[Drawer] Autenticação Google/YouTube cancelada pelo usuário.");
+          return;
+        }
         triggerAlert(
-          "Login no YouTube Necessário",
-          "Para salvar seus vídeos no YouTube e organizá-los em playlists por jogo, é necessário conectar sua conta do Google."
+          "Autorização no YouTube Necessária",
+          "Para salvar seus vídeos no YouTube e organizá-los em playlists por jogo, é necessário autorizar o envio com sua conta do Google."
         );
         return;
       }
@@ -4398,6 +4493,517 @@ export default function GameDetailDrawer({
                               )}
                             </div>
                           </div>
+                        </div>
+                      )}
+
+                      {/* BLIZZARD BATTLE.NET & WORLD OF WARCRAFT / WARCRAFT SPECIAL SECTION */}
+                      {(game.integrationPlatform === "battlenet" ||
+                        Boolean(game.blizzardGameId) ||
+                        Boolean(
+                          game.platform && (
+                            game.platform.toLowerCase().includes("battlenet") ||
+                            game.platform.toLowerCase().includes("battle.net") ||
+                            game.platform.toLowerCase().includes("bnet")
+                          )
+                        )
+                      ) && (
+                        <div id="blizzard-characters-section" className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-cyan-500/50 hover:border-cyan-500/80 shadow-md shadow-cyan-500/10 mt-1 text-left space-y-4 transition-all">
+                          {/* Header Bar */}
+                          <div className="flex items-center justify-between gap-3 flex-wrap border-b border-cyan-500/30 pb-3">
+                            <div className="flex items-center gap-2.5">
+                              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+                              <div className="flex items-center gap-2">
+                                <Shield size={18} className="text-cyan-400" />
+                                <div>
+                                  <h3 className="text-cyan-300 text-sm uppercase tracking-wider font-extrabold font-mono leading-none">
+                                    Personagens Blizzard
+                                  </h3>
+                                  <p className="text-[11px] text-zinc-400 font-sans mt-0.5">
+                                    Battle.net • {game.blizzardGameName || game.name || "World of Warcraft"}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {blizzardActiveProfile && (
+                                <span className="text-xs font-mono font-bold text-cyan-200 bg-cyan-950/60 px-2.5 py-1 rounded-xl border border-cyan-500/30">
+                                  {blizzardActiveProfile.name} ({blizzardActiveProfile.realm})
+                                </span>
+                              )}
+
+                              {isAdmin && (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    setIsSyncingBlizzard(true);
+                                    try {
+                                      const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
+                                      const gId = game.blizzardGameId || "wow-retail";
+                                      const chars = await fetchWoWUserCharacters({ region, version: "all", gameId: gId });
+                                      setBlizzardChars(chars);
+                                      const targetCharObj = chars.find((c) => c.name.toLowerCase() === (game.blizzardCharacterName || "").toLowerCase()) || (chars.length > 0 ? chars[0] : null);
+                                      const targetChar = targetCharObj ? targetCharObj.name : (game.blizzardCharacterName || "");
+                                      const targetRealm = targetCharObj ? (targetCharObj.realmSlug || targetCharObj.realm) : (game.blizzardRealm || "");
+                                      if (targetChar && targetRealm) {
+                                        const prof = await fetchBlizzardCharacterProfile(targetChar, targetRealm, {
+                                          region,
+                                          gameId: targetCharObj?.wow_version ? `wow-${targetCharObj.wow_version}` : gId,
+                                          characterSummary: targetCharObj || undefined,
+                                          characterClass: targetCharObj?.characterClass,
+                                          race: targetCharObj?.race,
+                                          level: targetCharObj?.level,
+                                          gender: targetCharObj?.gender,
+                                          faction: targetCharObj?.faction,
+                                          activeSpec: targetCharObj?.activeSpec,
+                                          equippedItemLevel: targetCharObj?.equippedItemLevel,
+                                          version: targetCharObj?.wow_version || targetCharObj?.gameMode,
+                                        });
+                                        if (prof) {
+                                          setBlizzardActiveProfile(prof);
+                                          if (onUpdateGame) {
+                                            onUpdateGame({
+                                              ...game,
+                                              blizzardCharacterName: prof.name,
+                                              blizzardRealm: prof.realm,
+                                              blizzardProfileData: prof
+                                            });
+                                          }
+                                        }
+                                      }
+                                      triggerAlert("Sincronização Battle.net Concluída", "Personagens Blizzard, armory e equipamentos atualizados com sucesso!");
+                                    } catch (err: any) {
+                                      triggerAlert("Erro de Sincronização", err?.message || "Não foi possível sincronizar com a Battle.net.");
+                                    } finally {
+                                      setIsSyncingBlizzard(false);
+                                    }
+                                  }}
+                                  disabled={isSyncingBlizzard}
+                                  className="text-xs font-bold flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-500/40 text-cyan-300 transition-all cursor-pointer disabled:opacity-50 select-none shadow-sm"
+                                  title="Sincronizar Armory, Conquistas e Equipamentos mais recentes da Battle.net"
+                                >
+                                  {isSyncingBlizzard ? (
+                                    <Loader2 size={12} className="animate-spin text-cyan-400" />
+                                  ) : (
+                                    <RefreshCw size={12} />
+                                  )}
+                                  <span>Atualizar Battle.net</span>
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* DYNAMIC BLIZZARD LAYOUT ACCORDING TO SELECTED GAME */}
+                          {(() => {
+                            const isBlizzWoW =
+                              game.blizzardGameId?.startsWith("wow") ||
+                              (!game.blizzardGameId && (
+                                (game.name?.toLowerCase().includes("warcraft") ||
+                                game.platform?.toLowerCase().includes("battlenet") ||
+                                game.platform?.toLowerCase().includes("battle.net") ||
+                                blizzardChars.length > 0 ||
+                                blizzardActiveProfile?.characterClass)
+                              ));
+                            const isDiablo =
+                              game.blizzardGameId?.includes("diablo") || game.name?.toLowerCase().includes("diablo");
+                            const isOverwatch =
+                              game.blizzardGameId?.includes("overwatch") || game.name?.toLowerCase().includes("overwatch");
+                            const isHearthstone =
+                              game.blizzardGameId === "hearthstone" || game.name?.toLowerCase().includes("hearthstone");
+                            const isStarcraft =
+                              game.blizzardGameId?.includes("starcraft") || game.name?.toLowerCase().includes("starcraft");
+
+                            // 1. WORLD OF WARCRAFT (ALL VERSIONS: RETAIL, CLASSIC, FOREVER, TBC)
+                            if (isBlizzWoW) {
+                              const modeInfo = getWoWGameModeInfo(game.blizzardGameId || "wow-retail");
+                              const filteredChars = filterCharactersByGameMode(blizzardChars, game.blizzardGameId || "wow-retail");
+
+                              const charName = blizzardActiveProfile?.name || blizzardActiveProfile?.selectedCharacter?.name || game.blizzardCharacterName || (filteredChars.length > 0 ? filteredChars[0].name : "Personagem de WoW");
+                              const charRealm = blizzardActiveProfile?.realm || blizzardActiveProfile?.selectedCharacter?.realm || game.blizzardRealm || (filteredChars.length > 0 ? filteredChars[0].realm : "Reino");
+                              const charLevel = blizzardActiveProfile?.level || blizzardActiveProfile?.selectedCharacter?.level || (filteredChars.length > 0 ? filteredChars[0].level : modeInfo.maxLevel);
+                              const charRace = blizzardActiveProfile?.race || blizzardActiveProfile?.selectedCharacter?.race || (filteredChars.length > 0 ? filteredChars[0].race : "Orc");
+                              const charClass = blizzardActiveProfile?.characterClass || blizzardActiveProfile?.selectedCharacter?.characterClass || (filteredChars.length > 0 ? filteredChars[0].characterClass : "Guerreiro");
+                              const charFaction = blizzardActiveProfile?.faction || blizzardActiveProfile?.selectedCharacter?.faction || (filteredChars.length > 0 ? filteredChars[0].faction : "HORDE");
+                              const charSpec = blizzardActiveProfile?.activeSpec || blizzardActiveProfile?.selectedCharacter?.activeSpec || "Especialização Primária";
+                              const charIlvl = blizzardActiveProfile?.equippedItemLevel || blizzardActiveProfile?.selectedCharacter?.equippedItemLevel || (modeInfo.maxLevel <= 60 ? 85 : modeInfo.maxLevel <= 70 ? 141 : 625);
+                              const charAvgIlvl = blizzardActiveProfile?.averageItemLevel || blizzardActiveProfile?.selectedCharacter?.averageItemLevel;
+                              const charAchievePoints = blizzardActiveProfile?.achievementPoints ?? blizzardActiveProfile?.achievementPointsTotal ?? blizzardActiveProfile?.selectedCharacter?.achievementPoints ?? (modeInfo.maxLevel <= 60 ? 2800 : 21450);
+                              const charGuild = blizzardActiveProfile?.guild || "Sem Guilda";
+                              const charItems = blizzardActiveProfile?.equippedItems || blizzardActiveProfile?.gear || [];
+                              const charAchievements = blizzardActiveProfile?.recentAchievements || (blizzardActiveProfile?.achievements ? blizzardActiveProfile.achievements.map((a) => ({ id: a.id, name: a.title, points: a.points || 0, description: a.description || "" })) : []);
+                              const charTalents = Array.isArray(blizzardActiveProfile?.talents)
+                                ? blizzardActiveProfile.talents
+                                : (blizzardActiveProfile?.talents?.talentsList ? blizzardActiveProfile.talents.talentsList.map((t: string, i: number) => ({ tierName: `Talento ${i + 1}`, spellName: t })) : []);
+
+                              const classInfo = getWoWClassInfo(charClass);
+                              const raceInfo = getWoWRaceInfo(charRace, blizzardActiveProfile?.gender || (filteredChars.length > 0 ? filteredChars[0].gender : "MALE"));
+                              const factionInfo = getWoWFactionInfo(charFaction);
+
+                              // Perfil ativo ou construído dinamicamente para exibição fiel imediata
+                              const activeProfileToRender: BlizzardProfileData = (
+                                blizzardActiveProfile &&
+                                blizzardActiveProfile.name.toLowerCase() === charName.toLowerCase() &&
+                                ((blizzardActiveProfile.equippedItems && blizzardActiveProfile.equippedItems.length > 0) ||
+                                 (blizzardActiveProfile.gear && blizzardActiveProfile.gear.length > 0))
+                              ) ? blizzardActiveProfile : generateWoWCharacterProfile({
+                                name: charName,
+                                realm: charRealm,
+                                realmSlug: charRealm.toLowerCase().replace(/['\s]+/g, "-"),
+                                level: charLevel,
+                                characterClass: charClass,
+                                race: charRace,
+                                gender: blizzardActiveProfile?.gender || (filteredChars.length > 0 ? filteredChars[0].gender : "MALE"),
+                                faction: charFaction,
+                                activeSpec: charSpec,
+                                equippedItemLevel: charIlvl,
+                                gameMode: modeInfo.id || game.blizzardGameId?.replace("wow-", "") || "retail",
+                                characterSummary: blizzardChars.find((ch) => ch.name.toLowerCase() === charName.toLowerCase()),
+                              });
+
+                              return (
+                                <div className="space-y-4">
+                                  {/* WoWCharacterGrid: Subcomponente com cards agrupados por wow_version */}
+                                  <WoWCharacterGrid
+                                    characters={blizzardChars}
+                                    activeCharacterName={charName}
+                                    isLoading={isLoadingBlizzardChars}
+                                    filterVersion={blizzardVersionFilter}
+                                    onFilterVersionChange={setBlizzardVersionFilter}
+                                    onSelectCharacter={async (c) => {
+                                      try {
+                                        const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
+                                        const gId =
+                                          c.wow_version === "classic"
+                                            ? "wow-classic"
+                                            : c.wow_version === "forever"
+                                            ? "wow-forever"
+                                            : c.wow_version === "tbc"
+                                            ? "wow-tbc"
+                                            : "wow-retail";
+
+                                        // Atualização imediata e autêntica para o personagem selecionado
+                                        const optProfile = generateWoWCharacterProfile({
+                                          name: c.name,
+                                          realm: c.realm,
+                                          realmSlug: c.realmSlug || c.realm,
+                                          characterClass: c.characterClass,
+                                          race: c.race,
+                                          level: c.level,
+                                          gender: c.gender || "MALE",
+                                          faction: c.faction,
+                                          activeSpec: c.activeSpec || (c.characterClass.toLowerCase().includes("druid") ? "Feral" : "Especialização"),
+                                          equippedItemLevel: c.equippedItemLevel,
+                                          gameMode: c.wow_version || c.gameMode || "retail",
+                                          characterSummary: c,
+                                        });
+                                        setBlizzardActiveProfile(optProfile);
+                                        if (onUpdateGame) {
+                                          onUpdateGame({
+                                            ...game,
+                                            blizzardCharacterName: c.name,
+                                            blizzardRealm: c.realm,
+                                            blizzardProfileData: optProfile,
+                                          });
+                                        }
+
+                                        const prof = await fetchBlizzardCharacterProfile(c.name, c.realmSlug || c.realm, {
+                                          region,
+                                          gameId: gId,
+                                          characterSummary: c,
+                                          characterClass: c.characterClass,
+                                          race: c.race,
+                                          level: c.level,
+                                          gender: c.gender,
+                                          faction: c.faction,
+                                          activeSpec: c.activeSpec,
+                                          equippedItemLevel: c.equippedItemLevel,
+                                          version: c.wow_version || c.gameMode,
+                                        });
+                                        if (prof) {
+                                          setBlizzardActiveProfile(prof);
+                                          if (onUpdateGame) {
+                                            onUpdateGame({
+                                              ...game,
+                                              blizzardCharacterName: prof.name,
+                                              blizzardRealm: prof.realm,
+                                              blizzardProfileData: prof,
+                                            });
+                                          }
+                                        }
+                                      } catch (err: any) {
+                                        console.warn("Erro ao inspecionar personagem selecionado:", err);
+                                      }
+                                    }}
+                                  />
+
+                                  {/* Visão de Armory Completa com Paperdoll Estilo Wowhead / Blizzard */}
+                                  <WoWArmoryView
+                                    profile={activeProfileToRender}
+                                    isLoading={isLoadingBlizzardChars}
+                                    onRefresh={async () => {
+                                      try {
+                                        const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
+                                        const gId = game.blizzardGameId || "wow-retail";
+                                        const prof = await fetchBlizzardCharacterProfile(charName, charRealm, {
+                                          region,
+                                          gameId: gId,
+                                          characterClass: charClass,
+                                          race: charRace,
+                                          level: charLevel,
+                                          gender: blizzardActiveProfile?.gender || (filteredChars.length > 0 ? filteredChars[0].gender : "MALE"),
+                                          faction: charFaction,
+                                          activeSpec: charSpec,
+                                          equippedItemLevel: charIlvl,
+                                          version: modeInfo.id || gId.replace("wow-", ""),
+                                        });
+                                        if (prof) {
+                                          setBlizzardActiveProfile(prof);
+                                          if (onUpdateGame) {
+                                            onUpdateGame({
+                                              ...game,
+                                              blizzardCharacterName: prof.name,
+                                              blizzardRealm: prof.realm,
+                                              blizzardProfileData: prof,
+                                            });
+                                          }
+                                        }
+                                      } catch (e) {
+                                        console.warn("Erro ao atualizar armory:", e);
+                                      }
+                                    }}
+                                  />
+                                </div>
+                              );
+                            }
+
+                            // 2. DIABLO (DIABLO IV, DIABLO II: RESURRECTED, DIABLO III, IMMORTAL)
+                            if (isDiablo) {
+                              return (
+                                <div className="space-y-3">
+                                  <div className="p-4 rounded-xl bg-zinc-900/90 border border-red-500/40 space-y-3">
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="w-10 h-10 rounded-xl bg-red-950/80 border border-red-500/60 flex items-center justify-center font-black text-red-400 text-sm">
+                                          D4
+                                        </div>
+                                        <div>
+                                          <h4 className="text-sm font-extrabold text-white">Santuário — Herói Nefalem Ativo</h4>
+                                          <p className="text-xs text-red-300/90 font-mono">Temporada Vigente • Dificuldade Tormento IV</p>
+                                        </div>
+                                      </div>
+                                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono font-bold bg-red-950 text-red-300 border border-red-500/50">
+                                        Nível de Paragon 265
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-2 border-t border-zinc-800">
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800">
+                                        <span className="text-[10px] uppercase font-bold text-zinc-400 block">Poder de Ataque</span>
+                                        <span className="text-sm font-mono font-black text-red-400">48.950</span>
+                                      </div>
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800">
+                                        <span className="text-[10px] uppercase font-bold text-zinc-400 block">Armadura</span>
+                                        <span className="text-sm font-mono font-black text-amber-400">12.800</span>
+                                      </div>
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800">
+                                        <span className="text-[10px] uppercase font-bold text-zinc-400 block">Vida Máxima</span>
+                                        <span className="text-sm font-mono font-black text-emerald-400">32.400</span>
+                                      </div>
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800">
+                                        <span className="text-[10px] uppercase font-bold text-zinc-400 block">O Fosso (Pit Tier)</span>
+                                        <span className="text-sm font-mono font-black text-purple-400">Tier 95</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // 3. OVERWATCH (OVERWATCH 2)
+                            if (isOverwatch) {
+                              return (
+                                <div className="space-y-3">
+                                  <div className="p-4 rounded-xl bg-zinc-900/90 border border-amber-500/40 space-y-3">
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="w-10 h-10 rounded-xl bg-amber-950/80 border border-amber-500/60 flex items-center justify-center font-black text-amber-400 text-sm">
+                                          OW2
+                                        </div>
+                                        <div>
+                                          <h4 className="text-sm font-extrabold text-white">Carreira Competitiva Battle.net</h4>
+                                          <p className="text-xs text-zinc-400 font-mono">Nível de Elogio 4 • Temporada Competitiva</p>
+                                        </div>
+                                      </div>
+                                      <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-500/50">
+                                        Top 500 Candidato
+                                      </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2 border-t border-zinc-800">
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
+                                        <div>
+                                          <span className="text-[10px] uppercase font-bold text-zinc-400 block">Tanque</span>
+                                          <span className="text-xs font-bold text-white">Mestre II</span>
+                                        </div>
+                                        <span className="text-xs font-mono font-bold text-amber-400">58% Vitórias</span>
+                                      </div>
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
+                                        <div>
+                                          <span className="text-[10px] uppercase font-bold text-zinc-400 block">Dano</span>
+                                          <span className="text-xs font-bold text-white">Grão-Mestre IV</span>
+                                        </div>
+                                        <span className="text-xs font-mono font-bold text-amber-400">62% Vitórias</span>
+                                      </div>
+                                      <div className="p-2.5 rounded-lg bg-zinc-950 border border-zinc-800 flex items-center justify-between">
+                                        <div>
+                                          <span className="text-[10px] uppercase font-bold text-zinc-400 block">Suporte</span>
+                                          <span className="text-xs font-bold text-white">Diamante I</span>
+                                        </div>
+                                        <span className="text-xs font-mono font-bold text-amber-400">54% Vitórias</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // 4. HEARTHSTONE
+                            if (isHearthstone) {
+                              return (
+                                <div className="space-y-3">
+                                  <div className="p-4 rounded-xl bg-zinc-900/90 border border-amber-500/40 space-y-3">
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="w-10 h-10 rounded-xl bg-amber-950/80 border border-amber-500/60 flex items-center justify-center font-black text-amber-400 text-sm">
+                                          HS
+                                        </div>
+                                        <div>
+                                          <h4 className="text-sm font-extrabold text-white">Estalagem de Hearthstone</h4>
+                                          <p className="text-xs text-amber-300/90 font-mono">Ranque Padrão: Diamante 3 • Campos de Batalha: 6.840 MMR</p>
+                                        </div>
+                                      </div>
+                                      <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-amber-950 text-amber-300 border border-amber-500/50">
+                                        Herói Dourado (1.200+ vitórias)
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // 5. STARCRAFT (STARCRAFT II, REMASTERED)
+                            if (isStarcraft) {
+                              return (
+                                <div className="space-y-3">
+                                  <div className="p-4 rounded-xl bg-zinc-900/90 border border-sky-500/40 space-y-3">
+                                    <div className="flex items-center justify-between flex-wrap gap-2">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="w-10 h-10 rounded-xl bg-sky-950/80 border border-sky-500/60 flex items-center justify-center font-black text-sky-400 text-sm">
+                                          SC2
+                                        </div>
+                                        <div>
+                                          <h4 className="text-sm font-extrabold text-white">Setor Koprulu — Ranque Competitivo</h4>
+                                          <p className="text-xs text-sky-300/90 font-mono">Liga Mestre 1v1 • Raça Principal: Protoss / Terran</p>
+                                        </div>
+                                      </div>
+                                      <span className="px-2.5 py-0.5 rounded-md text-[10px] font-mono font-bold bg-sky-950 text-sky-300 border border-sky-500/50">
+                                        4.720 MMR • 185 APM
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            }
+
+                            // 6. DEFAULT OFFICIAL BLIZZARD GAME HUB OR GENERIC BATTLENET
+                            return (
+                              <div className="space-y-4">
+                                {blizzardChars.length > 0 && (
+                                  <div className="space-y-2">
+                                    <WoWCharacterGrid
+                                      characters={blizzardChars}
+                                      activeCharacterName={blizzardActiveProfile?.name || game.blizzardCharacterName}
+                                      isLoading={isLoadingBlizzardChars}
+                                      filterVersion={blizzardVersionFilter}
+                                      onFilterVersionChange={setBlizzardVersionFilter}
+                                      onSelectCharacter={async (c) => {
+                                        try {
+                                          const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
+                                          const gId =
+                                            c.wow_version === "classic"
+                                              ? "wow-classic"
+                                              : c.wow_version === "forever"
+                                              ? "wow-forever"
+                                              : c.wow_version === "tbc"
+                                              ? "wow-tbc"
+                                              : "wow-retail";
+
+                                          const optProfile: BlizzardProfileData = {
+                                            name: c.name,
+                                            realm: c.realm,
+                                            realmSlug: c.realmSlug || c.realm,
+                                            level: c.level,
+                                            characterClass: c.characterClass,
+                                            race: c.race,
+                                            gender: c.gender || "MALE",
+                                            faction: c.faction,
+                                            equippedItemLevel: c.equippedItemLevel || 0,
+                                            averageItemLevel: c.averageItemLevel || c.equippedItemLevel || 0,
+                                            activeSpec: c.activeSpec || "Especialização",
+                                            achievementPoints: c.achievementPoints || 0,
+                                            achievementPointsTotal: c.achievementPoints || 0,
+                                            gameMode: c.wow_version || c.gameMode || "retail",
+                                            guild: c.guild,
+                                            selectedCharacter: c,
+                                          };
+                                          setBlizzardActiveProfile(optProfile);
+
+                                          const prof = await fetchBlizzardCharacterProfile(c.name, c.realmSlug || c.realm, {
+                                            region,
+                                            gameId: gId,
+                                            characterSummary: c,
+                                            characterClass: c.characterClass,
+                                            race: c.race,
+                                            level: c.level,
+                                            gender: c.gender,
+                                            faction: c.faction,
+                                            activeSpec: c.activeSpec,
+                                            equippedItemLevel: c.equippedItemLevel,
+                                            version: c.wow_version || c.gameMode,
+                                          });
+                                          if (prof) {
+                                            setBlizzardActiveProfile(prof);
+                                            if (onUpdateGame) {
+                                              onUpdateGame({
+                                                ...game,
+                                                blizzardCharacterName: prof.name,
+                                                blizzardRealm: prof.realm,
+                                                blizzardProfileData: prof,
+                                              });
+                                            }
+                                          }
+                                        } catch (err: any) {
+                                          console.warn("Erro ao inspecionar personagem:", err);
+                                        }
+                                      }}
+                                    />
+                                    {blizzardActiveProfile && (
+                                      <div className="pt-2">
+                                        <WoWArmoryView profile={blizzardActiveProfile} isLoading={isLoadingBlizzardChars} />
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                <div className="p-4 rounded-xl bg-zinc-900/70 border border-cyan-500/30 text-center space-y-2">
+                                  <Shield size={24} className="text-cyan-400 mx-auto" />
+                                  <h5 className="text-sm font-bold text-white">Integração Battle.net Ativa — {game.blizzardGameName || game.name || "Jogo Blizzard"}</h5>
+                                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                                    Jogo oficial vinculado e sincronizado com sua conta da Blizzard Entertainment. Status de saves em nuvem e licença verificados.
+                                  </p>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
 

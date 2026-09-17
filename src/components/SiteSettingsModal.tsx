@@ -4,9 +4,10 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste } from "lucide-react";
+import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste, Video } from "lucide-react";
 import { isSoundEffectsEnabled, setSoundEffectsEnabled, playRetroSound } from "../utils/audioEffects";
 import { getCustomImgBBKey } from "../utils/imgbb";
+import { isYouTubeAuthenticated, signInWithYouTube, signOutYouTube } from "../utils/googleDrive";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
 import { Game } from "../types";
 import { getStoredSteamApiKey, setStoredSteamApiKey, getStoredSteamId64, setStoredSteamId64 } from "../utils/steamApi";
@@ -177,6 +178,8 @@ export default function SiteSettingsModal({
   const [isClearingImageCache, setIsClearingImageCache] = useState(false);
 
   const [sfxEnabled, setSfxEnabled] = useState(isSoundEffectsEnabled());
+  const [youtubeConnected, setYoutubeConnected] = useState(isYouTubeAuthenticated());
+  const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
 
   // Auto load profile summary, IGDB and SteamGridDB status on mount
   useEffect(() => {
@@ -1134,6 +1137,88 @@ export default function SiteSettingsModal({
                 )}
               </div>
 
+              {/* YOUTUBE ITEM */}
+              <div className="p-4 bg-zinc-900/80 border border-zinc-800 rounded-2xl flex items-center justify-between gap-3 hover:border-red-500/30 transition-all shadow-md">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="p-2.5 bg-red-500/15 border border-red-500/30 rounded-xl text-red-400 shrink-0">
+                    <Video size={18} />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-white">YouTube</span>
+                      {youtubeConnected ? (
+                        <span className="text-[9px] font-semibold text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                          <CheckCircle2 size={9} /> Conectado
+                        </span>
+                      ) : (
+                        <span className="text-[9px] font-semibold text-zinc-400 bg-zinc-800 border border-zinc-700 px-2 py-0.5 rounded-full">
+                          Desconectado
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                      {youtubeConnected ? "Upload de vídeos e playlists sincronizados" : "Envio de vídeos e criação de playlists por jogo"}
+                    </p>
+                  </div>
+                </div>
+
+                {youtubeConnected ? (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await signOutYouTube();
+                      setYoutubeConnected(false);
+                      if (triggerAlert) triggerAlert("YouTube Desconectado", "A autorização do YouTube foi desvinculada.");
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-rose-950/50 border border-zinc-700 hover:border-rose-500/40 text-zinc-300 hover:text-rose-300 text-xs font-bold transition-all cursor-pointer shrink-0"
+                  >
+                    Sair
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={isConnectingYoutube}
+                    onClick={async () => {
+                      try {
+                        setIsConnectingYoutube(true);
+                        await signInWithYouTube();
+                        setYoutubeConnected(true);
+                        if (triggerAlert) triggerAlert("YouTube Conectado", "Conta autorizada para envio de vídeos e organização de playlists no YouTube!");
+                      } catch (err: any) {
+                        if (!err?.isCancelled) {
+                          if (triggerAlert) triggerAlert("Erro no YouTube", `Não foi possível autorizar o YouTube: ${err.message || err}`);
+                        }
+                      } finally {
+                        setIsConnectingYoutube(false);
+                      }
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer shrink-0 shadow-md shadow-red-500/20 flex items-center gap-1.5"
+                  >
+                    {isConnectingYoutube ? <Loader2 size={13} className="animate-spin" /> : null}
+                    Conectar
+                  </button>
+                )}
+              </div>
+
+              {typeof window !== "undefined" && window.self !== window.top && (!driveAuthenticated || !gmailUser) && (
+                <div className="p-3 bg-zinc-950/80 border border-zinc-800/80 rounded-xl flex items-start gap-2.5 text-[11px] text-zinc-400">
+                  <ExternalLink size={14} className="text-cyan-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span>
+                      Dica: Se o navegador fechar o pop-up de login do Google automaticamente devido às restrições de iframe de visualização, você pode{" "}
+                    </span>
+                    <a
+                      href={window.location.href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-cyan-400 hover:text-cyan-300 font-bold underline inline-flex items-center gap-0.5"
+                    >
+                      abrir o aplicativo em uma nova aba ↗
+                    </a>
+                    <span> para conectar suas contas sem interferência do navegador.</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 

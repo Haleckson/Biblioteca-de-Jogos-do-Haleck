@@ -5,7 +5,7 @@
 
 import React, { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Info, AlertTriangle, Lock, HardDrive } from "lucide-react";
+import { Info, AlertTriangle, Lock, HardDrive, ExternalLink } from "lucide-react";
 
 interface AlertProps {
   isOpen: boolean;
@@ -238,6 +238,8 @@ export function CustomDriveConnectPrompt({
 }: DriveConnectPromptProps) {
   if (!isOpen) return null;
 
+  const isInIframe = typeof window !== "undefined" && window.self !== window.top;
+
   return (
     <AnimatePresence>
       <div className="fixed inset-0 z-[99999] flex items-center justify-center p-4">
@@ -265,6 +267,25 @@ export function CustomDriveConnectPrompt({
               </p>
             </div>
           </div>
+
+          {isInIframe && (
+            <div className="p-3 rounded-xl bg-cyan-950/40 border border-cyan-500/30 flex items-start gap-2.5 text-[11px] text-cyan-200">
+              <Info size={14} className="text-cyan-400 shrink-0 mt-0.5" />
+              <div className="min-w-0 flex-1">
+                <span>
+                  Ambiente de pré-visualização (iframe) detectado. Se o navegador fechar o pop-up do Google automaticamente, abra o app em uma nova aba:
+                </span>
+                <a
+                  href={typeof window !== "undefined" ? window.location.href : "#"}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-1.5 inline-flex items-center gap-1 text-xs font-bold text-cyan-400 hover:text-cyan-300 underline"
+                >
+                  Abrir App em Nova Aba <ExternalLink size={11} />
+                </a>
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-2 pt-2">
             <button

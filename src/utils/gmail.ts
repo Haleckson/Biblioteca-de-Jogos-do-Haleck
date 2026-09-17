@@ -5,6 +5,8 @@ import { Game } from "../types";
 // Cache token in memory
 let cachedGmailAccessToken: string | null = null;
 let currentGmailUser: User | null = null;
+import { isPopupCancelledOrClosedError } from "./googleDrive";
+
 let isSigningInGmail = false;
 
 // Provider with minimal Gmail scopes
@@ -50,13 +52,16 @@ export async function signInWithGmail(): Promise<string> {
     localStorage.setItem("gmail_connected", "true");
     return accessToken;
   } catch (err: any) {
-    console.error("Erro no login do Gmail:", err);
-    if (err.code === "auth/popup-closed-by-user" || String(err).includes("popup-closed-by-user")) {
-      throw new Error(
-        "A janela de autenticação foi fechada.\n\n" +
-        "Caso esteja em um iframe do AI Studio, use o botão de 'Abrir em uma nova aba' no canto superior direito para conectar sem restrições."
+    if (isPopupCancelledOrClosedError(err)) {
+      console.info("[Gmail] Autenticação com Gmail cancelada pelo usuário ou janela fechada.");
+      const cancelErr: any = new Error(
+        "A janela de autenticação do Gmail foi fechada antes da autorização ser concluída."
       );
+      cancelErr.code = err?.code || "auth/popup-closed-by-user";
+      cancelErr.isCancelled = true;
+      throw cancelErr;
     }
+    console.error("Erro no login do Gmail:", err);
     throw err;
   } finally {
     isSigningInGmail = false;

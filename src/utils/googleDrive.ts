@@ -11,11 +11,16 @@ let currentUser: User | null = null;
 let isSigningIn = false;
 let tokenTimestamp = 0;
 
-// Initialize Google Auth Provider with Google Drive and YouTube scopes
-const provider = new GoogleAuthProvider();
-provider.addScope("https://www.googleapis.com/auth/drive.file");
-provider.addScope("https://www.googleapis.com/auth/youtube");
-provider.addScope("https://www.googleapis.com/auth/youtube.upload");
+// Initialize Google Auth Provider with ONLY Google Drive file scope
+const driveProvider = new GoogleAuthProvider();
+driveProvider.addScope("https://www.googleapis.com/auth/drive.file");
+
+// Initialize dedicated YouTube Auth Provider for video uploads
+const youtubeProvider = new GoogleAuthProvider();
+youtubeProvider.addScope("https://www.googleapis.com/auth/youtube.upload");
+youtubeProvider.addScope("https://www.googleapis.com/auth/youtube");
+
+let cachedYoutubeAccessToken: string | null = null;
 
 // Monitor auth state to clear token on logout
 if (auth) {
@@ -23,10 +28,32 @@ if (auth) {
     currentUser = user;
     if (!user) {
       cachedAccessToken = null;
+      cachedYoutubeAccessToken = null;
       tokenTimestamp = 0;
       localStorage.removeItem("google_drive_connected");
+      localStorage.removeItem("youtube_connected");
     }
   });
+}
+
+/**
+ * Checks whether an error is caused by the user closing the popup or the browser blocking it.
+ */
+export function isPopupCancelledOrClosedError(err: any): boolean {
+  if (!err) return false;
+  if (err.isCancelled) return true;
+  const code = err.code || "";
+  const msg = String(err.message || err);
+  return (
+    code === "auth/popup-closed-by-user" ||
+    code === "auth/cancelled-popup-request" ||
+    code === "auth/popup-blocked" ||
+    msg.includes("popup-closed-by-user") ||
+    msg.includes("cancelled-popup-request") ||
+    msg.includes("popup-blocked") ||
+    msg.includes("Pending promise was never set") ||
+    msg.includes("assertion")
+  );
 }
 
 /**
@@ -44,7 +71,7 @@ export async function signInWithGoogleDrive(): Promise<string> {
 
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, driveProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     const accessToken = credential?.accessToken;
 
@@ -58,9 +85,19 @@ export async function signInWithGoogleDrive(): Promise<string> {
     localStorage.setItem("google_drive_connected", "true");
     return accessToken;
   } catch (err: any) {
-    console.error("Erro no Login com Google Drive:", err);
-    
+    if (isPopupCancelledOrClosedError(err)) {
+      console.info("[GoogleDrive] Janela de login do Google fechada ou cancelada pelo usuário:", err?.code || "popup-closed");
+      const cancelErr: any = new Error(
+        "A janela de autenticação foi fechada antes de concluir o login.\n\n" +
+        "Se o Google exibiu 'Acesso bloqueado / App em teste', certifique-se de adicionar seu e-mail como 'Usuário de teste' na Tela de Consentimento OAuth do Google Cloud Console."
+      );
+      cancelErr.code = err?.code || "auth/popup-closed-by-user";
+      cancelErr.isCancelled = true;
+      throw cancelErr;
+    }
+
     if (err.code === "auth/configuration-not-found" || String(err).includes("auth/configuration-not-found")) {
+      console.warn("Provedor Google não está ativado no projeto Firebase:", err);
       throw new Error(
         "O provedor 'Google' não está ativado no seu projeto Firebase.\n\n" +
         "Para corrigir isso:\n" +
@@ -72,21 +109,19 @@ export async function signInWithGoogleDrive(): Promise<string> {
       );
     }
 
-    if (
-      err.code === "auth/popup-closed-by-user" || 
-      String(err).includes("popup-closed-by-user") ||
-      String(err).includes("Pending promise was never set") ||
-      String(err).includes("assertion")
-    ) {
+    if (err.code === "auth/unauthorized-domain" || String(err).includes("auth/unauthorized-domain")) {
+      console.warn("Domínio não autorizado no Firebase Auth:", err);
+      const currentHost = typeof window !== "undefined" ? window.location.hostname : "web";
       throw new Error(
-        "A janela de autenticação foi fechada ou bloqueada pelo navegador.\n\n" +
-        "Como este aplicativo está rodando dentro de um frame de visualização (iframe) do AI Studio, o navegador pode bloquear a sincronização de cookies/armazenamento.\n\n" +
-        "Para resolver e conectar com sucesso:\n" +
-        "1. Clique no botão de 'Abrir em uma nova aba' (canto superior direito da tela de visualização).\n" +
-        "2. Na nova aba, clique em 'Conectar Google Drive' novamente para autorizar sem restrições de iframe!"
+        `O domínio atual (${currentHost}) não está autorizado no Firebase Authentication.\n\n` +
+        "Para autorizar e permitir a conexão:\n" +
+        "1. Acesse o Console do Firebase (https://console.firebase.google.com/)\n" +
+        "2. Vá em 'Authentication' > aba 'Settings' > 'Authorized domains'\n" +
+        `3. Adicione o domínio: ${currentHost}`
       );
     }
 
+    console.error("Erro inesperado no Login com Google Drive:", err);
     throw err;
   } finally {
     isSigningIn = false;
@@ -94,7 +129,7 @@ export async function signInWithGoogleDrive(): Promise<string> {
 }
 
 /**
- * Quietly refreshes or re-authenticates Google OAuth token.
+ * Quietly refreshes or re-authenticates Google Drive OAuth token.
  */
 export async function refreshDriveToken(): Promise<string> {
   if (!auth) {
@@ -107,7 +142,7 @@ export async function refreshDriveToken(): Promise<string> {
 
   try {
     isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
+    const result = await signInWithPopup(auth, driveProvider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
     const accessToken = credential?.accessToken;
 
@@ -121,11 +156,93 @@ export async function refreshDriveToken(): Promise<string> {
     localStorage.setItem("google_drive_connected", "true");
     return accessToken;
   } catch (err: any) {
-    console.error("Erro ao renovar token do Google Drive:", err);
+    if (isPopupCancelledOrClosedError(err)) {
+      console.info("[GoogleDrive] Renovação de token fechada ou cancelada pelo usuário.");
+      const cancelErr: any = new Error("Renovação do token de acesso do Google Drive cancelada.");
+      cancelErr.code = err?.code || "auth/popup-closed-by-user";
+      cancelErr.isCancelled = true;
+      throw cancelErr;
+    }
+    console.warn("Aviso ao renovar token do Google Drive:", err);
     throw err;
   } finally {
     isSigningIn = false;
   }
+}
+
+/**
+ * Signs in user with YouTube scopes for video uploading and playlist management.
+ */
+export async function signInWithYouTube(): Promise<string> {
+  if (!auth) {
+    throw new Error("Firebase Auth não está inicializado.");
+  }
+
+  try {
+    const result = await signInWithPopup(auth, youtubeProvider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken = credential?.accessToken;
+
+    if (!accessToken) {
+      throw new Error("Não foi possível obter o token de acesso do YouTube.");
+    }
+
+    cachedYoutubeAccessToken = accessToken;
+    localStorage.setItem("youtube_connected", "true");
+    return accessToken;
+  } catch (err: any) {
+    if (isPopupCancelledOrClosedError(err)) {
+      console.info("[YouTube] Janela de login do YouTube/Google cancelada pelo usuário.");
+      const cancelErr: any = new Error(
+        "A janela de login do YouTube/Google foi fechada antes de concluir a autorização."
+      );
+      cancelErr.code = err?.code || "auth/popup-closed-by-user";
+      cancelErr.isCancelled = true;
+      throw cancelErr;
+    }
+    console.error("Erro no login com YouTube:", err);
+    throw err;
+  }
+}
+
+/**
+ * Quietly refreshes or re-authenticates YouTube OAuth token.
+ */
+export async function refreshYoutubeToken(): Promise<string> {
+  if (!auth) {
+    throw new Error("Firebase Auth não está inicializado.");
+  }
+  const result = await signInWithPopup(auth, youtubeProvider);
+  const credential = GoogleAuthProvider.credentialFromResult(result);
+  const accessToken = credential?.accessToken;
+  if (!accessToken) {
+    throw new Error("Não foi possível renovar o token de acesso do YouTube.");
+  }
+  cachedYoutubeAccessToken = accessToken;
+  localStorage.setItem("youtube_connected", "true");
+  return accessToken;
+}
+
+/**
+ * Gets cached YouTube access token.
+ */
+export function getYoutubeAccessToken(): string | null {
+  return cachedYoutubeAccessToken;
+}
+
+/**
+ * Checks if YouTube is authenticated.
+ */
+export function isYouTubeAuthenticated(): boolean {
+  return !!cachedYoutubeAccessToken || localStorage.getItem("youtube_connected") === "true";
+}
+
+/**
+ * Signs out from YouTube.
+ */
+export async function signOutYouTube(): Promise<void> {
+  cachedYoutubeAccessToken = null;
+  localStorage.removeItem("youtube_connected");
 }
 
 /**
@@ -208,7 +325,11 @@ async function driveFetch(url: string, options: RequestInit = {}): Promise<Respo
       const newToken = await refreshDriveToken();
       response = await makeRequest(newToken);
     } catch (refreshErr) {
-      console.error("Erro ao renovar token do Google Drive após 401:", refreshErr);
+      if (isPopupCancelledOrClosedError(refreshErr)) {
+        console.info("[GoogleDrive] Renovação de token após 401 cancelada ou fechada.");
+      } else {
+        console.warn("Aviso ao renovar token do Google Drive após 401:", refreshErr);
+      }
     }
   }
 

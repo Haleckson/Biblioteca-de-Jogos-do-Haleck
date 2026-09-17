@@ -156,6 +156,12 @@ export const syncFromFirebase = (
             gogLastPlayedTimestamp: safeNumber(game.gogLastPlayedTimestamp),
             gogAchievementsCount: safeNumber(game.gogAchievementsCount),
             gogAchievementsTotal: safeNumber(game.gogAchievementsTotal),
+            blizzardGameId: game.blizzardGameId || undefined,
+            blizzardGameName: game.blizzardGameName || undefined,
+            blizzardRegion: game.blizzardRegion || undefined,
+            blizzardSelectedCharacter: game.blizzardSelectedCharacter || undefined,
+            blizzardCharacters: Array.isArray(game.blizzardCharacters) ? game.blizzardCharacters : undefined,
+            blizzardProfileData: game.blizzardProfileData || undefined,
             diary: diaryRaw.map((entry: any) => {
               const mediasRaw = parseArraySafely(entry.medias);
               const keyMomentsRaw = parseArraySafely(entry.keyMoments);
@@ -456,6 +462,82 @@ export const syncGogAuthFromFirebase = (
     return unsubscribe;
   } catch (err) {
     console.warn("Erro ao configurar listener do GOG no Firebase:", summarizeError(err));
+    return () => {};
+  }
+};
+
+/**
+ * Saves Blizzard Battle.net authentication session securely to Firebase under library/blizzard_auth.
+ */
+export const saveBlizzardAuthToFirebase = async (authData: {
+  battleTag?: string;
+  accountId?: string;
+  token?: string;
+  refreshToken?: string;
+  expiresAt?: number;
+  region?: string;
+}): Promise<void> => {
+  if (!db) return;
+  try {
+    const dbRef = ref(db, "library/blizzard_auth");
+    const sanitized = sanitizeDataForFirebase({
+      ...authData,
+      lastUpdated: new Date().toISOString(),
+    });
+    await set(dbRef, sanitized);
+    console.log("[Firebase] Sessão da Battle.net salva com sucesso em library/blizzard_auth.");
+  } catch (err) {
+    console.warn("Aviso ao salvar sessão Battle.net no Firebase:", summarizeError(err));
+  }
+};
+
+/**
+ * Clears Blizzard Battle.net authentication session from Firebase when unlinked.
+ */
+export const removeBlizzardAuthFromFirebase = async (): Promise<void> => {
+  if (!db) return;
+  try {
+    const dbRef = ref(db, "library/blizzard_auth");
+    await set(dbRef, null);
+    console.log("[Firebase] Sessão da Battle.net removida de library/blizzard_auth.");
+  } catch (err) {
+    console.warn("Aviso ao remover sessão Battle.net do Firebase:", summarizeError(err));
+  }
+};
+
+/**
+ * Listens in real-time or loads Blizzard Battle.net authentication session from Firebase under library/blizzard_auth.
+ */
+export const syncBlizzardAuthFromFirebase = (
+  onAuthLoaded: (authData: {
+    battleTag?: string;
+    accountId?: string;
+    token?: string;
+    refreshToken?: string;
+    expiresAt?: number;
+    region?: string;
+  } | null) => void
+): (() => void) => {
+  if (!db) return () => {};
+  try {
+    const dbRef = ref(db, "library/blizzard_auth");
+    const unsubscribe = onValue(
+      dbRef,
+      (snapshot) => {
+        const data = snapshot.val();
+        if (data && (data.token || data.battleTag || data.accountId)) {
+          onAuthLoaded(data);
+        } else {
+          onAuthLoaded(null);
+        }
+      },
+      (err) => {
+        console.warn("Aviso ao sincronizar sessão Battle.net do Firebase:", summarizeError(err));
+      }
+    );
+    return unsubscribe;
+  } catch (err) {
+    console.warn("Erro ao configurar listener da Battle.net no Firebase:", summarizeError(err));
     return () => {};
   }
 };

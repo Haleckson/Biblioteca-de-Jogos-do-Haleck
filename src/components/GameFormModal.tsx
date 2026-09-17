@@ -6,7 +6,9 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Game, TrophyItem, getDlcMode, getGameTrophyItems, getGameHighestTrophy, parseProConTopic, splitEntities, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star, Edit3, Maximize2, Shield, Copy, ExternalLink, Key } from "lucide-react";
+import ProsConsModal from "./ProsConsModal";
+import { detectProConCategory } from "../utils/proConCategories";
 import { COVER_BANK } from "../data";
 import { uploadToImgBB } from "../utils/imgbb";
 import { formatHltbTime } from "../utils/hltbFormatter";
@@ -41,10 +43,31 @@ import {
   getStoredSteamGridApiKey
 } from "../utils/steamGridDbApi";
 import {
+  BLIZZARD_OFFICIAL_GAMES,
+  getStoredBlizzardBattleTag,
+  setStoredBlizzardBattleTag,
+  getStoredBlizzardOAuthToken,
+  getStoredBlizzardRegion,
+  setStoredBlizzardRegion,
+  isBlizzardAuthenticated,
+  clearBlizzardOAuthSession,
+  getBlizzardAuthUrl,
+  exchangeBlizzardCode,
+  fetchBlizzardWoWCharacters,
+  fetchBlizzardCharacterProfile,
+  getStoredBlizzardRedirectUri,
+  setStoredBlizzardRedirectUri,
+  getEffectiveBlizzardRedirectUri,
+  verifyAndSaveManualToken,
+} from "../utils/blizzardApi";
+import {
   IgdbGameCandidate,
   SteamGridGameCandidate,
   SteamGridMediaItem,
-  SteamGridAssetType
+  SteamGridAssetType,
+  BlizzardCharacterSummary,
+  BlizzardProfileData,
+  BlizzardOfficialGame
 } from "../types";
 
 interface GameFormModalProps {
@@ -127,6 +150,7 @@ export default function GameFormModal({
   const platinumCount = selectedTrophyItems.filter((t) => t.type === "platinum").length;
   const [pros, setPros] = useState("");
   const [cons, setCons] = useState("");
+  const [showProsConsModal, setShowProsConsModal] = useState(false);
   const [replayed, setReplayed] = useState(false);
   const [replayCount, setReplayCount] = useState<number>(0);
   const [replayNote, setReplayNote] = useState("");
@@ -214,7 +238,7 @@ export default function GameFormModal({
   const [selectedMetacriticPlatform, setSelectedMetacriticPlatform] = useState<string>("");
 
   // Integration Platform Switcher
-  const [integrationPlatform, setIntegrationPlatform] = useState<"none" | "steam" | "gog">("steam");
+  const [integrationPlatform, setIntegrationPlatform] = useState<"none" | "steam" | "gog" | "battlenet">("steam");
 
   // Steam States
   const [steamAppId, setSteamAppId] = useState<number | undefined>(undefined);
@@ -229,6 +253,24 @@ export default function GameFormModal({
   const [gogLastPlayedTimestamp, setGogLastPlayedTimestamp] = useState<number | undefined>(undefined);
   const [gogAchievementsCount, setGogAchievementsCount] = useState<number | undefined>(undefined);
   const [gogAchievementsTotal, setGogAchievementsTotal] = useState<number | undefined>(undefined);
+
+  // Battle.net / Blizzard States
+  const [blizzardGameId, setBlizzardGameId] = useState<string>("");
+  const [blizzardGameName, setBlizzardGameName] = useState<string>("");
+  const [blizzardRegion, setBlizzardRegion] = useState<"us" | "eu" | "kr" | "tw">("us");
+  const [blizzardSelectedCharacter, setBlizzardSelectedCharacter] = useState<string>("");
+  const [blizzardCharacters, setBlizzardCharacters] = useState<BlizzardCharacterSummary[]>([]);
+  const [blizzardProfileData, setBlizzardProfileData] = useState<BlizzardProfileData | null>(null);
+  const [isBlizzardLoggedIn, setIsBlizzardLoggedIn] = useState<boolean>(false);
+  const [blizzardBattleTag, setBlizzardBattleTag] = useState<string>("");
+  const [isLoadingBlizzardChars, setIsLoadingBlizzardChars] = useState<boolean>(false);
+  const [isLoadingBlizzardProfile, setIsLoadingBlizzardProfile] = useState<boolean>(false);
+  const [manualBattleTagInput, setManualBattleTagInput] = useState<string>("");
+  const [showBlizzardAdvancedConfig, setShowBlizzardAdvancedConfig] = useState<boolean>(false);
+  const [customRedirectUriInput, setCustomRedirectUriInput] = useState<string>(() => getStoredBlizzardRedirectUri());
+  const [manualTokenInput, setManualTokenInput] = useState<string>("");
+  const [manualTokenTagInput, setManualTokenTagInput] = useState<string>("");
+  const [copiedRedirectUri, setCopiedRedirectUri] = useState<boolean>(false);
 
   const [showGogImport, setShowGogImport] = useState(false);
   const [isFetchingGog, setIsFetchingGog] = useState(false);
@@ -1305,6 +1347,210 @@ export default function GameFormModal({
     triggerAlert("GOG Desvinculada", "Os dados da GOG foram removidos deste jogo.");
   };
 
+  // Battle.net Handlers
+  const handleBlizzardLogin = async () => {
+    const width = 600;
+    const height = 750;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+
+    const effRedirectUri = getEffectiveBlizzardRedirectUri();
+
+    // Open popup immediately to avoid browser popup blockers
+    const popup = window.open(
+      "about:blank",
+      "blizzard_oauth_popup",
+      `width=${width},height=${height},left=${left},top=${top},status=no,toolbar=no,menubar=no`
+    );
+
+    try {
+      // Fetch the generated authorize URL with effective redirectUri
+      const res = await fetch(
+        `/api/blizzard/auth-url?json=true&region=${encodeURIComponent(blizzardRegion)}&redirectUri=${encodeURIComponent(effRedirectUri)}`
+      );
+      if (res.ok) {
+        const data = await res.json();
+        if (data.authUrl && popup) {
+          popup.location.href = data.authUrl;
+          return;
+        }
+      }
+      // Fallback: direct server route that redirects via 302
+      if (popup) {
+        popup.location.href = `/api/blizzard/auth-url?region=${encodeURIComponent(blizzardRegion)}&redirectUri=${encodeURIComponent(effRedirectUri)}`;
+      }
+    } catch (err) {
+      console.warn("Aviso ao abrir login Battle.net:", err);
+      if (popup) {
+        popup.location.href = `/api/blizzard/auth-url?region=${encodeURIComponent(blizzardRegion)}&redirectUri=${encodeURIComponent(effRedirectUri)}`;
+      }
+    }
+  };
+
+  // Listen for popup message from Blizzard OAuth callback
+  useEffect(() => {
+    const handleMessage = async (event: MessageEvent) => {
+      if (event.data?.type === "BLIZZARD_AUTH_SUCCESS") {
+        if (event.data.error) {
+          triggerAlert("Erro na Battle.net", `Falha na autorização: ${event.data.error}`);
+          return;
+        }
+        if (event.data.code) {
+          try {
+            const effRedirectUri = getEffectiveBlizzardRedirectUri();
+            const exchangeResult = await exchangeBlizzardCode(event.data.code, effRedirectUri);
+            if (exchangeResult.success) {
+              setIsBlizzardLoggedIn(true);
+              if (exchangeResult.battleTag) {
+                setBlizzardBattleTag(exchangeResult.battleTag);
+              }
+              triggerAlert(
+                "Battle.net Conectada!",
+                `Autenticado com sucesso como ${exchangeResult.battleTag || "Jogador"}!`
+              );
+              // If selected game is WoW, automatically load character list
+              if (blizzardGameId?.startsWith("wow")) {
+                handleFetchBlizzardCharacters(blizzardGameId);
+              }
+            } else {
+              triggerAlert("Aviso de Conexão", exchangeResult.error || "Não foi possível validar as credenciais.");
+            }
+          } catch (err: any) {
+            triggerAlert("Erro na Conexão", err?.message || "Falha ao processar código de acesso da Blizzard.");
+          }
+        } else if (event.data.battleTag) {
+          setIsBlizzardLoggedIn(true);
+          setBlizzardBattleTag(event.data.battleTag);
+          triggerAlert("Battle.net Conectada!", `Autenticado como ${event.data.battleTag}!`);
+        }
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [blizzardGameId, blizzardRegion, triggerAlert]);
+
+  const handleCopyCallbackUrl = () => {
+    const urlToCopy = customRedirectUriInput.trim() || getEffectiveBlizzardRedirectUri();
+    try {
+      navigator.clipboard.writeText(urlToCopy);
+      setCopiedRedirectUri(true);
+      setTimeout(() => setCopiedRedirectUri(false), 2500);
+    } catch {
+      // ignore clipboard error
+    }
+  };
+
+  const handleSaveCustomRedirectUri = () => {
+    const trimmed = customRedirectUriInput.trim();
+    setStoredBlizzardRedirectUri(trimmed);
+    triggerAlert(
+      "URL de Retorno Salva",
+      trimmed ? "URL personalizada salva com sucesso!" : "URL padrão da aplicação restaurada."
+    );
+  };
+
+  const handleResetDefaultRedirectUri = () => {
+    setStoredBlizzardRedirectUri("");
+    setCustomRedirectUriInput("");
+    triggerAlert("URL Restaurada", "URL de retorno restaurada para o padrão oficial da aplicação.");
+  };
+
+  const handleSaveManualToken = async () => {
+    if (!manualTokenInput.trim()) {
+      triggerAlert("Token Obrigatório", "Por favor, cole o Access Token da Blizzard.");
+      return;
+    }
+    const res = await verifyAndSaveManualToken(manualTokenInput, manualTokenTagInput);
+    if (res.success) {
+      setIsBlizzardLoggedIn(true);
+      setBlizzardBattleTag(res.battleTag || "Jogador");
+      setManualTokenInput("");
+      setManualTokenTagInput("");
+      triggerAlert("Battle.net Conectada!", `Token salvo com sucesso para ${res.battleTag}!`);
+      if (blizzardGameId?.startsWith("wow")) {
+        handleFetchBlizzardCharacters(blizzardGameId);
+      }
+    } else {
+      triggerAlert("Falha ao Salvar", res.error || "Token inválido.");
+    }
+  };
+
+  // Load characters if Blizzard is logged in and game is WoW
+  const handleFetchBlizzardCharacters = async (selectedGameId?: string) => {
+    const targetGame = selectedGameId || blizzardGameId || "wow-retail";
+    setIsLoadingBlizzardChars(true);
+    try {
+      const chars = await fetchBlizzardWoWCharacters({
+        region: blizzardRegion,
+        gameId: targetGame,
+      });
+      setBlizzardCharacters(chars);
+      if (chars.length > 0 && !blizzardSelectedCharacter) {
+        const first = chars[0];
+        const charKey = `${first.name}-${first.realmSlug || first.realm}`;
+        setBlizzardSelectedCharacter(charKey);
+        handleFetchBlizzardProfile(first.name, first.realmSlug || first.realm, targetGame);
+      }
+    } catch (err: any) {
+      console.warn("Aviso ao buscar personagens Blizzard:", err);
+      triggerAlert("Aviso Blizzard", err?.message || "Não foi possível sincronizar personagens da conta.");
+    } finally {
+      setIsLoadingBlizzardChars(false);
+    }
+  };
+
+  const handleFetchBlizzardProfile = async (charName: string, realmSlug: string, gameIdVal?: string) => {
+    setIsLoadingBlizzardProfile(true);
+    try {
+      const profile = await fetchBlizzardCharacterProfile(charName, realmSlug, {
+        region: blizzardRegion,
+        gameId: gameIdVal || blizzardGameId || "wow-retail",
+      });
+      setBlizzardProfileData(profile);
+      triggerAlert("Armory Atualizado", `Personagem ${charName} sincronizado com sucesso do Armory da Blizzard!`);
+    } catch (err: any) {
+      console.warn("Aviso ao carregar perfil de personagem:", err);
+    } finally {
+      setIsLoadingBlizzardProfile(false);
+    }
+  };
+
+  const handleSelectBlizzardGame = (gameItem: BlizzardOfficialGame) => {
+    setBlizzardGameId(gameItem.id);
+    setBlizzardGameName(gameItem.name);
+    if (!name || name.trim() === "" || name === "Novo Jogo") {
+      setName(gameItem.name);
+    }
+    if (gameItem.isWow) {
+      handleFetchBlizzardCharacters(gameItem.id);
+    }
+  };
+
+  const handleManualBattleTagConnect = () => {
+    if (!manualBattleTagInput.trim()) {
+      triggerAlert("Campo Vazio", "Digite sua BattleTag (ex: Player#1234).");
+      return;
+    }
+    setStoredBlizzardBattleTag(manualBattleTagInput.trim());
+    setStoredBlizzardRegion(blizzardRegion);
+    setBlizzardBattleTag(manualBattleTagInput.trim());
+    setIsBlizzardLoggedIn(true);
+    triggerAlert("BattleTag Conectada", `BattleTag ${manualBattleTagInput.trim()} vinculada com sucesso!`);
+    if (blizzardGameId) {
+      handleFetchBlizzardCharacters(blizzardGameId);
+    }
+  };
+
+  const handleDisconnectBlizzard = () => {
+    clearBlizzardOAuthSession();
+    setIsBlizzardLoggedIn(false);
+    setBlizzardBattleTag("");
+    setBlizzardCharacters([]);
+    setBlizzardProfileData(null);
+    setBlizzardSelectedCharacter("");
+    triggerAlert("Battle.net Desconectada", "Sua sessão da Battle.net foi encerrada.");
+  };
+
   // Initialize form
   useEffect(() => {
     if (game) {
@@ -1399,6 +1645,24 @@ export default function GameFormModal({
       setGogLastPlayedTimestamp(game.gogLastPlayedTimestamp);
       setGogAchievementsCount(game.gogAchievementsCount);
       setGogAchievementsTotal(game.gogAchievementsTotal);
+
+      // Blizzard / Battle.net values
+      setBlizzardGameId(game.blizzardGameId || "");
+      setBlizzardGameName(game.blizzardGameName || "");
+      setBlizzardRegion((game.blizzardRegion as any) || getStoredBlizzardRegion());
+      setBlizzardSelectedCharacter(game.blizzardCharacterName && game.blizzardRealm ? `${game.blizzardCharacterName}-${game.blizzardRealm}` : "");
+      setBlizzardProfileData(game.blizzardProfileData || null);
+      const isBlizzAuthed = isBlizzardAuthenticated();
+      setIsBlizzardLoggedIn(isBlizzAuthed);
+      setBlizzardBattleTag(getStoredBlizzardBattleTag());
+      if (isBlizzAuthed && (game.blizzardGameId?.startsWith("wow") || (!game.blizzardGameId && game.name?.toLowerCase().includes("warcraft")))) {
+        fetchBlizzardWoWCharacters({
+          region: (game.blizzardRegion as any) || getStoredBlizzardRegion(),
+          gameId: game.blizzardGameId || "wow-retail"
+        }).then((chars) => {
+          setBlizzardCharacters(chars);
+        }).catch(() => {});
+      }
 
       if (game.steamAppId) {
         fetchSteamAchievements(game.steamAppId)
@@ -1514,6 +1778,16 @@ export default function GameFormModal({
       setGogAchieveData(null);
       setShowGogImport(false);
       setGogUrlInput("");
+
+      // Blizzard values
+      setBlizzardGameId("");
+      setBlizzardGameName("");
+      setBlizzardSelectedCharacter("");
+      setBlizzardCharacters([]);
+      setBlizzardProfileData(null);
+      setIsBlizzardLoggedIn(isBlizzardAuthenticated());
+      setBlizzardBattleTag(getStoredBlizzardBattleTag());
+      setBlizzardRegion(getStoredBlizzardRegion());
 
       // IGDB values
       setIgdbId(undefined);
@@ -1808,6 +2082,12 @@ export default function GameFormModal({
       gogLastPlayedTimestamp: typeof gogLastPlayedTimestamp === "number" && !isNaN(gogLastPlayedTimestamp) ? gogLastPlayedTimestamp : undefined,
       gogAchievementsCount: gogAchieveData ? (!isNaN(gogAchieveData.unlockedCount) ? gogAchieveData.unlockedCount : undefined) : (typeof gogAchievementsCount === "number" && !isNaN(gogAchievementsCount) ? gogAchievementsCount : (game?.gogAchievementsCount && !isNaN(game.gogAchievementsCount) ? game.gogAchievementsCount : undefined)),
       gogAchievementsTotal: gogAchieveData ? (!isNaN(gogAchieveData.totalCount) ? gogAchieveData.totalCount : undefined) : (typeof gogAchievementsTotal === "number" && !isNaN(gogAchievementsTotal) ? gogAchievementsTotal : (game?.gogAchievementsTotal && !isNaN(game.gogAchievementsTotal) ? game.gogAchievementsTotal : undefined)),
+      blizzardGameId: blizzardGameId || undefined,
+      blizzardGameName: blizzardGameName || undefined,
+      blizzardRegion: blizzardRegion || undefined,
+      blizzardCharacterName: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-")[0] : (game?.blizzardCharacterName || undefined),
+      blizzardRealm: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-").slice(1).join("-") : (game?.blizzardRealm || undefined),
+      blizzardProfileData: blizzardProfileData || game?.blizzardProfileData || undefined,
       igdbId,
       igdbRating,
       igdbSlug,
@@ -3765,11 +4045,23 @@ export default function GameFormModal({
                     </h4>
                     {!openBlocks["proscons"] && (pros || cons) && (
                       <span className="text-xs text-emerald-400 font-mono font-bold truncate">
-                        — Prós & Contras registrados
+                        — +{splitEntities(pros).filter(Boolean).length} Prós / -{splitEntities(cons).filter(Boolean).length} Contras
                       </span>
                     )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowProsConsModal(true);
+                      }}
+                      className="px-2.5 sm:px-3 py-1 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-md shadow-emerald-950/40 flex items-center gap-1.5 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98]"
+                      title="Abrir editor de prós e contras em tela cheia (90% da tela)"
+                    >
+                      <Edit3 size={13} />
+                      <span>Editar Prós e Contras</span>
+                    </button>
                     <button
                       type="button"
                       onClick={() => toggleBlock("proscons")}
@@ -3781,39 +4073,226 @@ export default function GameFormModal({
                 </div>
 
                 {openBlocks["proscons"] && (
-                  <div className="pt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="bg-emerald-950/30 border border-emerald-500/40 rounded-2xl p-4 space-y-2 flex flex-col">
-                      <label className="block text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5 font-mono">
-                        <ThumbsUp size={14} className="text-emerald-400 shrink-0" />
-                        <span>+ Prós (Pressione Enter ou ';')</span>
-                      </label>
-                      <textarea
-                        rows={4}
-                        value={pros}
-                        onChange={(e) => setPros(e.target.value)}
-                        placeholder="Ex: Gráficos [Rodou a 60 FPS com Ray Tracing]&#10;Trilha sonora [Música do chefe épica e marcante]&#10;Jogabilidade [Controles responsivos]"
-                        className="w-full flex-1 bg-zinc-900/90 border border-emerald-900/40 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 leading-relaxed font-sans resize-y min-h-[110px]"
-                      />
-                      <p className="text-[11px] text-zinc-400 leading-tight">
-                        Pressione <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">Enter</code> ou separe por <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">;</code>. O texto em colchetes <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">[ ]</code> vira tooltip no mouseover!
-                      </p>
+                  <div className="pt-4 space-y-4">
+                    {/* Big Callout Banner to open 90% wide modal */}
+                    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/40 via-zinc-900/90 to-rose-950/40 border border-zinc-800 shadow-sm">
+                      <div className="flex items-center gap-3">
+                        <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-700/80 text-emerald-400 shrink-0">
+                          <Maximize2 size={18} />
+                        </div>
+                        <div>
+                          <div className="text-xs font-bold text-zinc-200">
+                            Editor Amplo de Prós e Contras (90% da Tela)
+                          </div>
+                          <div className="text-[11px] text-zinc-400">
+                            Ambiente espaçoso, fácil de ler, com formulário guiado de tópicos e tooltips interativos.
+                          </div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setShowProsConsModal(true)}
+                        className="w-full sm:w-auto px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-950/50 flex items-center justify-center gap-2 transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.98] shrink-0"
+                      >
+                        <Edit3 size={14} />
+                        <span>Abrir Editor Completo</span>
+                      </button>
                     </div>
 
-                    <div className="bg-rose-950/30 border border-rose-500/40 rounded-2xl p-4 space-y-2 flex flex-col">
-                      <label className="block text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-mono">
-                        <ThumbsDown size={14} className="text-rose-400 shrink-0" />
-                        <span>- Contras (Pressione Enter ou ';')</span>
-                      </label>
-                      <textarea
-                        rows={4}
-                        value={cons}
-                        onChange={(e) => setCons(e.target.value)}
-                        placeholder="Ex: Bugs [Apenas no lançamento antes do patch 1.2]&#10;História curta [Zerado em apenas 8 horas de campanha]"
-                        className="w-full flex-1 bg-zinc-900/90 border border-rose-900/40 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-rose-500/60 leading-relaxed font-sans resize-y min-h-[110px]"
-                      />
-                      <p className="text-[11px] text-zinc-400 leading-tight">
-                        Pressione <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">Enter</code> ou separe por <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">;</code>. O texto em colchetes <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">[ ]</code> vira tooltip no mouseover!
-                      </p>
+                    {/* Categorized and Separated Preview of Existing Pros & Cons */}
+                    {(pros || cons) && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-2xl bg-zinc-950/80 border border-zinc-800/90 shadow-sm">
+                        {/* Prós Preview Categorizados */}
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between pb-1.5 border-b border-emerald-500/20">
+                            <span className="text-xs uppercase font-bold text-emerald-400 font-mono flex items-center gap-1.5">
+                              <ThumbsUp size={13} className="text-emerald-400" />
+                              <span>+ Prós Cadastrados</span>
+                              <span className="text-[10px] text-emerald-400/70 font-normal">
+                                ({splitEntities(pros).filter(Boolean).length})
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowProsConsModal(true)}
+                              className="text-[11px] text-emerald-400 hover:text-emerald-300 font-medium flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 size={11} />
+                              <span>Gerenciar</span>
+                            </button>
+                          </div>
+
+                          {splitEntities(pros).filter(Boolean).length === 0 ? (
+                            <p className="text-[11px] text-zinc-500 italic py-1">Nenhum pró cadastrado.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {splitEntities(pros).filter(Boolean).map((item, idx) => {
+                                const { topic, note } = parseProConTopic(item);
+                                const cat = detectProConCategory(topic, note);
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="p-2.5 rounded-xl bg-emerald-950/20 hover:bg-emerald-950/35 border border-emerald-500/25 transition-all text-xs space-y-1 group"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                                        <span className="text-emerald-400 font-bold shrink-0">+</span>
+                                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-bold border ${cat.bgClass} ${cat.borderClass} ${cat.textClass} shrink-0`}>
+                                          {cat.shortName}
+                                        </span>
+                                        <span className="font-bold text-emerald-200 break-words">{topic}</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowProsConsModal(true)}
+                                        className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-emerald-400 p-0.5 cursor-pointer shrink-0"
+                                        title="Editar este ponto no modal amplo"
+                                      >
+                                        <Edit3 size={12} />
+                                      </button>
+                                    </div>
+                                    {note && (
+                                      <div
+                                        className="flex items-start gap-1 pl-2 text-[11px] text-zinc-400 cursor-help"
+                                        data-tooltip={note}
+                                        data-tooltip-title={`Pró: ${topic}`}
+                                        data-tooltip-theme="emerald"
+                                      >
+                                        <span className="text-emerald-500/70 font-mono text-[10px] shrink-0 font-bold">↳ tooltip:</span>
+                                        <span className="text-zinc-300 italic">{note}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Contras Preview Categorizados */}
+                        <div className="space-y-2.5">
+                          <div className="flex items-center justify-between pb-1.5 border-b border-rose-500/20">
+                            <span className="text-xs uppercase font-bold text-rose-400 font-mono flex items-center gap-1.5">
+                              <ThumbsDown size={13} className="text-rose-400" />
+                              <span>- Contras Cadastrados</span>
+                              <span className="text-[10px] text-rose-400/70 font-normal">
+                                ({splitEntities(cons).filter(Boolean).length})
+                              </span>
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => setShowProsConsModal(true)}
+                              className="text-[11px] text-rose-400 hover:text-rose-300 font-medium flex items-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 size={11} />
+                              <span>Gerenciar</span>
+                            </button>
+                          </div>
+
+                          {splitEntities(cons).filter(Boolean).length === 0 ? (
+                            <p className="text-[11px] text-zinc-500 italic py-1">Nenhum contra cadastrado.</p>
+                          ) : (
+                            <div className="space-y-2">
+                              {splitEntities(cons).filter(Boolean).map((item, idx) => {
+                                const { topic, note } = parseProConTopic(item);
+                                const cat = detectProConCategory(topic, note);
+                                return (
+                                  <div
+                                    key={idx}
+                                    className="p-2.5 rounded-xl bg-rose-950/20 hover:bg-rose-950/35 border border-rose-500/25 transition-all text-xs space-y-1 group"
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
+                                        <span className="text-rose-400 font-bold shrink-0">-</span>
+                                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-mono font-bold border ${cat.bgClass} ${cat.borderClass} ${cat.textClass} shrink-0`}>
+                                          {cat.shortName}
+                                        </span>
+                                        <span className="font-bold text-rose-200 break-words">{topic}</span>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => setShowProsConsModal(true)}
+                                        className="opacity-0 group-hover:opacity-100 transition-opacity text-zinc-500 hover:text-rose-400 p-0.5 cursor-pointer shrink-0"
+                                        title="Editar este ponto no modal amplo"
+                                      >
+                                        <Edit3 size={12} />
+                                      </button>
+                                    </div>
+                                    {note && (
+                                      <div
+                                        className="flex items-start gap-1 pl-2 text-[11px] text-zinc-400 cursor-help"
+                                        data-tooltip={note}
+                                        data-tooltip-title={`Contra: ${topic}`}
+                                        data-tooltip-theme="rose"
+                                      >
+                                        <span className="text-rose-500/70 font-mono text-[10px] shrink-0 font-bold">↳ tooltip:</span>
+                                        <span className="text-zinc-300 italic">{note}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Inline Quick Textareas */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div className="bg-emerald-950/30 border border-emerald-500/40 rounded-2xl p-4 space-y-2 flex flex-col">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-emerald-400 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+                            <ThumbsUp size={14} className="text-emerald-400 shrink-0" />
+                            <span>+ Prós (Enter ou ';')</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setShowProsConsModal(true)}
+                            className="text-[11px] text-emerald-400 hover:text-emerald-300 font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Maximize2 size={11} />
+                            <span>Expandir 90%</span>
+                          </button>
+                        </div>
+                        <textarea
+                          rows={4}
+                          value={pros}
+                          onChange={(e) => setPros(e.target.value)}
+                          placeholder="Ex: Gráficos [Rodou a 60 FPS com Ray Tracing]&#10;Trilha sonora [Música do chefe épica e marcante]&#10;Jogabilidade [Controles responsivos]"
+                          className="w-full flex-1 bg-zinc-900/90 border border-emerald-900/40 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 leading-relaxed font-sans resize-y min-h-[110px]"
+                        />
+                        <p className="text-[11px] text-zinc-400 leading-tight">
+                          Pressione <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">Enter</code> ou separe por <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">;</code>. O texto em colchetes <code className="text-emerald-400 font-mono font-bold bg-emerald-950/60 px-1 py-0.5 rounded border border-emerald-800/40">[ ]</code> vira tooltip no mouseover!
+                        </p>
+                      </div>
+
+                      <div className="bg-rose-950/30 border border-rose-500/40 rounded-2xl p-4 space-y-2 flex flex-col">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-bold text-rose-400 uppercase tracking-widest flex items-center gap-1.5 font-mono">
+                            <ThumbsDown size={14} className="text-rose-400 shrink-0" />
+                            <span>- Contras (Enter ou ';')</span>
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setShowProsConsModal(true)}
+                            className="text-[11px] text-rose-400 hover:text-rose-300 font-semibold flex items-center gap-1 cursor-pointer"
+                          >
+                            <Maximize2 size={11} />
+                            <span>Expandir 90%</span>
+                          </button>
+                        </div>
+                        <textarea
+                          rows={4}
+                          value={cons}
+                          onChange={(e) => setCons(e.target.value)}
+                          placeholder="Ex: Bugs [Apenas no lançamento antes do patch 1.2]&#10;História curta [Zerado em apenas 8 horas de campanha]"
+                          className="w-full flex-1 bg-zinc-900/90 border border-rose-900/40 rounded-xl px-3.5 py-2.5 text-xs sm:text-sm text-white placeholder:text-zinc-600 focus:outline-none focus:ring-2 focus:ring-rose-500/60 leading-relaxed font-sans resize-y min-h-[110px]"
+                        />
+                        <p className="text-[11px] text-zinc-400 leading-tight">
+                          Pressione <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">Enter</code> ou separe por <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">;</code>. O texto em colchetes <code className="text-rose-400 font-mono font-bold bg-rose-950/60 px-1 py-0.5 rounded border border-rose-800/40">[ ]</code> vira tooltip no mouseover!
+                        </p>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -4462,6 +4941,24 @@ export default function GameFormModal({
 
                     <button
                       type="button"
+                      onClick={() => {
+                        setIntegrationPlatform("battlenet");
+                        if (isBlizzardAuthenticated() && blizzardGameId) {
+                          handleFetchBlizzardCharacters(blizzardGameId);
+                        }
+                      }}
+                      className={`px-3 py-1 rounded-lg text-xs font-extrabold transition-all flex items-center gap-1.5 cursor-pointer ${
+                        integrationPlatform === "battlenet"
+                          ? "bg-cyan-600 text-white shadow-sm shadow-cyan-500/30 ring-1 ring-cyan-400/50"
+                          : "text-zinc-400 hover:text-white"
+                      }`}
+                    >
+                      <span className="w-2 h-2 rounded-full bg-cyan-400" />
+                      <span>Battle.net</span>
+                    </button>
+
+                    <button
+                      type="button"
                       onClick={() => setIntegrationPlatform("none")}
                       className={`px-3 py-1 rounded-lg text-xs font-medium transition-all cursor-pointer ${
                         integrationPlatform === "none"
@@ -4894,6 +5391,380 @@ export default function GameFormModal({
                     ) : (
                       <div className="text-center py-3 text-xs text-zinc-400 italic">
                         Nenhum jogo da GOG vinculado. Clique em "Vincular Jogo da GOG" para sincronizar horas e conquistas!
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* BATTLENET INTEGRATION PANEL */}
+                {integrationPlatform === "battlenet" && (
+                  <div className="space-y-4">
+                    {/* Header bar / Auth Status */}
+                    <div className="flex items-center justify-between flex-wrap gap-2 pb-2 border-b border-zinc-800">
+                      <div className="text-[11px] text-cyan-300 font-medium flex items-center gap-1.5">
+                        <Globe size={13} className="text-cyan-400" />
+                        <span>Blizzard Battle.net API Oficial</span>
+                      </div>
+
+                      <div className="flex items-center gap-2">
+                        {isBlizzardLoggedIn ? (
+                          <div className="flex items-center gap-2 bg-cyan-950/60 border border-cyan-500/40 px-3 py-1.5 rounded-xl">
+                            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                            <span className="text-xs font-mono font-bold text-cyan-200">
+                              {blizzardBattleTag || "BattleTag Conectada"}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleDisconnectBlizzard}
+                              className="text-[10px] text-zinc-400 hover:text-red-400 transition-colors ml-1 cursor-pointer font-semibold underline"
+                              title="Desconectar sessão da Battle.net"
+                            >
+                              Sair
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={handleBlizzardLogin}
+                              className="px-3 py-1.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-bold transition-all shadow-md shadow-cyan-600/30 flex items-center gap-1.5 cursor-pointer"
+                              title="Conectar com sua conta da Battle.net via OAuth Blizzard oficial"
+                            >
+                              <Shield size={13} />
+                              <span>Login com Battle.net</span>
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* If not logged in, prompt OAuth or BattleTag fallback */}
+                    {!isBlizzardLoggedIn && (
+                      <div className="p-4 rounded-xl bg-zinc-900/90 border border-cyan-500/30 text-left space-y-3.5">
+                        <div className="flex items-start gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-cyan-500/20 border border-cyan-400/40 flex items-center justify-center shrink-0 text-cyan-300 font-black text-sm">
+                            B.net
+                          </div>
+                          <div className="space-y-1">
+                            <h5 className="text-xs font-bold text-white">Autenticação Blizzard Battle.net</h5>
+                            <p className="text-[11px] text-zinc-400 leading-relaxed">
+                              Conecte sua conta da Battle.net para importar personagens do World of Warcraft (Retail, Classic, TBC, Forever), gear, conquistas e talentos diretamente da API Blizzard oficial.
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Erro 400 Redirect URI Info Box */}
+                        <div className="p-3 bg-cyan-950/40 border border-cyan-500/30 rounded-xl space-y-2">
+                          <div className="flex items-start gap-2">
+                            <AlertCircle size={15} className="text-amber-400 shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                              <div className="text-[11px] font-bold text-amber-200">
+                                Aviso sobre o Erro 400 ("Invalid grant type or callback URL is not valid"):
+                              </div>
+                              <p className="text-[11px] text-zinc-300 leading-relaxed">
+                                A Blizzard exige que a URL de retorno deste app esteja cadastrada no campo <span className="text-amber-200 font-mono font-bold">Redirect URLs</span> do seu Client ID no portal de desenvolvedores.
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* Copyable URL box */}
+                          <div className="flex items-center gap-1.5 pt-1">
+                            <span className="text-[10px] text-zinc-400 font-mono shrink-0">Redirect URL:</span>
+                            <div className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 text-[11px] font-mono text-cyan-300 select-all truncate">
+                              {customRedirectUriInput.trim() || getEffectiveBlizzardRedirectUri()}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleCopyCallbackUrl}
+                              className="px-2.5 py-1 bg-cyan-950 hover:bg-cyan-900 text-cyan-300 rounded-lg text-[11px] font-bold cursor-pointer transition-colors border border-cyan-500/40 flex items-center gap-1 shrink-0 shadow-sm"
+                              title="Copiar URL para colar no develop.battle.net"
+                            >
+                              {copiedRedirectUri ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                              <span>{copiedRedirectUri ? "Copiado!" : "Copiar URL"}</span>
+                            </button>
+                          </div>
+
+                          <div className="flex items-center justify-between flex-wrap gap-2 pt-1 border-t border-zinc-800/80 text-[10px]">
+                            <a
+                              href="https://develop.battle.net/access/clients"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1 underline font-medium"
+                            >
+                              <ExternalLink size={10} />
+                              <span>Abrir develop.battle.net/access/clients</span>
+                            </a>
+                            <button
+                              type="button"
+                              onClick={() => setShowBlizzardAdvancedConfig(!showBlizzardAdvancedConfig)}
+                              className="text-zinc-400 hover:text-zinc-200 cursor-pointer flex items-center gap-1"
+                            >
+                              <SlidersHorizontal size={11} />
+                              <span>{showBlizzardAdvancedConfig ? "Ocultar Opções Avançadas" : "Opções Avançadas (Token Manual / URL Custom)"}</span>
+                              <ChevronDown size={11} className={`transform transition-transform ${showBlizzardAdvancedConfig ? "rotate-180" : ""}`} />
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Collapsible Advanced Config */}
+                        {showBlizzardAdvancedConfig && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: "auto" }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="p-3 bg-zinc-950/80 border border-zinc-800 rounded-xl space-y-3"
+                          >
+                            {/* Option A: Custom Redirect URI */}
+                            <div className="space-y-1.5">
+                              <label className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider font-mono">
+                                1. Personalizar URL de Retorno (se cadastrou outra na Blizzard):
+                              </label>
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={customRedirectUriInput}
+                                  onChange={(e) => setCustomRedirectUriInput(e.target.value)}
+                                  placeholder="https://sua-url.com/api/blizzard/callback"
+                                  className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono focus:outline-none focus:border-cyan-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={handleSaveCustomRedirectUri}
+                                  className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-cyan-300 rounded-lg text-xs font-bold cursor-pointer transition-colors border border-cyan-500/30 shrink-0"
+                                >
+                                  Salvar URL
+                                </button>
+                                {customRedirectUriInput && (
+                                  <button
+                                    type="button"
+                                    onClick={handleResetDefaultRedirectUri}
+                                    className="px-2 py-1 text-zinc-400 hover:text-zinc-200 text-xs underline cursor-pointer"
+                                  >
+                                    Padrão
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Option B: Manual Access Token */}
+                            <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                              <label className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider font-mono flex items-center gap-1">
+                                <Key size={11} className="text-amber-400" />
+                                <span>2. Conectar com Access Token Manual (dispensa callback):</span>
+                              </label>
+                              <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                                <input
+                                  type="password"
+                                  value={manualTokenInput}
+                                  onChange={(e) => setManualTokenInput(e.target.value)}
+                                  placeholder="Cole seu token OAuth da Blizzard..."
+                                  className="flex-1 min-w-[200px] bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono focus:outline-none focus:border-cyan-500"
+                                />
+                                <input
+                                  type="text"
+                                  value={manualTokenTagInput}
+                                  onChange={(e) => setManualTokenTagInput(e.target.value)}
+                                  placeholder="BattleTag (ex: Hero#1234)"
+                                  className="w-32 bg-zinc-900 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-zinc-200 font-mono focus:outline-none focus:border-cyan-500"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={handleSaveManualToken}
+                                  className="px-2.5 py-1 bg-cyan-700 hover:bg-cyan-600 text-white rounded-lg text-xs font-bold cursor-pointer transition-colors border border-cyan-500/40 shrink-0"
+                                >
+                                  Salvar Token
+                                </button>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+
+                        {/* Direct BattleTag entry fallback */}
+                        <div className="pt-2 border-t border-zinc-800/80 flex flex-wrap items-center gap-2">
+                          <span className="text-[11px] text-zinc-400 font-medium">Ou vincular BattleTag diretamente:</span>
+                          <input
+                            type="text"
+                            value={manualBattleTagInput}
+                            onChange={(e) => setManualBattleTagInput(e.target.value)}
+                            placeholder="Ex: Arthas#1234"
+                            className="bg-zinc-950 border border-zinc-700 rounded-lg px-2.5 py-1 text-xs text-zinc-200 focus:outline-none focus:border-cyan-500 w-36 font-mono"
+                          />
+                          <button
+                            type="button"
+                            onClick={handleManualBattleTagConnect}
+                            className="px-2.5 py-1 bg-zinc-800 hover:bg-zinc-700 text-cyan-300 rounded-lg text-xs font-bold cursor-pointer transition-colors border border-cyan-500/30"
+                          >
+                            Vincular Tag
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Game Selection Grid & Region */}
+                    <div className="space-y-2 text-left">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <label className="text-xs font-bold text-zinc-300 uppercase tracking-wider font-mono">
+                          1. Selecione o Jogo Oficial da Blizzard:
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] text-zinc-400 font-mono">Região:</span>
+                          <select
+                            value={blizzardRegion}
+                            onChange={(e) => {
+                              const r = e.target.value as any;
+                              setBlizzardRegion(r);
+                              setStoredBlizzardRegion(r);
+                            }}
+                            className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-500 cursor-pointer"
+                          >
+                            <option value="us">Américas (US / BR)</option>
+                            <option value="eu">Europa (EU)</option>
+                            <option value="kr">Coréia (KR)</option>
+                            <option value="tw">Taiwan (TW)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                        {BLIZZARD_OFFICIAL_GAMES.map((bGame) => {
+                          const isSelected = blizzardGameId === bGame.id;
+                          return (
+                            <button
+                              key={bGame.id}
+                              type="button"
+                              onClick={() => handleSelectBlizzardGame(bGame)}
+                              className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-1.5 ${
+                                isSelected
+                                  ? "bg-cyan-950/80 border-cyan-400 text-white shadow-md shadow-cyan-500/20 ring-1 ring-cyan-400/50"
+                                  : "bg-zinc-900/80 border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-850"
+                              }`}
+                            >
+                              <div className="flex items-center justify-between w-full">
+                                <span className="text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-zinc-800/80 text-cyan-400 font-bold">
+                                  {bGame.category}
+                                </span>
+                                {bGame.isWow && (
+                                  <span className="text-[9px] px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 font-bold border border-amber-500/30">
+                                    WoW API
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs font-bold truncate leading-tight mt-1">{bGame.name}</span>
+                              <span className="text-[10px] text-zinc-500 line-clamp-1">{bGame.description}</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* WoW Character & Armory Importer if WoW game is chosen */}
+                    {blizzardGameId && (blizzardGameId.startsWith("wow") || blizzardGameId === "warcraft-3-reforged") && (
+                      <div className="p-4 rounded-xl bg-zinc-900/90 border border-amber-500/30 text-left space-y-3">
+                        <div className="flex items-center justify-between flex-wrap gap-2">
+                          <div className="flex items-center gap-2">
+                            <Trophy size={14} className="text-amber-400" />
+                            <h5 className="text-xs font-bold text-amber-300 uppercase tracking-wider font-mono">
+                              2. Sincronização de Personagem & Armory ({blizzardGameName || "World of Warcraft"})
+                            </h5>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleFetchBlizzardCharacters()}
+                            disabled={isLoadingBlizzardChars}
+                            className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/40 text-amber-300 hover:bg-amber-900/60 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                          >
+                            {isLoadingBlizzardChars ? (
+                              <Loader2 size={12} className="animate-spin text-amber-400" />
+                            ) : (
+                              <RefreshCw size={12} />
+                            )}
+                            <span>Sincronizar Personagens</span>
+                          </button>
+                        </div>
+
+                        {/* Character selector dropdown */}
+                        {blizzardCharacters.length > 0 ? (
+                          <div className="space-y-2">
+                            <label className="text-[11px] text-zinc-400 font-medium block">
+                              Selecione seu personagem principal para importar conquistas, nível, facção, raça, classe e armory:
+                            </label>
+                            <div className="flex flex-wrap gap-2 items-center">
+                              <select
+                                value={blizzardSelectedCharacter}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setBlizzardSelectedCharacter(val);
+                                  const match = blizzardCharacters.find((c) => `${c.name}-${c.realmSlug || c.realm}` === val);
+                                  if (match) {
+                                    handleFetchBlizzardProfile(match.name, match.realmSlug || match.realm);
+                                  }
+                                }}
+                                className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400 cursor-pointer flex-1 min-w-[200px]"
+                              >
+                                {blizzardCharacters.map((char) => (
+                                  <option key={`${char.name}-${char.realmSlug || char.realm}`} value={`${char.name}-${char.realmSlug || char.realm}`}>
+                                    {char.name} — Nvl {char.level} {char.characterClass || ""} ({char.realm}) {char.faction === "HORDE" ? "🔴 Horda" : "🔵 Aliança"}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="text-xs text-zinc-400 italic bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 flex items-center justify-between gap-2">
+                            <span>
+                              {isBlizzardLoggedIn
+                                ? "Nenhum personagem retornado ainda. Clique em 'Sincronizar Personagens' ou use a busca direta de reino."
+                                : "Faça login com a Battle.net acima ou informe sua BattleTag para carregar seus personagens."}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Active Character Preview Card */}
+                        {blizzardProfileData && (
+                          <div className="p-3 bg-zinc-950 rounded-xl border border-amber-500/40 flex items-center justify-between flex-wrap gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black text-sm border ${
+                                blizzardProfileData.faction === "HORDE" 
+                                  ? "bg-red-950/60 border-red-500 text-red-400" 
+                                  : "bg-blue-950/60 border-blue-500 text-blue-400"
+                              }`}>
+                                {blizzardProfileData.faction === "HORDE" ? "H" : "A"}
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-bold text-white">{blizzardProfileData.name}</span>
+                                  <span className="text-xs text-amber-400 font-mono">Nvl {blizzardProfileData.level}</span>
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-zinc-800 text-zinc-300 font-mono">
+                                    {blizzardProfileData.realm}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-zinc-400">
+                                  {blizzardProfileData.race} {blizzardProfileData.characterClass} • {blizzardProfileData.activeSpec || "Ativo"}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-3">
+                              {blizzardProfileData.equippedItemLevel && (
+                                <div className="text-right">
+                                  <span className="text-[10px] uppercase text-zinc-500 font-bold block">iLvl</span>
+                                  <span className="text-sm font-mono font-black text-purple-400">
+                                    {blizzardProfileData.equippedItemLevel}
+                                  </span>
+                                </div>
+                              )}
+                              {blizzardProfileData.achievementPoints !== undefined && (
+                                <div className="text-right">
+                                  <span className="text-[10px] uppercase text-zinc-500 font-bold block">Conquistas</span>
+                                  <span className="text-sm font-mono font-black text-amber-400">
+                                    {blizzardProfileData.achievementPoints} pts
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -5933,6 +6804,18 @@ export default function GameFormModal({
                 </div>
               </AnimatePresence>
             )}
+            {/* Modal Amplo de Prós e Contras (90% da Tela) */}
+            <ProsConsModal
+              isOpen={showProsConsModal}
+              onClose={() => setShowProsConsModal(false)}
+              initialPros={pros}
+              initialCons={cons}
+              gameTitle={name || game?.name || "Ficha do Jogo"}
+              onSave={(newPros, newCons) => {
+                setPros(newPros);
+                setCons(newCons);
+              }}
+            />
           </motion.div>
         </div>
       )}

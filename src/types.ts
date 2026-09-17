@@ -106,7 +106,7 @@ export interface Game {
   cons?: string;
   isGaaS?: boolean;
   pricePaid?: number;
-  integrationPlatform?: "steam" | "gog" | "none";
+  integrationPlatform?: "steam" | "gog" | "battlenet" | "none";
   steamAppId?: number | string;
   steamPlaytimeMinutes?: number;
   steamLastPlayedTimestamp?: number;
@@ -117,11 +117,161 @@ export interface Game {
   gogLastPlayedTimestamp?: number;
   gogAchievementsCount?: number;
   gogAchievementsTotal?: number;
+  // Battle.net / Blizzard specific fields
+  blizzardGameId?: string; // e.g. "wow-retail", "wow-classic", "wow-forever", "warcraft3", "diablo4", "overwatch2", "hearthstone", "starcraft2"
+  blizzardGameName?: string;
+  blizzardRegion?: "us" | "eu" | "kr" | "tw";
+  blizzardSelectedCharacter?: string; // e.g. "CharacterName-RealmName"
+  blizzardCharacterName?: string;
+  blizzardRealm?: string;
+  blizzardCharacters?: BlizzardCharacterSummary[];
+  blizzardProfileData?: BlizzardProfileData;
   igdbId?: number;
   igdbRating?: number;
   igdbSlug?: string;
   igdbUrl?: string;
   steamGridDbId?: number;
+}
+
+export interface BlizzardCharacterSummary {
+  id?: number | string;
+  name: string;
+  realm: string;
+  realmSlug?: string;
+  level: number;
+  characterClass: string;
+  race: string;
+  gender?: string;
+  faction?: "HORDE" | "ALLIANCE" | string;
+  averageItemLevel?: number;
+  equippedItemLevel?: number;
+  avatarUrl?: string;
+  renderUrl?: string;
+  activeSpec?: string;
+  achievementPoints?: number;
+  lastLoginTimestamp?: number;
+  gameMode?: "retail" | "classic" | "forever" | "tbc" | string;
+  wow_version?: "retail" | "classic" | "forever" | "tbc" | string;
+  classIconUrl?: string;
+  raceIconUrl?: string;
+  factionIconUrl?: string;
+}
+
+export interface BlizzardGearItem {
+  slot: string; // e.g. "HEAD", "NECK", "SHOULDER", "BACK", "CHEST", "SHIRT", "TABARD", "WRIST", "HANDS", "WAIST", "LEGS", "FEET", "RING_1", "RING_2", "TRINKET_1", "TRINKET_2", "MAIN_HAND", "OFF_HAND", "RANGED"
+  name: string;
+  id?: number;
+  itemLevel?: number;
+  quality?: "POOR" | "COMMON" | "UNCOMMON" | "RARE" | "EPIC" | "LEGENDARY" | "ARTIFACT" | "HEIRLOOM" | string;
+  iconUrl?: string;
+  armor?: number;
+  armorType?: string; // e.g. "Placas", "Malha", "Couro", "Tecido", "Escudo"
+  weaponType?: string; // e.g. "Cajado", "Espada de Uma Mão", "Machado de Duas Mãos", "Adaga", "Arco", "Varinha"
+  damageRange?: string; // e.g. "28 - 42 Dano"
+  attackSpeed?: string; // e.g. "2.60"
+  dps?: string; // e.g. "13.5 dano por seg."
+  stats?: string[];
+  enchantment?: string;
+  binding?: string; // e.g. "Vinculado ao recolher", "Vinculado ao ser equipado"
+  durability?: string; // e.g. "85 / 85"
+  requiredLevel?: number;
+  useEffect?: string;
+  equipEffect?: string;
+  sockets?: { color: string; gem?: string }[];
+  sellPrice?: { gold: number; silver: number; copper: number };
+}
+
+export interface BlizzardReputation {
+  id: number;
+  name: string;
+  standing: string; // "Hated" | "Hostile" | "Unfriendly" | "Neutral" | "Friendly" | "Honored" | "Revered" | "Exalted"
+  standingPtBR: string; // "Odiado" | "Hostil" | "Desfavorável" | "Neutro" | "Amistoso" | "Honrado" | "Reverenciado" | "Exaltado"
+  current: number;
+  max: number;
+  percent: number;
+  tierColor?: string;
+  category?: string;
+}
+
+export type BlizzardEquipmentItem = BlizzardGearItem;
+
+export interface BlizzardProfileData {
+  battleTag?: string;
+  name?: string;
+  realm?: string;
+  realmSlug?: string;
+  level?: number;
+  characterClass?: string;
+  race?: string;
+  gender?: "MALE" | "FEMALE" | string;
+  faction?: "HORDE" | "ALLIANCE" | string;
+  equippedItemLevel?: number;
+  averageItemLevel?: number;
+  activeSpec?: string;
+  achievementPoints?: number;
+  achievementPointsTotal?: number;
+  guild?: string;
+  avatarUrl?: string;
+  renderUrl?: string;
+  gameMode?: string;
+  classIconUrl?: string;
+  raceIconUrl?: string;
+  factionIconUrl?: string;
+  characterMedia?: {
+    avatarUrl?: string;
+    renderUrl?: string;
+    mainUrl?: string;
+  };
+  stats?: {
+    health?: number;
+    power?: number;
+    powerType?: "MANA" | "ENERGY" | "RAGE" | "FURY" | "RUNIC_POWER" | "FOCUS" | string;
+    strength?: number;
+    agility?: number;
+    intellect?: number;
+    stamina?: number;
+    armor?: number;
+    crit?: number;
+    haste?: number;
+    mastery?: number;
+    versatility?: number;
+    dodge?: number;
+    parry?: number;
+    block?: number;
+  };
+  equippedItems?: BlizzardGearItem[];
+  recentAchievements?: {
+    id: number;
+    name: string;
+    points: number;
+    description: string;
+    completedTimestamp?: number;
+  }[];
+  selectedCharacter?: BlizzardCharacterSummary;
+  gear?: BlizzardGearItem[];
+  achievements?: {
+    id: number;
+    title: string;
+    description?: string;
+    points?: number;
+    iconUrl?: string;
+    category?: string;
+    completedTimestamp?: number;
+  }[];
+  talents?: any;
+  reputations?: BlizzardReputation[];
+  lastSyncedAt?: string;
+}
+
+export interface BlizzardOfficialGame {
+  id: string;
+  name: string;
+  category: "warcraft" | "diablo" | "starcraft" | "overwatch" | "hearthstone" | "other";
+  icon: string;
+  hasCharacterArmory: boolean;
+  isWow: boolean;
+  wowVersion?: "retail" | "classic" | "forever" | "tbc";
+  description?: string;
 }
 
 export interface SteamGridGameCandidate {

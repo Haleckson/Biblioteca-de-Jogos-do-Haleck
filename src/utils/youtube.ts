@@ -3,7 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { getDriveAccessToken, refreshDriveToken, signInWithGoogleDrive } from "./googleDrive";
+import {
+  getYoutubeAccessToken,
+  refreshYoutubeToken,
+  signInWithYouTube,
+  getDriveAccessToken,
+  isPopupCancelledOrClosedError,
+} from "./googleDrive";
 import { getVideoMimeType } from "./mediaUtils";
 
 /**
@@ -105,22 +111,25 @@ export async function uploadVideoToYoutube(
     throw new DOMException("Upload YouTube cancelado pelo usuário", "AbortError");
   }
 
-  let token = getDriveAccessToken();
+  let token = getYoutubeAccessToken() || getDriveAccessToken();
   
   // Auto-refresh token if missing but previously connected
-  if (!token && localStorage.getItem("google_drive_connected") === "true") {
+  if (!token && localStorage.getItem("youtube_connected") === "true") {
     try {
-      token = await refreshDriveToken();
+      token = await refreshYoutubeToken();
     } catch (e) {
-      console.warn("Falha ao reautenticar sessão salva do Google:", e);
+      console.warn("Falha ao reautenticar sessão salva do YouTube:", e);
     }
   }
 
   if (!token) {
     try {
-      token = await signInWithGoogleDrive();
+      token = await signInWithYouTube();
     } catch (e: any) {
-      throw new Error("Você precisa estar conectado ao Google para enviar vídeos. Por favor, conecte sua conta.");
+      if (isPopupCancelledOrClosedError(e)) {
+        throw new Error("Envio cancelado: a janela de autenticação do YouTube foi fechada.");
+      }
+      throw new Error("Você precisa autorizar o YouTube para enviar vídeos. Por favor, conecte sua conta.");
     }
   }
 
@@ -207,10 +216,10 @@ export async function uploadVideoToYoutube(
 
       if (initResponse.status === 401) {
         if (initAttempt === 1) {
-          token = await refreshDriveToken();
+          token = await refreshYoutubeToken();
           continue;
         } else if (initAttempt === 2) {
-          token = await signInWithGoogleDrive();
+          token = await signInWithYouTube();
           continue;
         }
       }
@@ -230,7 +239,7 @@ export async function uploadVideoToYoutube(
       console.warn(`Tentativa ${initAttempt} de iniciar upload no YouTube falhou:`, err);
       if (initAttempt === 1) {
         try {
-          token = await refreshDriveToken();
+          token = await refreshYoutubeToken();
         } catch {
           // Ignore refresh fail on attempt 1
         }

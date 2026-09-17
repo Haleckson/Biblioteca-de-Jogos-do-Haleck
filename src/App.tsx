@@ -23,7 +23,8 @@ import {
   isDriveAuthenticated,
   signOutDrive,
   backupLibraryToDrive,
-  backupSingleGameToDriveDeep
+  backupSingleGameToDriveDeep,
+  isPopupCancelledOrClosedError
 } from "./utils/googleDrive";
 import GmailModal from "./components/GmailModal";
 import { isGmailAuthenticated } from "./utils/gmail";
@@ -965,11 +966,22 @@ export default function App() {
           "Sua conta foi conectada! Agora, ao salvar, um backup completo de mídias e metadados será enviado para uma pasta organizada no seu Google Drive."
         );
       } catch (err: any) {
-        console.error(err);
-        triggerAlert(
-          "Erro de Conexão",
-          `Não foi possível conectar ao Google Drive: ${err.message || err}`
-        );
+        if (isPopupCancelledOrClosedError(err)) {
+          console.info("[GoogleDrive] Autenticação cancelada pelo usuário ou janela fechada.");
+          const isInIframe = typeof window !== "undefined" && window.self !== window.top;
+          triggerAlert(
+            "Conexão Não Concluída",
+            isInIframe
+              ? "A janela de login do Google foi fechada antes da conclusão.\n\n💡 Dica de Visualização: Como o app está rodando dentro do preview (iframe) do AI Studio, abra o aplicativo em uma nova aba do navegador para autorizar sem restrições.\n\n⚠️ Se o Google exibiu 'Acesso bloqueado' com os 'Detalhes da solicitação', certifique-se de adicionar seu e-mail como 'Usuário de teste' (Test user) na Tela de Consentimento OAuth do projeto no Google Cloud Console."
+              : "A janela de login do Google foi fechada antes de concluir a autorização.\n\n⚠️ Se o Google exibiu 'Acesso bloqueado' com os 'Detalhes da solicitação', certifique-se de adicionar seu e-mail como 'Usuário de teste' (Test user) na Tela de Consentimento OAuth do projeto no Google Cloud Console."
+          );
+        } else {
+          console.error(err);
+          triggerAlert(
+            "Erro de Conexão",
+            `Não foi possível conectar ao Google Drive: ${err.message || err}`
+          );
+        }
       } finally {
         setBackupStatus(null);
       }
@@ -1026,11 +1038,22 @@ export default function App() {
       setIsDriveConnected(true);
       executeSave();
     } catch (err: any) {
-      console.error(err);
-      triggerAlert(
-        "Erro de Conexão",
-        `Não foi possível conectar ao Google Drive: ${err.message || err}`
-      );
+      if (isPopupCancelledOrClosedError(err)) {
+        console.info("[GoogleDrive] Login cancelado durante o fluxo de salvar.");
+        triggerConfirm(
+          "Login Não Concluído",
+          "A janela de autenticação do Google Drive foi fechada. Deseja prosseguir salvando os dados no Firebase / Localmente sem o backup do Drive neste momento?",
+          () => {
+            executeSave();
+          }
+        );
+      } else {
+        console.error(err);
+        triggerAlert(
+          "Erro de Conexão",
+          `Não foi possível conectar ao Google Drive: ${err.message || err}`
+        );
+      }
     } finally {
       setBackupStatus(null);
     }
