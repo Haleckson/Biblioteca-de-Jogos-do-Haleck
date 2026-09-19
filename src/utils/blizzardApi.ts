@@ -15,7 +15,7 @@ import { saveBlizzardAuthToFirebase, removeBlizzardAuthFromFirebase } from "./fi
 export const BLIZZARD_OFFICIAL_GAMES: BlizzardOfficialGame[] = [
   {
     id: "wow-retail",
-    name: "World of Warcraft (The War Within / Retail)",
+    name: "World of Warcraft: Retail (Midnight)",
     category: "warcraft",
     icon: "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=200",
     hasCharacterArmory: true,
@@ -24,7 +24,7 @@ export const BLIZZARD_OFFICIAL_GAMES: BlizzardOfficialGame[] = [
   },
   {
     id: "wow-forever",
-    name: "World of Warcraft Forever (Classic 2026+ / Beta)",
+    name: "World of Warcraft: Forever",
     category: "warcraft",
     icon: "https://images.unsplash.com/photo-1511512578047-dfb367046420?q=80&w=200",
     hasCharacterArmory: true,
@@ -33,7 +33,7 @@ export const BLIZZARD_OFFICIAL_GAMES: BlizzardOfficialGame[] = [
   },
   {
     id: "wow-classic",
-    name: "World of Warcraft Classic Era",
+    name: "World of Warcraft: Classic Era",
     category: "warcraft",
     icon: "https://images.unsplash.com/photo-1550745165-9bc0b252726f?q=80&w=200",
     hasCharacterArmory: true,
@@ -42,12 +42,21 @@ export const BLIZZARD_OFFICIAL_GAMES: BlizzardOfficialGame[] = [
   },
   {
     id: "wow-tbc",
-    name: "World of Warcraft Burning Crusade / Progression",
+    name: "World of Warcraft: Classic TBC",
     category: "warcraft",
     icon: "https://images.unsplash.com/photo-1501854140801-50d01698950b?q=80&w=200",
     hasCharacterArmory: true,
     isWow: true,
     wowVersion: "tbc",
+  },
+  {
+    id: "wow-mop",
+    name: "World of Warcraft: Classic MoP",
+    category: "warcraft",
+    icon: "https://images.unsplash.com/photo-1518709268805-4e9042af9f23?q=80&w=200",
+    hasCharacterArmory: true,
+    isWow: true,
+    wowVersion: "mop",
   },
   {
     id: "warcraft-3",
@@ -381,7 +390,7 @@ export async function verifyAndSaveBattleTag(
   return { success: true, battleTag: trimmed };
 }
 
-export type WoWVersionType = "retail" | "classic" | "forever" | "tbc" | "all";
+export type WoWVersionType = "retail" | "classic" | "forever" | "tbc" | "mop" | "all";
 
 export interface FetchWoWCharactersOptions {
   version?: WoWVersionType;

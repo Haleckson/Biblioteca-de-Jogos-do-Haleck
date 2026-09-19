@@ -2088,6 +2088,7 @@ export default function GameFormModal({
       blizzardCharacterName: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-")[0] : (game?.blizzardCharacterName || undefined),
       blizzardRealm: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-").slice(1).join("-") : (game?.blizzardRealm || undefined),
       blizzardProfileData: blizzardProfileData || game?.blizzardProfileData || undefined,
+      wowVersion: (blizzardGameId === "wow-classic" ? "classic" : blizzardGameId === "wow-forever" ? "forever" : blizzardGameId === "wow-tbc" ? "tbc" : blizzardGameId === "wow-mop" ? "mop" : blizzardGameId === "wow-retail" ? "retail" : (game?.wowVersion || undefined)) as any,
       igdbId,
       igdbRating,
       igdbSlug,

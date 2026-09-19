@@ -54,6 +54,12 @@ import KanbanView, { mapKanbanToStatus } from "./components/KanbanView";
 import { restoreTrashItem } from "./utils/trashService";
 import { playRetroSound } from "./utils/audioEffects";
 import { preloadImagesToCache } from "./utils/imageCacheManager";
+import {
+  persistGameLibrary,
+  loadGameLibrary,
+  safeSetLocalStorage,
+  safeGetLocalStorage
+} from "./utils/storageDb";
 
 const sortAlphabetically = (arr: string[]) => {
   return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
@@ -421,10 +427,28 @@ export default function App() {
     });
   }, []);
 
+  // Asynchronously hydrate library from IndexedDB if available
+  useEffect(() => {
+    loadGameLibrary().then((saved) => {
+      if (saved && Array.isArray(saved) && saved.length > 0) {
+        setGames((currentGames) => {
+          // If current games is just the default sample games or empty, adopt saved
+          if (
+            currentGames.length <= SAMPLE_GAMES.length &&
+            currentGames.every((g, i) => SAMPLE_GAMES[i] && g.id === SAMPLE_GAMES[i].id)
+          ) {
+            return saved;
+          }
+          return currentGames;
+        });
+      }
+    });
+  }, []);
+
   const gamesRef = useRef(games);
   useEffect(() => {
     gamesRef.current = games;
-    localStorage.setItem("gameLibrary", JSON.stringify(games));
+    persistGameLibrary(games);
     console.log(`[GamesStateLog] Estado 'games' atualizado. Total de jogos: ${games.length}`, {
       isEmpty: games.length === 0,
       isComplete: games.length > 0,
@@ -444,15 +468,15 @@ export default function App() {
   }, [games]);
 
   useEffect(() => {
-    localStorage.setItem("globalTagsList", JSON.stringify(globalTags));
+    safeSetLocalStorage("globalTagsList", JSON.stringify(globalTags));
   }, [globalTags]);
 
   useEffect(() => {
-    localStorage.setItem("globalGenresList", JSON.stringify(globalGenres));
+    safeSetLocalStorage("globalGenresList", JSON.stringify(globalGenres));
   }, [globalGenres]);
 
   useEffect(() => {
-    localStorage.setItem("globalCover", coverImage);
+    safeSetLocalStorage("globalCover", coverImage);
   }, [coverImage]);
 
   // Synchronize and collect global tags and genres from games list automatically
@@ -1451,14 +1475,14 @@ export default function App() {
   // Page unload backup safety and warning
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      // Ensure local storage is updated synchronously on page leave
+      // Ensure local storage is updated safely on page leave
       try {
-        localStorage.setItem("gameLibrary", JSON.stringify(games));
-        localStorage.setItem("globalTagsList", JSON.stringify(globalTags));
-        localStorage.setItem("globalGenresList", JSON.stringify(globalGenres));
-        localStorage.setItem("globalCover", coverImage);
+        persistGameLibrary(games);
+        safeSetLocalStorage("globalTagsList", JSON.stringify(globalTags));
+        safeSetLocalStorage("globalGenresList", JSON.stringify(globalGenres));
+        safeSetLocalStorage("globalCover", coverImage);
       } catch (err) {
-        console.error("Erro ao salvar dados no localStorage ao descarregar página:", err);
+        console.warn("Aviso ao salvar dados ao descarregar página:", err);
       }
 
       if (isFirebaseConfigured() && hasUnsavedChanges) {

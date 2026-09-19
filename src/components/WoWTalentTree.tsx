@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import {
   Sparkles,
   Layers,
@@ -13,11 +13,14 @@ import {
   Info,
   Shield,
   Zap,
-  Flame,
-  Snowflake,
-  Crosshair,
-  Skull,
-  Compass,
+  RotateCcw,
+  Plus,
+  Minus,
+  Maximize2,
+  Columns,
+  Calculator,
+  UserCheck,
+  ExternalLink,
 } from "lucide-react";
 import { BlizzardProfileData } from "../types";
 import { getWoWClassInfo } from "../utils/blizzardIcons";
@@ -25,400 +28,730 @@ import {
   WoWTalentNode,
   WoWTalentTreeData,
   RetailDualTalents,
+  MoPTierRow,
   getClassicTalentTrees,
+  getTBCTalentTrees,
+  getMoPTalentMatrix,
   getRetailDualTalentTrees,
+  isTalentTierUnlocked,
 } from "../utils/blizzardTalents";
-
-export type { WoWTalentNode, WoWTalentTreeData, RetailDualTalents };
 
 interface WoWTalentTreeProps {
   profile: BlizzardProfileData;
+  activeVersion?: string;
 }
 
-export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({ profile }) => {
+export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
+  profile,
+  activeVersion,
+}) => {
   const charClass = profile.characterClass || "Druid";
   const charSpec = profile.activeSpec || "Feral";
-  const charLevel = profile.level || 18;
-  const gameMode = (profile.gameMode || "retail").toLowerCase();
-  const defaultIsClassic = gameMode.includes("classic") || gameMode.includes("forever") || gameMode.includes("tbc") || charLevel <= 60;
+  const charLevel = profile.level || 80;
 
-  const [activeMode, setActiveMode] = useState<"classic" | "retail">(defaultIsClassic ? "classic" : "retail");
-  const isClassicEra = activeMode === "classic";
+  // Determine effective expansion strictly from the chosen WoW game's version
+  const detectedVersion = useMemo(() => {
+    const raw = (activeVersion || profile.wow_version || profile.gameMode || "retail").toLowerCase();
+    if (raw.includes("forever") || raw.includes("vanilla+")) return "Forever";
+    if (raw.includes("mop") || raw.includes("pandaria")) return "Classic MoP";
+    if (raw.includes("tbc") || raw.includes("burning") || raw.includes("crusade")) return "Classic TBC";
+    if (raw.includes("classic") || raw.includes("era") || raw.includes("vanilla")) return "Classic Era";
+    return "Retail (Midnight)";
+  }, [activeVersion, profile.wow_version, profile.gameMode]);
 
-  // Select default tree: for Druid, if Feral -> 1; if Balance -> 0; if Resto -> 2
-  const initialTreeIdx = useMemo(() => {
-    const s = charSpec.toLowerCase();
-    if (s.includes("equil") || s.includes("balance") || s.includes("sagrado") || s.includes("holy") || s.includes("armas") || s.includes("arms")) return 0;
-    if (s.includes("feral") || s.includes("combate") || s.includes("prote") || s.includes("furia") || s.includes("fury")) return 1;
-    return 2;
-  }, [charSpec]);
+  // Selected expansion version is strictly locked to the chosen WoW game version
+  const selectedVersion = detectedVersion;
 
-  const [selectedClassicTree, setSelectedClassicTree] = useState<number>(initialTreeIdx);
-  const [hoveredNode, setHoveredNode] = useState<WoWTalentNode | null>(null);
+  // Dual mode: "Character Build" (Read-only active spec) vs "Talent Calculator" (Editable sandbox)
+  const [talentMode, setTalentMode] = useState<"build" | "calculator">("build");
+
+  // Layout View mode for 3-spec trees
+  const [viewMode, setViewMode] = useState<"all-specs" | "single">("all-specs");
+  const [activeSingleTab, setActiveSingleTab] = useState<number>(1);
+
+  // Hover state for detailed tooltip
+  const [hoveredNode, setHoveredNode] = useState<{ node: WoWTalentNode; treeTitle?: string } | null>(null);
+  const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [copiedBuild, setCopiedBuild] = useState(false);
+
+  // 1. Classic Era & Forever Data State (51 points, 3 specs)
+  const [classicTrees, setClassicTrees] = useState<WoWTalentTreeData[]>(() =>
+    getClassicTalentTrees(charClass, charSpec, charLevel)
+  );
+
+  // 2. TBC Data State (61 points, 3 specs with 41-pt capstones)
+  const [tbcTrees, setTbcTrees] = useState<WoWTalentTreeData[]>(() =>
+    getTBCTalentTrees(charClass, charSpec, charLevel)
+  );
+
+  // 3. MoP Data State (6 Tiers of 3 Talents)
+  const [mopTiers, setMopTiers] = useState<MoPTierRow[]>(() =>
+    getMoPTalentMatrix(charClass, charSpec)
+  );
+
+  // 4. Retail (Midnight) Data State (Dual Trees + Hero Talents)
+  const [retailTrees, setRetailTrees] = useState<RetailDualTalents>(() =>
+    getRetailDualTalentTrees(charClass, charSpec)
+  );
+
+  // Re-sync when character changes
+  useEffect(() => {
+    setClassicTrees(getClassicTalentTrees(charClass, charSpec, charLevel));
+    setTbcTrees(getTBCTalentTrees(charClass, charSpec, charLevel));
+    setMopTiers(getMoPTalentMatrix(charClass, charSpec));
+    setRetailTrees(getRetailDualTalentTrees(charClass, charSpec));
+  }, [charClass, charSpec, charLevel]);
+
+  // Reset talent calculator points
+  const handleResetCalculator = () => {
+    if (selectedVersion === "Classic MoP") {
+      setMopTiers((prev) =>
+        prev.map((tier) => ({
+          ...tier,
+          talents: tier.talents.map((t) => ({ ...t, selected: false })),
+        }))
+      );
+    } else if (selectedVersion === "Classic TBC") {
+      setTbcTrees((prev) =>
+        prev.map((tree) => ({
+          ...tree,
+          pointsSpent: 0,
+          nodes: tree.nodes.map((n) => ({ ...n, rank: 0 })),
+        }))
+      );
+    } else if (selectedVersion === "Retail (Midnight)") {
+      setRetailTrees((prev) => ({
+        classTree: {
+          ...prev.classTree,
+          pointsSpent: 0,
+          nodes: prev.classTree.nodes.map((n) => ({ ...n, rank: 0 })),
+        },
+        specTree: {
+          ...prev.specTree,
+          pointsSpent: 0,
+          nodes: prev.specTree.nodes.map((n) => ({ ...n, rank: 0 })),
+        },
+        heroTree: prev.heroTree
+          ? {
+              ...prev.heroTree,
+              pointsSpent: 0,
+              nodes: prev.heroTree.nodes.map((n) => ({ ...n, rank: 0 })),
+            }
+          : undefined,
+      }));
+    } else {
+      // Classic Era or Forever
+      setClassicTrees((prev) =>
+        prev.map((tree) => ({
+          ...tree,
+          pointsSpent: 0,
+          nodes: tree.nodes.map((n) => ({ ...n, rank: 0 })),
+        }))
+      );
+    }
+  };
+
+  // Point handling for Classic / Forever / TBC
+  const handleModifyClassicPoint = (
+    treeList: WoWTalentTreeData[],
+    setTreeList: React.Dispatch<React.SetStateAction<WoWTalentTreeData[]>>,
+    treeIdx: number,
+    nodeId: string,
+    delta: number,
+    maxTotalPoints: number
+  ) => {
+    if (talentMode !== "calculator") return;
+
+    const currentTotal = treeList.reduce((sum, t) => sum + t.pointsSpent, 0);
+    if (delta > 0 && currentTotal >= maxTotalPoints) return;
+
+    setTreeList((prevTrees) => {
+      const nextTrees = JSON.parse(JSON.stringify(prevTrees)) as WoWTalentTreeData[];
+      const tree = nextTrees[treeIdx];
+      const node = tree.nodes.find((n) => n.id === nodeId);
+      if (!node) return prevTrees;
+
+      if (delta > 0) {
+        if (!isTalentTierUnlocked(tree.pointsSpent, node.row)) return prevTrees;
+        if (node.rank < node.maxRank) {
+          node.rank += 1;
+          tree.pointsSpent += 1;
+        }
+      } else if (delta < 0) {
+        if (node.rank > 0) {
+          node.rank -= 1;
+          tree.pointsSpent -= 1;
+        }
+      }
+
+      return nextTrees;
+    });
+  };
+
+  // MoP Tier Selection (1 of 3 per row)
+  const handleSelectMoPTalent = (tierIndex: number, talentId: string) => {
+    if (talentMode !== "calculator") return;
+    setMopTiers((prev) => {
+      const next = JSON.parse(JSON.stringify(prev)) as MoPTierRow[];
+      const row = next[tierIndex];
+      row.talents.forEach((t) => {
+        t.selected = t.id === talentId ? !t.selected : false;
+      });
+      return next;
+    });
+  };
+
+  // Copy Build String
+  const copyBuildCode = () => {
+    const buildString = `WOW-${selectedVersion.replace(/\s+/g, "")}-${charClass}-${charSpec}-${Date.now().toString(36)}`;
+    navigator.clipboard.writeText(buildString);
+    setCopiedBuild(true);
+    setTimeout(() => setCopiedBuild(false), 2000);
+  };
 
   const classInfo = getWoWClassInfo(charClass);
 
-  const classicTrees = useMemo(() => {
-    return getClassicTalentTrees(charClass, charSpec, charLevel);
-  }, [charClass, charSpec, charLevel]);
-
-  const retailTrees = useMemo(() => {
-    return getRetailDualTalentTrees(charClass, charSpec);
-  }, [charClass, charSpec]);
-
-  const totalPointsSpent = classicTrees.reduce((sum, t) => sum + t.pointsSpent, 0);
-  const maxPointsAvailable = Math.max(0, charLevel - 9);
-
-  const copyBuildCode = () => {
-    const code = `BcGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQJISSSkEAAA_${charClass}_${charSpec}_Lvl${charLevel}`;
-    navigator.clipboard?.writeText(code);
-    setCopiedBuild(true);
-    setTimeout(() => setCopiedBuild(false), 2500);
-  };
-
   return (
-    <div id="wow-talent-tree-component" className="space-y-4">
-      {/* 1. Header Banner & Mode Indicator */}
-      <div className="p-4 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-xl flex items-center justify-between gap-4 flex-wrap">
-        <div className="flex items-center gap-3.5">
-          <img
-            src={classInfo.iconUrl}
-            alt={classInfo.name}
-            className="w-12 h-12 rounded-xl border-2 object-cover shadow-lg"
-            style={{ borderColor: classInfo.color }}
-          />
-          <div>
-            <div className="flex items-center gap-2">
-              <h4 className="text-base font-black text-white tracking-wide">
-                {charSpec} {classInfo.ptBR}
-              </h4>
-              <span className="px-2 py-0.5 rounded-lg text-[10px] font-mono font-bold bg-zinc-800 text-cyan-300 border border-zinc-700 uppercase">
-                {isClassicEra ? "Árvore Clássica (3 Ramos)" : "Árvore Retail (Dragonflight / TWW)"}
-              </span>
-            </div>
-            <p className="text-xs text-zinc-400 mt-0.5">
-              {isClassicEra
-                ? `Pontos de talento disponíveis: ${totalPointsSpent} / ${maxPointsAvailable} alocados (Nível ${charLevel})`
-                : `Configuração oficial de talentos de Classe e Especialização`}
-            </p>
-          </div>
-        </div>
-
-        {/* Action Controls */}
-        <div className="flex items-center gap-2">
-          {/* Tree Mode Switcher */}
-          <div className="flex items-center bg-zinc-900 border border-zinc-700/80 rounded-xl p-0.5 text-xs">
+    <div id="wow-talents-component" className="space-y-3">
+      {/* 1. Header Toolbar: Mode Switcher, Version Selector, Export */}
+      <div className="p-3 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-xl flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Dual Mode Switcher: Character Build vs Talent Calculator */}
+          <div className="flex items-center bg-zinc-900 p-0.5 rounded-xl border border-zinc-700/70 shadow-inner">
             <button
               type="button"
-              id="wow-toggle-classic-tree-btn"
-              onClick={() => setActiveMode("classic")}
-              className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
-                isClassicEra
-                  ? "bg-amber-500 text-black shadow"
-                  : "text-zinc-400 hover:text-white"
-              }`}
-            >
-              Clássico
-            </button>
-            <button
-              type="button"
-              id="wow-toggle-retail-tree-btn"
-              onClick={() => setActiveMode("retail")}
-              className={`px-2.5 py-1 rounded-lg font-bold transition-all cursor-pointer ${
-                !isClassicEra
+              onClick={() => setTalentMode("build")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                talentMode === "build"
                   ? "bg-cyan-500 text-black shadow"
                   : "text-zinc-400 hover:text-white"
               }`}
             >
-              Retail (DF/TWW)
+              <UserCheck className="w-3.5 h-3.5" />
+              <span>Character Build</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setTalentMode("calculator")}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                talentMode === "calculator"
+                  ? "bg-cyan-500 text-black shadow"
+                  : "text-zinc-400 hover:text-white"
+              }`}
+            >
+              <Calculator className="w-3.5 h-3.5" />
+              <span>Talent Calculator</span>
             </button>
           </div>
 
-          <button
-            type="button"
-            id="wow-copy-build-btn"
-            onClick={copyBuildCode}
-            className="px-3 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 text-zinc-200 border border-zinc-700 hover:border-cyan-500/50 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow"
-            title="Copiar código de importação do loadout estilo Wowhead / In-Game"
-          >
-            {copiedBuild ? <Check size={13} className="text-emerald-400" /> : <Copy size={13} />}
-            <span>{copiedBuild ? "Código Copiado!" : "Copiar Build"}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 2. CLASSIC TALENT TREE CALCULATOR VIEW (Classic / Forever / TBC) */}
-      {isClassicEra ? (
-        <div className="space-y-4">
-          {/* Tree Navigation Selector Tabs */}
-          <div className="grid grid-cols-3 gap-2">
-            {classicTrees.map((tree, idx) => {
-              const isActive = selectedClassicTree === idx;
-              return (
-                <button
-                  key={tree.id}
-                  type="button"
-                  id={`wow-classic-tree-tab-${tree.id}`}
-                  onClick={() => setSelectedClassicTree(idx)}
-                  className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between gap-2 ${
-                    isActive
-                      ? "bg-zinc-900 border-amber-500/80 shadow-lg shadow-amber-950/40"
-                      : "bg-zinc-950/60 border-zinc-800/80 hover:bg-zinc-900/50 hover:border-zinc-700"
-                  }`}
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <img
-                      src={tree.icon}
-                      alt={tree.name}
-                      className={`w-8 h-8 rounded-lg border object-cover shrink-0 ${
-                        isActive ? "border-amber-400" : "border-zinc-700 grayscale"
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <span className="text-xs font-bold text-white block truncate">
-                        {tree.name}
-                      </span>
-                      <span className="text-[10px] font-mono text-zinc-400">
-                        Ramo {idx + 1}
-                      </span>
-                    </div>
-                  </div>
-
-                  <span
-                    className={`text-xs font-mono font-black px-2 py-0.5 rounded-md border ${
-                      tree.pointsSpent > 0
-                        ? "bg-amber-950/80 text-amber-300 border-amber-500/50"
-                        : "bg-zinc-900 text-zinc-500 border-zinc-800"
-                    }`}
-                  >
-                    {tree.pointsSpent}
-                  </span>
-                </button>
-              );
-            })}
+          {/* Fixed Version Badge (Strictly matches the chosen WoW game's version) */}
+          <div className="flex items-center gap-1.5 bg-zinc-900/90 px-3 py-1.5 rounded-xl border border-zinc-800 text-xs shadow-inner">
+            <span className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider">Versão do Jogo:</span>
+            <span className="text-cyan-400 font-bold text-xs flex items-center gap-1">
+              <Sparkles className="w-3 h-3 text-cyan-400" />
+              {selectedVersion}
+            </span>
           </div>
 
-          {/* Active Tree Showcase Grid (Authentic WoW 7-tier Calculator Grid) */}
-          {classicTrees[selectedClassicTree] && (
-            <div className="relative rounded-2xl bg-gradient-to-b from-zinc-950 via-zinc-900/80 to-zinc-950 border border-zinc-800 p-6 overflow-hidden shadow-2xl">
-              {/* Watermark Tree Emblem */}
-              <div className="absolute right-4 top-4 opacity-5 pointer-events-none">
-                <img
-                  src={classicTrees[selectedClassicTree].icon}
-                  alt="tree-bg"
-                  className="w-64 h-64 object-contain blur-sm"
-                />
-              </div>
-
-              {/* Grid Canvas: 7 Rows (Tiers) */}
-              <div className="relative z-10 max-w-xl mx-auto space-y-4">
-                {[0, 1, 2, 3, 4, 5, 6].map((rowIdx) => {
-                  const nodesInRow = classicTrees[selectedClassicTree].nodes.filter((n) => n.row === rowIdx);
-                  const tierMinPoints = rowIdx * 5;
-                  const isTierUnlocked = classicTrees[selectedClassicTree].pointsSpent >= tierMinPoints;
-
-                  return (
-                    <div key={rowIdx} className="flex items-center gap-4">
-                      {/* Tier Points Gate Marker */}
-                      <span className="text-[10px] font-mono text-zinc-500 w-8 shrink-0 text-right">
-                        {tierMinPoints}p
-                      </span>
-
-                      {/* 4 Column Slots for this Row */}
-                      <div className="grid grid-cols-4 gap-4 flex-1">
-                        {[0, 1, 2, 3].map((colIdx) => {
-                          const node = nodesInRow.find((n) => n.col === colIdx);
-                          if (!node) {
-                            return <div key={colIdx} className="w-12 h-12" />;
-                          }
-
-                          const isMaxed = node.rank === node.maxRank;
-                          const hasPoints = node.rank > 0;
-
-                          return (
-                            <div
-                              key={colIdx}
-                              className="relative group flex flex-col items-center"
-                              onMouseEnter={() => setHoveredNode(node)}
-                              onMouseLeave={() => setHoveredNode(null)}
-                            >
-                              <div
-                                className={`relative w-12 h-12 rounded-xl border-2 transition-all duration-200 cursor-pointer flex items-center justify-center ${
-                                  hasPoints
-                                    ? isMaxed
-                                      ? "border-amber-400 bg-amber-950/40 shadow-[0_0_15px_rgba(245,158,11,0.45)] scale-105"
-                                      : "border-emerald-400 bg-emerald-950/40 shadow-[0_0_12px_rgba(16,185,129,0.35)]"
-                                    : isTierUnlocked
-                                    ? "border-zinc-600 bg-zinc-900 opacity-60 hover:opacity-100 hover:border-zinc-400"
-                                    : "border-zinc-800 bg-zinc-950/60 opacity-30 grayscale pointer-events-none"
-                                }`}
-                              >
-                                <img
-                                  src={node.icon}
-                                  alt={node.name}
-                                  className={`w-full h-full object-cover rounded-lg ${
-                                    !hasPoints && !isTierUnlocked ? "grayscale" : ""
-                                  }`}
-                                  onError={(e) => {
-                                    e.currentTarget.src = "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg";
-                                  }}
-                                />
-
-                                {/* Rank Badge Counter (e.g. 5/5 or 1/1) */}
-                                <span
-                                  className={`absolute -bottom-2 -right-1 px-1.5 py-0.2 rounded-md text-[9px] font-mono font-black border shadow-md ${
-                                    isMaxed
-                                      ? "bg-amber-500 text-black border-amber-300"
-                                      : hasPoints
-                                      ? "bg-emerald-600 text-white border-emerald-400"
-                                      : "bg-black/90 text-zinc-400 border-zinc-700"
-                                  }`}
-                                >
-                                  {node.rank}/{node.maxRank}
-                                </span>
-                              </div>
-
-                              <span className="text-[10px] font-semibold text-zinc-400 mt-1 text-center truncate max-w-[80px]">
-                                {node.name}
-                              </span>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+          {/* Mode Instructions / Reset */}
+          {talentMode === "calculator" ? (
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] text-zinc-400">
+                Left-click to add, Right-click to remove
+              </span>
+              <button
+                type="button"
+                onClick={handleResetCalculator}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-400 hover:text-white border border-zinc-800 text-[11px] font-bold cursor-pointer"
+                title="Reset all spent points"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>Reset</span>
+              </button>
             </div>
+          ) : (
+            <span className="px-2 py-0.5 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[11px] font-bold">
+              Active In-Game Configuration
+            </span>
           )}
         </div>
-      ) : (
-        /* 3. RETAIL TALENT VIEW (Dragonflight / The War Within 2-Tree System) */
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Left: Class Tree */}
-            <div className="p-5 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-xl space-y-3">
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-                <div className="flex items-center gap-2">
-                  <Shield size={16} className="text-cyan-400" />
-                  <h5 className="text-sm font-bold text-white">{retailTrees.classTree.title}</h5>
-                </div>
-                <span className="text-xs font-mono font-bold text-cyan-300 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-500/40">
-                  {retailTrees.classTree.pointsSpent} / {retailTrees.classTree.maxPoints}
+
+        {/* Copy Build String */}
+        <button
+          type="button"
+          onClick={copyBuildCode}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-zinc-900/80 hover:bg-zinc-800 border border-zinc-700/80 text-xs font-bold text-zinc-300 hover:text-white transition-all cursor-pointer shadow"
+        >
+          {copiedBuild ? (
+            <>
+              <Check className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-emerald-400">Build Copied!</span>
+            </>
+          ) : (
+            <>
+              <Copy className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Export Build</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* 2. VERSION-SPECIFIC TALENT TREE DISPLAY */}
+
+      {/* A. CLASSIC MOP (MISTS OF PANDARIA 5.4 - 6 TIER MATRIX) */}
+      {selectedVersion === "Classic MoP" && (
+        <div className="p-4 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-2xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+            <div>
+              <h4 className="text-sm font-black text-white flex items-center gap-2">
+                <span>Mists of Pandaria Talent Grid</span>
+                <span className="text-xs font-normal text-amber-400">
+                  (Choose 1 Talent per Tier)
                 </span>
-              </div>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Habilidades fundamentais de utilidade, defesa e mobilidade compartilhadas por todas as especializações de {classInfo.ptBR}. Passe o mouse sobre os talentos para ver descrições completas.
+              </h4>
+              <p className="text-[11px] text-zinc-400">
+                Tiers unlock at levels 15, 30, 45, 60, 75, and 90.
               </p>
-
-              {/* Class Nodes */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-2">
-                {retailTrees.classTree.nodes.map((node) => (
-                  <div
-                    key={node.id}
-                    onMouseEnter={() => setHoveredNode(node)}
-                    onMouseLeave={() => setHoveredNode(null)}
-                    className="p-2 rounded-xl bg-zinc-900 border border-cyan-500/30 hover:border-cyan-400 hover:bg-zinc-800/90 flex items-center gap-2 cursor-pointer transition-all shadow-sm"
-                  >
-                    <img
-                      src={node.icon}
-                      alt={node.name}
-                      className="w-8 h-8 rounded-lg border border-cyan-400/60 object-cover shrink-0"
-                      onError={(e) => {
-                        e.currentTarget.src = "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg";
-                      }}
-                    />
-                    <div className="min-w-0">
-                      <span className="text-[11px] font-bold text-zinc-200 block truncate">{node.name}</span>
-                      <span className="text-[9px] font-mono text-cyan-300">
-                        {node.rank}/{node.maxRank} • {node.type || "ativo"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
             </div>
+          </div>
 
-            {/* Right: Spec Tree */}
-            <div className="p-5 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-xl space-y-3">
-              <div className="flex items-center justify-between border-b border-zinc-800 pb-2">
-                <div className="flex items-center gap-2">
-                  <Zap size={16} className="text-amber-400" />
-                  <h5 className="text-sm font-bold text-white">{retailTrees.specTree.title}</h5>
+          <div className="space-y-3">
+            {mopTiers.map((tierRow, tierIdx) => (
+              <div
+                key={tierRow.level}
+                className="p-3 rounded-xl bg-zinc-900/60 border border-zinc-800 flex flex-col md:flex-row items-start md:items-center gap-3"
+              >
+                <div className="w-20 shrink-0 font-mono font-bold text-xs text-amber-400 bg-zinc-950 px-2 py-1 rounded-lg border border-zinc-800 text-center">
+                  Level {tierRow.level}
                 </div>
-                <span className="text-xs font-mono font-bold text-amber-300 bg-amber-950/80 px-2 py-0.5 rounded border border-amber-500/40">
-                  {retailTrees.specTree.pointsSpent} / {retailTrees.specTree.maxPoints}
-                </span>
-              </div>
-              <p className="text-xs text-zinc-400 leading-relaxed">
-                Habilidades que definem o núcleo da sua rotação de combate e poder destrutivo em {charSpec}. Passe o mouse sobre os talentos para ver descrições completas.
-              </p>
 
-              {/* Spec nodes */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 pt-2">
-                {retailTrees.specTree.nodes.map((node) => (
-                  <div
-                    key={node.id}
-                    onMouseEnter={() => setHoveredNode(node)}
-                    onMouseLeave={() => setHoveredNode(null)}
-                    className="p-2 rounded-xl bg-zinc-900 border border-amber-500/30 hover:border-amber-400 hover:bg-zinc-800/90 flex items-center gap-2 cursor-pointer transition-all shadow-sm"
-                  >
-                    <img
-                      src={node.icon}
-                      alt={node.name}
-                      className="w-8 h-8 rounded-lg border border-amber-400/60 object-cover shrink-0"
-                      onError={(e) => {
-                        e.currentTarget.src = "https://wow.zamimg.com/images/wow/icons/large/spell_holy_magicalsentry.jpg";
-                      }}
-                    />
-                    <div className="min-w-0">
-                      <span className="text-[11px] font-bold text-zinc-200 block truncate">{node.name}</span>
-                      <span className="text-[9px] font-mono text-amber-300">
-                        {node.rank}/{node.maxRank} • {node.type || "ativo"}
-                      </span>
-                    </div>
-                  </div>
-                ))}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 flex-1 w-full">
+                  {tierRow.talents.map((talent) => {
+                    const isSelected = talent.selected;
+                    return (
+                      <div
+                        key={talent.id}
+                        onClick={() => handleSelectMoPTalent(tierIdx, talent.id)}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setHoveredNode({ node: talent, treeTitle: `Level ${tierRow.level} Talent` });
+                          setTooltipPos({ x: rect.right + 10, y: rect.top });
+                        }}
+                        onMouseLeave={() => setHoveredNode(null)}
+                        className={`p-2 rounded-xl border transition-all flex items-center gap-2.5 ${
+                          talentMode === "calculator" ? "cursor-pointer" : ""
+                        } ${
+                          isSelected
+                            ? "bg-cyan-950/60 border-cyan-500 shadow-md ring-1 ring-cyan-500/50"
+                            : "bg-zinc-950/70 border-zinc-800 hover:border-zinc-700 opacity-70 hover:opacity-100"
+                        }`}
+                      >
+                        <img
+                          src={talent.icon}
+                          alt={talent.name}
+                          className={`w-9 h-9 rounded-lg object-cover border ${
+                            isSelected ? "border-cyan-400" : "border-zinc-700"
+                          }`}
+                        />
+                        <div className="min-w-0">
+                          <p
+                            className={`text-xs font-bold truncate ${
+                              isSelected ? "text-cyan-300" : "text-white"
+                            }`}
+                          >
+                            {talent.name}
+                          </p>
+                          <p className="text-[10px] text-zinc-400 line-clamp-1">
+                            {talent.description}
+                          </p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            ))}
           </div>
         </div>
       )}
 
-      {/* 4. Interactive Wowhead-Style Talent Tooltip */}
-      {hoveredNode && (
-        <div className="p-4 rounded-xl bg-zinc-950 border border-amber-500/60 shadow-2xl space-y-2 max-w-md animate-in fade-in duration-150">
-          <div className="flex items-center gap-3">
-            <img
-              src={hoveredNode.icon}
-              alt={hoveredNode.name}
-              className="w-10 h-10 rounded-lg border-2 border-amber-400 object-cover"
-            />
+      {/* B. CLASSIC TBC (LEVEL 70, 61 POINTS, 41-PT CAPSTONES) */}
+      {selectedVersion === "Classic TBC" && (
+        <div className="p-4 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-2xl space-y-3">
+          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
             <div>
-              <h5 className="text-sm font-bold text-amber-300 leading-tight">
-                {hoveredNode.name}
-              </h5>
-              <div className="flex items-center gap-2 text-[11px] text-zinc-400 mt-0.5">
-                <span>Ranque {hoveredNode.rank}/{hoveredNode.maxRank}</span>
-                {hoveredNode.spellCost && (
-                  <>
-                    <span>•</span>
-                    <span className="text-cyan-300 font-mono">{hoveredNode.spellCost}</span>
-                  </>
-                )}
-              </div>
+              <h4 className="text-sm font-black text-white flex items-center gap-2">
+                <span>The Burning Crusade Talent Trees</span>
+                <span className="text-xs font-mono text-cyan-400">
+                  ({tbcTrees.reduce((s, t) => s + t.pointsSpent, 0)} / 61 Points)
+                </span>
+              </h4>
+              <p className="text-[11px] text-zinc-400">
+                Expanded 41-point capstone trees for Level 70.
+              </p>
             </div>
           </div>
 
-          <p className="text-xs text-zinc-200 leading-relaxed pt-1">
-            {hoveredNode.description}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {tbcTrees.map((tree, treeIdx) => (
+              <div
+                key={tree.id}
+                className="p-3 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-3"
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+                  <div className="flex items-center gap-2">
+                    <img
+                      src={tree.icon}
+                      alt={tree.name}
+                      className="w-7 h-7 rounded-lg border border-zinc-700 object-cover"
+                    />
+                    <h5 className="text-xs font-black text-white">{tree.name}</h5>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-cyan-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+                    {tree.pointsSpent} pts
+                  </span>
+                </div>
+
+                {/* Nodes Grid */}
+                <div className="grid grid-cols-3 gap-2">
+                  {tree.nodes.map((node) => {
+                    const isMaxed = node.rank >= node.maxRank;
+                    const hasPoints = node.rank > 0;
+                    return (
+                      <div
+                        key={node.id}
+                        onClick={() =>
+                          handleModifyClassicPoint(
+                            tbcTrees,
+                            setTbcTrees,
+                            treeIdx,
+                            node.id,
+                            1,
+                            61
+                          )
+                        }
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          handleModifyClassicPoint(
+                            tbcTrees,
+                            setTbcTrees,
+                            treeIdx,
+                            node.id,
+                            -1,
+                            61
+                          )
+                        }}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setHoveredNode({ node, treeTitle: tree.name });
+                          setTooltipPos({ x: rect.right + 10, y: rect.top });
+                        }}
+                        onMouseLeave={() => setHoveredNode(null)}
+                        className={`relative p-1.5 rounded-xl border transition-all flex flex-col items-center justify-center ${
+                          talentMode === "calculator" ? "cursor-pointer hover:scale-105" : ""
+                        } ${
+                          isMaxed
+                            ? "bg-amber-950/30 border-amber-500 shadow"
+                            : hasPoints
+                            ? "bg-cyan-950/40 border-cyan-500"
+                            : "bg-zinc-950/60 border-zinc-800 opacity-60"
+                        }`}
+                      >
+                        <img
+                          src={node.icon}
+                          alt={node.name}
+                          className={`w-9 h-9 rounded-lg object-cover border ${
+                            isMaxed
+                              ? "border-amber-400"
+                              : hasPoints
+                              ? "border-cyan-400"
+                              : "border-zinc-700 grayscale"
+                          }`}
+                        />
+                        <span className="text-[10px] font-mono font-bold mt-1 text-zinc-300">
+                          {node.rank}/{node.maxRank}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* C. CLASSIC ERA & FOREVER (LEVEL 60, 51 POINTS, 3 SPECS) */}
+      {(selectedVersion === "Classic Era" || selectedVersion === "Forever") && (
+        <div className="p-4 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-2xl space-y-3">
+          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+            <div>
+              <h4 className="text-sm font-black text-white flex items-center gap-2">
+                <span>{selectedVersion} Classic Talent Trees</span>
+                <span className="text-xs font-mono text-cyan-400">
+                  ({classicTrees.reduce((s, t) => s + t.pointsSpent, 0)} / 51 Points)
+                </span>
+              </h4>
+              <p className="text-[11px] text-zinc-400">
+                Authentic 1.12 vanilla talent system with 5-point tier locks.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {classicTrees.map((tree, treeIdx) => (
+              <div
+                key={tree.id}
+                className="p-3 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-3"
+              >
+                <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+                  <div className="flex items-center gap-2">
+                    <img
+                      src={tree.icon}
+                      alt={tree.name}
+                      className="w-7 h-7 rounded-lg border border-zinc-700 object-cover"
+                    />
+                    <h5 className="text-xs font-black text-white">{tree.name}</h5>
+                  </div>
+                  <span className="font-mono text-xs font-bold text-cyan-400 bg-zinc-950 px-2 py-0.5 rounded border border-zinc-800">
+                    {tree.pointsSpent} pts
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-3 gap-2">
+                  {tree.nodes.map((node) => {
+                    const isMaxed = node.rank >= node.maxRank;
+                    const hasPoints = node.rank > 0;
+                    return (
+                      <div
+                        key={node.id}
+                        onClick={() =>
+                          handleModifyClassicPoint(
+                            classicTrees,
+                            setClassicTrees,
+                            treeIdx,
+                            node.id,
+                            1,
+                            51
+                          )
+                        }
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          handleModifyClassicPoint(
+                            classicTrees,
+                            setClassicTrees,
+                            treeIdx,
+                            node.id,
+                            -1,
+                            51
+                          )
+                        }}
+                        onMouseEnter={(e) => {
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setHoveredNode({ node, treeTitle: tree.name });
+                          setTooltipPos({ x: rect.right + 10, y: rect.top });
+                        }}
+                        onMouseLeave={() => setHoveredNode(null)}
+                        className={`relative p-1.5 rounded-xl border transition-all flex flex-col items-center justify-center ${
+                          talentMode === "calculator" ? "cursor-pointer hover:scale-105" : ""
+                        } ${
+                          isMaxed
+                            ? "bg-amber-950/30 border-amber-500 shadow"
+                            : hasPoints
+                            ? "bg-cyan-950/40 border-cyan-500"
+                            : "bg-zinc-950/60 border-zinc-800 opacity-60"
+                        }`}
+                      >
+                        <img
+                          src={node.icon}
+                          alt={node.name}
+                          className={`w-9 h-9 rounded-lg object-cover border ${
+                            isMaxed
+                              ? "border-amber-400"
+                              : hasPoints
+                              ? "border-cyan-400"
+                              : "border-zinc-700 grayscale"
+                          }`}
+                        />
+                        <span className="text-[10px] font-mono font-bold mt-1 text-zinc-300">
+                          {node.rank}/{node.maxRank}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* D. RETAIL (MIDNIGHT) - DUAL CLASS & SPEC TREES + HERO TALENTS */}
+      {selectedVersion === "Retail (Midnight)" && (
+        <div className="p-4 rounded-2xl bg-zinc-950/90 border border-zinc-800 shadow-2xl space-y-4">
+          <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+            <div>
+              <h4 className="text-sm font-black text-white flex items-center gap-2">
+                <span>Retail (Midnight) Dual Trees & Hero Talents</span>
+              </h4>
+              <p className="text-[11px] text-zinc-400">
+                Class Tree + Spec Tree + {retailTrees.heroTree?.heroTreeName || "Hero Talents"}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            {/* Class Tree */}
+            <div className="p-3.5 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+                <h5 className="text-xs font-black text-white">{retailTrees.classTree.title}</h5>
+                <span className="font-mono text-xs text-cyan-400 font-bold">
+                  {retailTrees.classTree.pointsSpent}/{retailTrees.classTree.maxPoints} pts
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {retailTrees.classTree.nodes.map((node) => (
+                  <div
+                    key={node.id}
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setHoveredNode({ node, treeTitle: retailTrees.classTree.title });
+                      setTooltipPos({ x: rect.right + 10, y: rect.top });
+                    }}
+                    onMouseLeave={() => setHoveredNode(null)}
+                    className="p-2 rounded-xl bg-zinc-950/70 border border-cyan-500/50 flex items-center gap-2"
+                  >
+                    <img src={node.icon} alt="" className="w-8 h-8 rounded-lg object-cover border border-cyan-400" />
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-white truncate">{node.name}</p>
+                      <span className="text-[10px] text-zinc-400 uppercase">{node.type || "Talent"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Spec Tree */}
+            <div className="p-3.5 rounded-xl bg-zinc-900/50 border border-zinc-800 space-y-3">
+              <div className="flex items-center justify-between pb-2 border-b border-zinc-800">
+                <h5 className="text-xs font-black text-white">{retailTrees.specTree.title}</h5>
+                <span className="font-mono text-xs text-cyan-400 font-bold">
+                  {retailTrees.specTree.pointsSpent}/{retailTrees.specTree.maxPoints} pts
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {retailTrees.specTree.nodes.map((node) => (
+                  <div
+                    key={node.id}
+                    onMouseEnter={(e) => {
+                      const rect = e.currentTarget.getBoundingClientRect();
+                      setHoveredNode({ node, treeTitle: retailTrees.specTree.title });
+                      setTooltipPos({ x: rect.right + 10, y: rect.top });
+                    }}
+                    onMouseLeave={() => setHoveredNode(null)}
+                    className="p-2 rounded-xl bg-zinc-950/70 border border-amber-500/50 flex items-center gap-2"
+                  >
+                    <img src={node.icon} alt="" className="w-8 h-8 rounded-lg object-cover border border-amber-400" />
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-white truncate">{node.name}</p>
+                      <span className="text-[10px] text-zinc-400 uppercase">{node.type || "Talent"}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Hero Talents Tree */}
+            {retailTrees.heroTree && (
+              <div className="p-3.5 rounded-xl bg-gradient-to-b from-purple-950/30 to-zinc-950/70 border border-purple-800/60 space-y-3">
+                <div className="flex items-center justify-between pb-2 border-b border-purple-800/40">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-purple-400" />
+                    <h5 className="text-xs font-black text-purple-300">
+                      {retailTrees.heroTree.heroTreeName}
+                    </h5>
+                  </div>
+                  <span className="font-mono text-xs text-purple-300 font-bold">
+                    {retailTrees.heroTree.pointsSpent}/{retailTrees.heroTree.maxPoints} pts
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  {retailTrees.heroTree.nodes.map((node) => (
+                    <div
+                      key={node.id}
+                      onMouseEnter={(e) => {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setHoveredNode({ node, treeTitle: retailTrees.heroTree?.heroTreeName });
+                        setTooltipPos({ x: rect.right + 10, y: rect.top });
+                      }}
+                      onMouseLeave={() => setHoveredNode(null)}
+                      className="p-2 rounded-xl bg-purple-950/40 border border-purple-500/50 flex items-center gap-2"
+                    >
+                      <img src={node.icon} alt="" className="w-8 h-8 rounded-lg object-cover border border-purple-400" />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-purple-200 truncate">{node.name}</p>
+                        <span className="text-[10px] text-purple-400">Hero Mastery</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 3. Floating WoW-Authentic Talent Tooltip */}
+      {hoveredNode && (
+        <div
+          className="fixed z-50 pointer-events-none p-3 rounded-xl bg-zinc-950/95 border-2 border-zinc-700 shadow-2xl text-xs max-w-xs space-y-1.5 backdrop-blur-md"
+          style={{
+            left: `${Math.min(tooltipPos.x, window.innerWidth - 320)}px`,
+            top: `${Math.min(tooltipPos.y, window.innerHeight - 200)}px`,
+          }}
+        >
+          <div className="flex items-center gap-2">
+            <img
+              src={hoveredNode.node.icon}
+              alt=""
+              className="w-8 h-8 rounded-lg border border-zinc-700 object-cover"
+            />
+            <div>
+              <p className="font-bold text-white text-sm tracking-wide">
+                {hoveredNode.node.name}
+              </p>
+              {hoveredNode.node.maxRank > 1 && (
+                <p className="text-[11px] font-mono text-cyan-400">
+                  Rank {hoveredNode.node.rank} / {hoveredNode.node.maxRank}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {(hoveredNode.node.spellCost || hoveredNode.node.castTime) && (
+            <div className="flex items-center justify-between text-[11px] text-zinc-400 font-mono">
+              <span>{hoveredNode.node.spellCost}</span>
+              <span>{hoveredNode.node.castTime}</span>
+            </div>
+          )}
+
+          {hoveredNode.node.cooldown && (
+            <p className="text-amber-400 font-mono text-[11px]">
+              {hoveredNode.node.cooldown}
+            </p>
+          )}
+
+          <p className="text-amber-200/90 text-[11px] leading-relaxed">
+            {hoveredNode.node.description}
           </p>
 
-          {hoveredNode.rank < hoveredNode.maxRank && hoveredNode.nextRankDescription && (
-            <div className="pt-2 border-t border-zinc-800 text-xs text-zinc-400">
-              <span className="text-[10px] uppercase font-bold text-amber-400/80 block">Próximo Ranque:</span>
-              <p className="mt-0.5">{hoveredNode.nextRankDescription}</p>
+          {hoveredNode.node.nextRankDescription && (
+            <div className="pt-1.5 border-t border-zinc-800 text-[10px] text-zinc-400">
+              <span className="text-cyan-400 font-bold">Next Rank: </span>
+              {hoveredNode.node.nextRankDescription}
             </div>
           )}
         </div>

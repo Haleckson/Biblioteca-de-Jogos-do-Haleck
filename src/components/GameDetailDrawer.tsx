@@ -41,7 +41,8 @@ import {
   isBlizzardAuthenticated,
   getStoredBlizzardRegion,
   getStoredBlizzardBattleTag,
-  BLIZZARD_OFFICIAL_GAMES
+  BLIZZARD_OFFICIAL_GAMES,
+  WoWVersionType
 } from "../utils/blizzardApi";
 import WoWCharacterGrid from "./WoWCharacterGrid";
 import { WoWArmoryView } from "./WoWArmoryView";
@@ -1310,18 +1311,55 @@ export default function GameDetailDrawer({
       ))
     );
 
+    if (!isOpen || !game || !isBattlenet) {
+      // Lazy cleanup: Clear WoW data when drawer is closed so cards remain lightweight and unburdened
+      setBlizzardChars([]);
+      setBlizzardActiveProfile(null);
+      setIsLoadingBlizzardChars(false);
+      return;
+    }
+
     if (isOpen && game && isBattlenet) {
       if (game.blizzardProfileData) {
         setBlizzardActiveProfile(game.blizzardProfileData);
       }
       const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
-      const gId = game.blizzardGameId || "wow-retail";
+      const rawGId = (game.blizzardGameId || "").toLowerCase();
+      const rawName = (game.name || "").toLowerCase();
+
+      let targetWoWVersion: WoWVersionType = "retail";
+      if (game.wowVersion) {
+        targetWoWVersion = game.wowVersion as WoWVersionType;
+      } else if (rawGId === "wow-forever" || rawGId.includes("forever") || rawName.includes("forever") || rawName.includes("vanilla+")) {
+        targetWoWVersion = "forever";
+      } else if (rawGId === "wow-mop" || rawGId.includes("mop") || rawName.includes("mop") || rawName.includes("pandaria")) {
+        targetWoWVersion = "mop";
+      } else if (rawGId === "wow-tbc" || rawGId.includes("tbc") || rawName.includes("tbc") || rawName.includes("burning") || rawName.includes("crusade")) {
+        targetWoWVersion = "tbc";
+      } else if (rawGId === "wow-classic" || rawGId.includes("classic") || rawGId.includes("era") || rawName.includes("classic") || rawName.includes("era")) {
+        targetWoWVersion = "classic";
+      } else {
+        targetWoWVersion = "retail";
+      }
+
+      setBlizzardVersionFilter(targetWoWVersion);
+      const gId = game.blizzardGameId || `wow-${targetWoWVersion}`;
       setIsLoadingBlizzardChars(true);
 
-      fetchWoWUserCharacters({ region, version: "all", gameId: gId })
+      fetchWoWUserCharacters({ region, version: targetWoWVersion, gameId: gId })
         .then((chars) => {
-          setBlizzardChars(chars);
-          const targetCharObj = chars.find((c) => c.name.toLowerCase() === (game.blizzardCharacterName || "").toLowerCase()) || (chars.length > 0 ? chars[0] : null);
+          const matchingChars = chars.filter((c) => {
+            const cVer = (c.wow_version || c.gameMode || "retail").toLowerCase();
+            if (targetWoWVersion === "forever") return cVer === "forever" || cVer.includes("forever") || cVer.includes("vanilla+");
+            if (targetWoWVersion === "mop") return cVer === "mop" || cVer.includes("mop") || cVer.includes("pandaria");
+            if (targetWoWVersion === "tbc") return cVer === "tbc" || cVer.includes("tbc") || cVer.includes("burning") || cVer.includes("crusade");
+            if (targetWoWVersion === "classic") return (cVer === "classic" || cVer.includes("classic") || cVer.includes("era") || cVer.includes("vanilla")) && !cVer.includes("tbc") && !cVer.includes("mop") && !cVer.includes("forever");
+            return cVer === "retail" || (!cVer.includes("classic") && !cVer.includes("era") && !cVer.includes("tbc") && !cVer.includes("mop") && !cVer.includes("forever"));
+          });
+          const resolvedChars = matchingChars.length > 0 ? matchingChars : chars;
+          setBlizzardChars(resolvedChars);
+
+          const targetCharObj = resolvedChars.find((c) => c.name.toLowerCase() === (game.blizzardCharacterName || "").toLowerCase()) || (resolvedChars.length > 0 ? resolvedChars[0] : null);
           const targetChar = targetCharObj ? targetCharObj.name : (game.blizzardCharacterName || "");
           const targetRealm = targetCharObj ? (targetCharObj.realmSlug || targetCharObj.realm) : (game.blizzardRealm || "");
           if (targetChar && targetRealm) {
@@ -1336,7 +1374,7 @@ export default function GameDetailDrawer({
               faction: targetCharObj?.faction,
               activeSpec: targetCharObj?.activeSpec,
               equippedItemLevel: targetCharObj?.equippedItemLevel,
-              version: targetCharObj?.wow_version || targetCharObj?.gameMode,
+              version: targetCharObj?.wow_version || targetCharObj?.gameMode || targetWoWVersion,
             })
               .then((prof) => {
                 if (prof) {
@@ -1351,7 +1389,7 @@ export default function GameDetailDrawer({
           setIsLoadingBlizzardChars(false);
         });
     }
-  }, [isOpen, game?.id, game?.integrationPlatform, game?.blizzardGameId, game?.platform]);
+  }, [isOpen, game?.id, game?.integrationPlatform, game?.blizzardGameId, game?.wowVersion, game?.blizzardCharacterName, game?.platform]);
 
   useEffect(() => {
     if (game && game.metacriticUrl && isOpen) {
@@ -4613,10 +4651,11 @@ export default function GameDetailDrawer({
                             const isStarcraft =
                               game.blizzardGameId?.includes("starcraft") || game.name?.toLowerCase().includes("starcraft");
 
-                            // 1. WORLD OF WARCRAFT (ALL VERSIONS: RETAIL, CLASSIC, FOREVER, TBC)
+                            // 1. WORLD OF WARCRAFT (ALL VERSIONS: RETAIL, CLASSIC, FOREVER, TBC, MOP)
                             if (isBlizzWoW) {
-                              const modeInfo = getWoWGameModeInfo(game.blizzardGameId || "wow-retail");
-                              const filteredChars = filterCharactersByGameMode(blizzardChars, game.blizzardGameId || "wow-retail");
+                              const activeGameId = game.blizzardGameId || (game.wowVersion ? `wow-${game.wowVersion}` : `wow-${blizzardVersionFilter || "retail"}`);
+                              const modeInfo = getWoWGameModeInfo(activeGameId);
+                              const filteredChars = filterCharactersByGameMode(blizzardChars, activeGameId);
 
                               const charName = blizzardActiveProfile?.name || blizzardActiveProfile?.selectedCharacter?.name || game.blizzardCharacterName || (filteredChars.length > 0 ? filteredChars[0].name : "Personagem de WoW");
                               const charRealm = blizzardActiveProfile?.realm || blizzardActiveProfile?.selectedCharacter?.realm || game.blizzardRealm || (filteredChars.length > 0 ? filteredChars[0].realm : "Reino");
@@ -4662,12 +4701,13 @@ export default function GameDetailDrawer({
 
                               return (
                                 <div className="space-y-4">
-                                  {/* WoWCharacterGrid: Subcomponente com cards agrupados por wow_version */}
+                                  {/* WoWCharacterGrid: Subcomponente com cards da versão específica do jogo */}
                                   <WoWCharacterGrid
                                     characters={blizzardChars}
                                     activeCharacterName={charName}
                                     isLoading={isLoadingBlizzardChars}
                                     filterVersion={blizzardVersionFilter}
+                                    showVersionTabs={false}
                                     onFilterVersionChange={setBlizzardVersionFilter}
                                     onSelectCharacter={async (c) => {
                                       try {
@@ -4679,6 +4719,8 @@ export default function GameDetailDrawer({
                                             ? "wow-forever"
                                             : c.wow_version === "tbc"
                                             ? "wow-tbc"
+                                            : c.wow_version === "mop"
+                                            ? "wow-mop"
                                             : "wow-retail";
 
                                         // Atualização imediata e autêntica para o personagem selecionado
@@ -4740,6 +4782,7 @@ export default function GameDetailDrawer({
                                   <WoWArmoryView
                                     profile={activeProfileToRender}
                                     isLoading={isLoadingBlizzardChars}
+                                    gameVersion={blizzardVersionFilter}
                                     onRefresh={async () => {
                                       try {
                                         const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();

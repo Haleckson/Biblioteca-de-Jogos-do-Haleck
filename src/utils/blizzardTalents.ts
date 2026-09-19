@@ -18,6 +18,7 @@ export interface WoWTalentNode {
   castTime?: string;
   cooldown?: string;
   prerequisiteId?: string;
+  selected?: boolean; // For MoP 1-of-3 tier choice
 }
 
 export interface WoWTalentTreeData {
@@ -42,83 +43,97 @@ export interface RetailDualTalents {
     maxPoints: number;
     nodes: WoWTalentNode[];
   };
+  heroTree?: {
+    heroTreeName: string;
+    pointsSpent: number;
+    maxPoints: number;
+    nodes: WoWTalentNode[];
+  };
+}
+
+export interface MoPTierRow {
+  level: number;
+  talents: WoWTalentNode[];
+}
+
+// Check if a tier (row) is unlocked based on total points spent in that tree
+export function isTalentTierUnlocked(pointsSpentInTree: number, row: number): boolean {
+  return pointsSpentInTree >= row * 5;
 }
 
 // -------------------------------------------------------------
-// CLASSIC / FOREVER / TBC TALENT TREES (3 Trees per Class, 7 Tiers)
+// CLASSIC ERA & FOREVER (Vanilla 1.12 - 51 Points, 3 Specs)
 // -------------------------------------------------------------
-
-export function getClassicTalentTrees(className: string, specName: string, level: number): WoWTalentTreeData[] {
+export function getClassicTalentTrees(
+  className: string,
+  specName: string,
+  level: number = 60
+): WoWTalentTreeData[] {
   const normClass = (className || "Druid").toLowerCase();
   const normSpec = (specName || "Feral").toLowerCase();
   const totalTalentPoints = Math.max(0, Math.min(51, level - 9));
 
-  // 1. DRUID (Equilíbrio / Combate Feral / Restauração)
-  if (normClass.includes("druid") || normClass.includes("druida")) {
-    const isFeral = normSpec.includes("feral") || normSpec.includes("combate");
-    const isBalance = normSpec.includes("equil") || normSpec.includes("balance");
-    const isResto = normSpec.includes("restor") || normSpec.includes("restau");
+  if (normClass.includes("druid")) {
+    const isFeral = normSpec.includes("feral") || normSpec.includes("guardian");
+    const isBalance = normSpec.includes("balance") || normSpec.includes("boomkin");
+    const isResto = normSpec.includes("resto");
 
-    const feralSpent = isFeral ? totalTalentPoints : isResto ? 0 : 0;
+    const feralSpent = isFeral ? totalTalentPoints : 0;
     const balanceSpent = isBalance ? totalTalentPoints : 0;
     const restoSpent = isResto ? totalTalentPoints : 0;
 
     return [
       {
         id: "balance",
-        name: "Equilíbrio",
+        name: "Balance",
         icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg",
         pointsSpent: balanceSpent,
         nodes: [
-          { id: "b1", name: "Ira da Natureza", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_abolishmagic.jpg", row: 0, col: 1, rank: balanceSpent >= 5 ? 5 : Math.min(balanceSpent, 5), maxRank: 5, description: "Reduz o tempo de lançamento dos feitiços Ira e Fogo Estelar em 0.5s." },
-          { id: "b2", name: "Foco da Natureza", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Dá a você 70% de chance de evitar interrupção por dano ao lançar feitiços de cura." },
-          { id: "b3", name: "Alcance da Natureza", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_naturetouchgrow.jpg", row: 1, col: 0, rank: balanceSpent >= 7 ? 2 : 0, maxRank: 2, description: "Aumenta o alcance dos feitiços de dano de Natureza em 20%." },
-          { id: "b4", name: "Fogo Lunar Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg", row: 1, col: 1, rank: balanceSpent >= 10 ? 5 : 0, maxRank: 5, description: "Aumenta o dano e a chance de acerto crítico do Fogo Lunar em 10%." },
-          { id: "b5", name: "Enxame de Insetos", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_insectswarm.jpg", row: 2, col: 2, rank: balanceSpent >= 11 ? 1 : 0, maxRank: 1, description: "O alvo é atacado por um enxame de insetos, causando 66 de dano de Natureza ao longo de 12s.", type: "active", spellCost: "120 Mana" },
-          { id: "b6", name: "Raízes Entrelaçadas Aprimoradas", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_stranglevines.jpg", row: 3, col: 1, rank: balanceSpent >= 14 ? 3 : 0, maxRank: 3, description: "Dá às suas Raízes Entrelaçadas 100% de chance de resistir a remoção." },
-          { id: "b7", name: "Fogo Estelar Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_arcane_starfire.jpg", row: 4, col: 2, rank: balanceSpent >= 20 ? 5 : 0, maxRank: 5, description: "Reduz o tempo de lançamento do Fogo Estelar em 0.5s e dá 15% de chance de atordoar o alvo por 3s." },
-          { id: "b8", name: "Forma de Luniscante", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_forceofnature.jpg", row: 6, col: 1, rank: balanceSpent >= 31 ? 1 : 0, maxRank: 1, description: "Transforma o druida em Luniscante, aumentando a armadura em 360% e concedendo 3% de acerto crítico com feitiços ao grupo.", type: "active" },
+          { id: "b1", name: "Starlight Wrath", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_abolishmagic.jpg", row: 0, col: 1, rank: balanceSpent >= 5 ? 5 : Math.min(balanceSpent, 5), maxRank: 5, description: "Reduces the cast time of your Wrath and Starfire spells by 0.5 sec." },
+          { id: "b2", name: "Nature's Grasp", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_natureswrath.jpg", row: 0, col: 2, rank: 0, maxRank: 1, description: "While active, any time an enemy strikes the caster they have a 35% chance to become afflicted by Entangling Roots.", type: "active" },
+          { id: "b3", name: "Nature's Reach", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_naturetouchgrow.jpg", row: 1, col: 0, rank: balanceSpent >= 7 ? 2 : 0, maxRank: 2, description: "Increases the range of your Balance spells and Faerie Fire by 20%." },
+          { id: "b4", name: "Improved Moonfire", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg", row: 1, col: 1, rank: balanceSpent >= 10 ? 5 : 0, maxRank: 5, description: "Increases the damage and critical strike chance of Moonfire by 10%." },
+          { id: "b5", name: "Insect Swarm", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_insectswarm.jpg", row: 2, col: 2, rank: balanceSpent >= 11 ? 1 : 0, maxRank: 1, description: "The enemy target is swarmed by insects, decreasing their chance to hit by 2% and causing 66 Nature damage over 12 sec.", type: "active", spellCost: "120 Mana" },
+          { id: "b6", name: "Vengeance", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_purge.jpg", row: 3, col: 1, rank: balanceSpent >= 16 ? 5 : 0, maxRank: 5, description: "Increases the critical strike damage bonus of your Starfire, Moonfire, and Wrath spells by 100%." },
+          { id: "b7", name: "Moonkin Form", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_forceofnature.jpg", row: 6, col: 1, rank: balanceSpent >= 31 ? 1 : 0, maxRank: 1, description: "Transforms into Moonkin Form, increasing armor contribution by 360% and group spell critical strike chance by 3%.", type: "active" },
         ],
       },
       {
         id: "feral",
-        name: "Combate Feral",
+        name: "Feral Combat",
         icon: "https://wow.zamimg.com/images/wow/icons/large/ability_racial_bearform.jpg",
         pointsSpent: feralSpent,
         nodes: [
-          { id: "f1", name: "Ferocidade", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_hyena.jpg", row: 0, col: 1, rank: feralSpent >= 5 ? 5 : Math.min(feralSpent, 5), maxRank: 5, description: "Reduz o custo em Fúria ou Energia de Golpe Esmagador, Rasgar e Mordida Feroz em 5." },
-          { id: "f2", name: "Agressão Feral", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_demoralizingroar.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Aumenta a redução de Poder de Ataque do Rugido Desmoralizador em 40% e o dano de Mordida Feroz em 15%." },
-          { id: "f3", name: "Instinto Brutal", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_bash.jpg", row: 1, col: 0, rank: 0, maxRank: 3, description: "Aumenta o dano de Patada em 15% e a detecção de Furtividade." },
-          { id: "f4", name: "Garras Afiadas", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_monsterclaw_04.jpg", row: 1, col: 1, rank: feralSpent >= 8 ? 3 : Math.max(0, Math.min(3, feralSpent - 5)), maxRank: 3, description: "Aumenta a chance de acerto crítico nas Formas de Urso e Felino em 6%." },
-          { id: "f5", name: "Investida Feral", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_bear.jpg", row: 2, col: 1, rank: feralSpent >= 9 ? 1 : 0, maxRank: 1, description: "Investe contra um inimigo, imobilizando-o por 4s e interrompendo qualquer feitiço.", type: "active", spellCost: "5 Fúria" },
-          { id: "f6", name: "Golpes Predatórios", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_cat.jpg", row: 2, col: 2, rank: feralSpent >= 12 ? 3 : 0, maxRank: 3, description: "Aumenta o Poder de Ataque em Urso e Felino em 150% do seu nível." },
-          { id: "f7", name: "Fúria Primitiva", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_racial_cannibalize.jpg", row: 3, col: 0, rank: feralSpent >= 14 ? 2 : 0, maxRank: 2, description: "Dá a você 100% de chance de ganhar 5 de Fúria extra no crítico em Urso ou 1 ponto de combo em Felino." },
-          { id: "f8", name: "Coração do Selvagem", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofagility.jpg", row: 5, col: 1, rank: feralSpent >= 25 ? 5 : 0, maxRank: 5, description: "Aumenta o Intelecto em 20%. Na Forma de Urso aumenta o Vigor em 20%, e em Felino aumenta a Força em 20%." },
-          { id: "f9", name: "Líder da Matilha", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_unyeildingstamina.jpg", row: 6, col: 1, rank: feralSpent >= 31 ? 1 : 0, maxRank: 1, description: "Aumenta a chance de acerto crítico corpo a corpo de todos os membros do grupo em 3% enquanto você estiver na Forma Felina ou de Urso.", type: "passive" },
+          { id: "f1", name: "Ferocity", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_hyena.jpg", row: 0, col: 1, rank: feralSpent >= 5 ? 5 : Math.min(feralSpent, 5), maxRank: 5, description: "Reduces the Rage or Energy cost of your Maul, Swipe, Claw, and Rake abilities by 5." },
+          { id: "f2", name: "Feral Aggression", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_demoralizingroar.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Increases the Attack Power reduction of Demoralizing Roar by 40% and Ferocious Bite damage by 15%." },
+          { id: "f3", name: "Sharpened Claws", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_monsterclaw_04.jpg", row: 1, col: 1, rank: feralSpent >= 8 ? 3 : Math.max(0, Math.min(3, feralSpent - 5)), maxRank: 3, description: "Increases your critical strike chance while in Bear, Dire Bear or Cat Form by 6%." },
+          { id: "f4", name: "Feral Charge", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_bear.jpg", row: 2, col: 1, rank: feralSpent >= 9 ? 1 : 0, maxRank: 1, description: "Causes you to charge an enemy, immobilizing them for 4 sec and interrupting spellcasting.", type: "active", spellCost: "5 Rage" },
+          { id: "f5", name: "Predatory Strikes", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_cat.jpg", row: 2, col: 2, rank: feralSpent >= 12 ? 3 : 0, maxRank: 3, description: "Increases your melee attack power in Cat, Bear and Dire Bear Forms by 150% of your level." },
+          { id: "f6", name: "Primal Fury", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_racial_cannibalize.jpg", row: 3, col: 0, rank: feralSpent >= 14 ? 2 : 0, maxRank: 2, description: "Gives you a 100% chance to gain an additional 5 Rage when scoring a critical strike in Bear Form or 1 combo point in Cat Form." },
+          { id: "f7", name: "Heart of the Wild", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofagility.jpg", row: 5, col: 1, rank: feralSpent >= 25 ? 5 : 0, maxRank: 5, description: "Increases your Intellect by 20%. In Dire Bear Form your Stamina is increased by 20% and in Cat Form Strength is increased by 20%." },
+          { id: "f8", name: "Leader of the Pack", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_unyeildingstamina.jpg", row: 6, col: 1, rank: feralSpent >= 31 ? 1 : 0, maxRank: 1, description: "While in Cat, Bear, or Dire Bear Form, increases ranged and melee critical chance of all party members within 45 yards by 3%.", type: "passive" },
         ],
       },
       {
         id: "restoration",
-        name: "Restauração",
+        name: "Restoration",
         icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg",
         pointsSpent: restoSpent,
         nodes: [
-          { id: "r1", name: "Marca do Ermo Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_regeneration.jpg", row: 0, col: 1, rank: restoSpent >= 5 ? 5 : Math.min(restoSpent, 5), maxRank: 5, description: "Aumenta os efeitos dos feitiços Marca do Ermo e Dádiva do Ermo em 35%." },
-          { id: "r2", name: "Furor", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_stoneclawtotem.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Dá a você 100% de chance de ganhar 10 de Fúria ao assumir a Forma de Urso, ou 40 de Energia na Forma Felina." },
-          { id: "r3", name: "Toque de Cura Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg", row: 1, col: 1, rank: restoSpent >= 10 ? 5 : 0, maxRank: 5, description: "Reduz o tempo de lançamento do feitiço Toque de Cura em 0.5s." },
-          { id: "r4", name: "Rejuvenescimento Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_rejuvenation.jpg", row: 2, col: 1, rank: restoSpent >= 13 ? 3 : 0, maxRank: 3, description: "Aumenta a eficácia do feitiço Rejuvenescimento em 15%." },
-          { id: "r5", name: "Rapidez da Natureza", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_ravenform.jpg", row: 4, col: 0, rank: restoSpent >= 21 ? 1 : 0, maxRank: 1, description: "Quando ativado, seu próximo feitiço de Natureza com lançamento inferior a 10s torna-se instantâneo.", type: "active" },
-          { id: "r6", name: "Alívio Rápido", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_relics_idolofrejuvenation.jpg", row: 6, col: 1, rank: restoSpent >= 31 ? 1 : 0, maxRank: 1, description: "Consome um efeito de Rejuvenescimento ou Recrescimento no aliado para curá-lo instantaneamente.", type: "active" },
+          { id: "r1", name: "Improved Mark of the Wild", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_regeneration.jpg", row: 0, col: 1, rank: restoSpent >= 5 ? 5 : Math.min(restoSpent, 5), maxRank: 5, description: "Increases the effects of your Mark of the Wild and Gift of the Wild spells by 35%." },
+          { id: "r2", name: "Furor", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_stoneclawtotem.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Gives you 100% chance to gain 10 Rage upon shifting into Bear and Dire Bear Form, or 40 Energy in Cat Form." },
+          { id: "r3", name: "Improved Healing Touch", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg", row: 1, col: 1, rank: restoSpent >= 10 ? 5 : 0, maxRank: 5, description: "Reduces the cast time of your Healing Touch spell by 0.5 sec." },
+          { id: "r4", name: "Nature's Swiftness", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_ravenform.jpg", row: 4, col: 0, rank: restoSpent >= 21 ? 1 : 0, maxRank: 1, description: "When activated, your next Nature spell with a base casting time less than 10 sec becomes an instant cast spell.", type: "active" },
+          { id: "r5", name: "Swiftmend", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_relics_idolofrejuvenation.jpg", row: 6, col: 1, rank: restoSpent >= 31 ? 1 : 0, maxRank: 1, description: "Consumes a Rejuvenation or Regrowth effect on a friendly target to instantly heal them.", type: "active" },
         ],
       },
     ];
   }
 
-  // 2. PALADIN (Sagrado / Proteção / Retribuição)
-  if (normClass.includes("paladin") || normClass.includes("paladino")) {
-    const isRet = normSpec.includes("retribu") || normSpec.includes("retri");
-    const isProt = normSpec.includes("prote");
-    const isHoly = normSpec.includes("sagr") || normSpec.includes("holy");
+  if (normClass.includes("paladin")) {
+    const isRet = normSpec.includes("retri");
+    const isProt = normSpec.includes("prot");
+    const isHoly = normSpec.includes("holy");
 
     const retSpent = isRet ? totalTalentPoints : 0;
     const protSpent = isProt ? totalTalentPoints : 0;
@@ -127,236 +142,407 @@ export function getClassicTalentTrees(className: string, specName: string, level
     return [
       {
         id: "holy",
-        name: "Sagrado",
+        name: "Holy",
         icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_holybolt.jpg",
         pointsSpent: holySpent,
         nodes: [
-          { id: "h1", name: "Força Espiritual", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_magicalsentry.jpg", row: 0, col: 1, rank: holySpent >= 5 ? 5 : Math.min(holySpent, 5), maxRank: 5, description: "Aumenta o total de Mana em 10%." },
-          { id: "h2", name: "Foco Espiritual", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_healingfocus.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Dá a você 70% de chance de evitar interrupções por dano ao lançar Luz Sagrada ou Lampejo de Luz." },
-          { id: "h3", name: "Imposição de Mãos Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_layonhands.jpg", row: 1, col: 2, rank: holySpent >= 7 ? 2 : 0, maxRank: 2, description: "O alvo da Imposição de Mãos ganha 30% a mais de armadura por 2 min." },
-          { id: "h4", name: "Iluminação", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_greaterheal.jpg", row: 2, col: 1, rank: holySpent >= 11 ? 5 : 0, maxRank: 5, description: "Após desferir um acerto crítico com Luz Sagrada ou Lampejo, você recupera 100% do custo em Mana." },
-          { id: "h5", name: "Favor Divino", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_heal.jpg", row: 4, col: 1, rank: holySpent >= 21 ? 1 : 0, maxRank: 1, description: "Quando ativado, seu próximo feitiço de Luz Sagrada ou Lampejo tem 100% de chance de crítico.", type: "active" },
-          { id: "h6", name: "Choque Sagrado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_searinglight.jpg", row: 6, col: 1, rank: holySpent >= 31 ? 1 : 0, maxRank: 1, description: "Dispara um raio de luz sagrada no alvo, curando um aliado ou causando dano sagrado a um inimigo.", type: "active" },
+          { id: "h1", name: "Spiritual Focus", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_healingfocus.jpg", row: 0, col: 1, rank: holySpent >= 5 ? 5 : Math.min(holySpent, 5), maxRank: 5, description: "Gives your Flash of Light and Holy Light spells a 70% chance to not lose casting time when taking damage." },
+          { id: "h2", name: "Divine Intellect", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_sleep.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Increases your total Intellect by 10%." },
+          { id: "h3", name: "Illumination", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_greaterheal.jpg", row: 2, col: 1, rank: holySpent >= 11 ? 5 : 0, maxRank: 5, description: "After getting a critical effect from your Flash of Light, Holy Light, or Holy Shock, you have 100% chance to refund the base mana cost." },
+          { id: "h4", name: "Divine Favor", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_heal.jpg", row: 4, col: 1, rank: holySpent >= 21 ? 1 : 0, maxRank: 1, description: "When activated, gives your next Flash of Light, Holy Light, or Holy Shock a 100% critical strike chance.", type: "active" },
+          { id: "h5", name: "Holy Shock", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_searinglight.jpg", row: 6, col: 1, rank: holySpent >= 31 ? 1 : 0, maxRank: 1, description: "Blasts the target with Holy energy, causing Holy damage to an enemy, or healing to an ally.", type: "active" },
         ],
       },
       {
         id: "protection",
-        name: "Proteção",
+        name: "Protection",
         icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_devotionaura.jpg",
         pointsSpent: protSpent,
         nodes: [
-          { id: "p1", name: "Anteparo", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_purifyingaura.jpg", row: 0, col: 1, rank: protSpent >= 5 ? 5 : Math.min(protSpent, 5), maxRank: 5, description: "Aumenta sua chance de bloquear ataques em 5%." },
-          { id: "p2", name: "Aura de Devoção Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_devotionaura.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Aumenta o bônus de armadura da Aura de Devoção em 25%." },
-          { id: "p3", name: "Resistência Física", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofprotection.jpg", row: 1, col: 1, rank: protSpent >= 10 ? 5 : 0, maxRank: 5, description: "Aumenta o bônus de armadura de itens em 10%." },
-          { id: "p4", name: "Bênção dos Reis", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_magic_magearmor.jpg", row: 2, col: 1, rank: protSpent >= 11 ? 1 : 0, maxRank: 1, description: "Aumenta todos os atributos do alvo em 10% por 5 min.", type: "active" },
-          { id: "p5", name: "Escudo Sagrado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofprotection.jpg", row: 6, col: 1, rank: protSpent >= 31 ? 1 : 0, maxRank: 1, description: "Aumenta a chance de bloqueio em 30% e causa dano Sagrado ao atacante ao bloquear.", type: "active" },
+          { id: "p1", name: "Redoubt", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_purifyingaura.jpg", row: 0, col: 1, rank: protSpent >= 5 ? 5 : Math.min(protSpent, 5), maxRank: 5, description: "Increases your chance to block attacks with a shield by 30% for 10 sec after taking a critical strike." },
+          { id: "p2", name: "Toughness", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofprotection.jpg", row: 1, col: 1, rank: protSpent >= 10 ? 5 : 0, maxRank: 5, description: "Increases your armor value from items by 10%." },
+          { id: "p3", name: "Blessing of Kings", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_magic_magearmor.jpg", row: 2, col: 1, rank: protSpent >= 11 ? 1 : 0, maxRank: 1, description: "Blesses a friendly target, increasing total stats by 10% for 5 min.", type: "active" },
+          { id: "p4", name: "Holy Shield", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofprotection.jpg", row: 6, col: 1, rank: protSpent >= 31 ? 1 : 0, maxRank: 1, description: "Increases chance to block by 30% and deals Holy damage to attackers on block.", type: "active" },
         ],
       },
       {
         id: "retribution",
-        name: "Retribuição",
+        name: "Retribution",
         icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_auraoflight.jpg",
         pointsSpent: retSpent,
         nodes: [
-          { id: "rt1", name: "Bênção do Poder Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_fistofjustice.jpg", row: 0, col: 1, rank: retSpent >= 5 ? 5 : Math.min(retSpent, 5), maxRank: 5, description: "Aumenta o bônus de Poder de Ataque da Bênção do Poder em 20%." },
-          { id: "rt2", name: "Julgamento Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_righteousfury.jpg", row: 0, col: 2, rank: 0, maxRank: 2, description: "Reduz a recarga do seu Julgamento em 2s." },
-          { id: "rt3", name: "Convicção", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_retributionaura.jpg", row: 1, col: 1, rank: retSpent >= 10 ? 5 : Math.max(0, Math.min(5, retSpent - 5)), maxRank: 5, description: "Aumenta sua chance de acerto crítico com ataques corpo a corpo em 5%." },
-          { id: "rt4", name: "Selo de Comando", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_innerrage.jpg", row: 2, col: 1, rank: retSpent >= 11 ? 1 : 0, maxRank: 1, description: "Concede aos seus ataques a chance de desferir dano Sagrado adicional equivalente a 70% do dano da arma.", type: "active" },
-          { id: "rt5", name: "Sanctidade Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_holysmite.jpg", row: 3, col: 1, rank: retSpent >= 16 ? 5 : 0, maxRank: 5, description: "Aumenta todo o dano Sagrado causado pelo paladino em 10%." },
-          { id: "rt6", name: "Reprimenda / Arrependimento", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_prayerofhealing.jpg", row: 6, col: 1, rank: retSpent >= 31 ? 1 : 0, maxRank: 1, description: "Coloca o alvo inimigo em estado meditativo, incapacitando-o por até 6s.", type: "active" },
+          { id: "rt1", name: "Benediction", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_frost_windwalkon.jpg", row: 0, col: 1, rank: retSpent >= 5 ? 5 : Math.min(retSpent, 5), maxRank: 5, description: "Reduces the mana cost of your Judgement and Seal spells by 15%." },
+          { id: "rt2", name: "Conviction", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_retributionaura.jpg", row: 1, col: 1, rank: retSpent >= 10 ? 5 : Math.max(0, Math.min(5, retSpent - 5)), maxRank: 5, description: "Increases your chance to get a critical strike with melee weapons by 5%." },
+          { id: "rt3", name: "Seal of Command", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_innerrage.jpg", row: 2, col: 1, rank: retSpent >= 11 ? 1 : 0, maxRank: 1, description: "Gives the Paladin a chance to deal additional Holy damage equal to 70% of normal weapon damage.", type: "active" },
+          { id: "rt4", name: "Sanctity Aura", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_mindvision.jpg", row: 4, col: 1, rank: retSpent >= 21 ? 1 : 0, maxRank: 1, description: "Increases Holy damage dealt by party members within 30 yards by 10%.", type: "active" },
+          { id: "rt5", name: "Repentance", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_prayerofhealing.jpg", row: 6, col: 1, rank: retSpent >= 31 ? 1 : 0, maxRank: 1, description: "Puts the enemy target into a state of meditation, incapacitating them for up to 6 sec.", type: "active" },
         ],
       },
     ];
   }
 
-  // 3. WARRIOR (Armas / Fúria / Proteção)
-  if (normClass.includes("warrior") || normClass.includes("guerreiro")) {
-    const isArms = normSpec.includes("armas") || normSpec.includes("arms");
-    const isFury = normSpec.includes("furia") || normSpec.includes("fury");
-    const isProt = normSpec.includes("prot");
-
-    const armsSpent = isArms ? totalTalentPoints : 0;
-    const furySpent = isFury ? totalTalentPoints : 0;
-    const protSpent = isProt ? totalTalentPoints : 0;
-
-    return [
-      {
-        id: "arms",
-        name: "Armas",
-        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_rogue_eviscerate.jpg",
-        pointsSpent: armsSpent,
-        nodes: [
-          { id: "w1", name: "Golpe Heroico Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_rogue_ambush.jpg", row: 0, col: 0, rank: armsSpent >= 3 ? 3 : Math.min(armsSpent, 3), maxRank: 3, description: "Reduz o custo em Fúria do Golpe Heroico em 3." },
-          { id: "w2", name: "Deflexão", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_parry.jpg", row: 0, col: 1, rank: armsSpent >= 5 ? 2 : Math.max(0, Math.min(armsSpent - 3, 5)), maxRank: 5, description: "Aumenta sua chance de aparar em 5%." },
-          { id: "w3", name: "Rend Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_gouge.jpg", row: 0, col: 2, rank: 0, maxRank: 3, description: "Aumenta o dano de sangramento em 35%." },
-          { id: "w4", name: "Carga Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_charge.jpg", row: 1, col: 0, rank: armsSpent >= 7 ? 2 : 0, maxRank: 2, description: "Aumenta a quantidade de Fúria gerada pela sua Carga em 6." },
-          { id: "w5", name: "Feridas Profundas", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_backstab.jpg", row: 2, col: 1, rank: armsSpent >= 11 ? 3 : 0, maxRank: 3, description: "Seus acertos críticos causam sangramento de 60% do dano médio da arma ao longo de 12s." },
-          { id: "w6", name: "Golpe Mortal (Mortal Strike)", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_savageblow.jpg", row: 6, col: 1, rank: armsSpent >= 31 ? 1 : 0, maxRank: 1, description: "Golpe feroz com a arma que causa dano de arma + 85 e reduz a cura recebida pelo alvo em 50% por 10s.", type: "active", spellCost: "30 Fúria" },
-        ],
-      },
-      {
-        id: "fury",
-        name: "Fúria",
-        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_innerrage.jpg",
-        pointsSpent: furySpent,
-        nodes: [
-          { id: "wf1", name: "Crueldade", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_rogue_eviscerate.jpg", row: 0, col: 1, rank: furySpent >= 5 ? 5 : Math.min(furySpent, 5), maxRank: 5, description: "Aumenta sua chance de acerto crítico corpo a corpo em 5%." },
-          { id: "wf2", name: "Fúria Desenfreada", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_bullrush.jpg", row: 0, col: 2, rank: 0, maxRank: 5, description: "Dá a você a chance de gerar 1 ponto de Fúria adicional após causar dano corpo a corpo." },
-          { id: "wf3", name: "Clivagem Aprimorada", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_cleave.jpg", row: 1, col: 0, rank: furySpent >= 8 ? 3 : 0, maxRank: 3, description: "Aumenta o dano causado pela Clivagem em 120%." },
-          { id: "wf4", name: "Enfurecer (Enrage)", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_shadow_unholyfrenzy.jpg", row: 2, col: 1, rank: furySpent >= 12 ? 5 : 0, maxRank: 5, description: "Garante 25% de bônus de dano corpo a corpo por 12s após sofrer um golpe crítico." },
-          { id: "wf5", name: "Sede de Sangue (Bloodthirst)", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_bloodlust.jpg", row: 6, col: 1, rank: furySpent >= 31 ? 1 : 0, maxRank: 1, description: "Ataca instantaneamente o alvo causando dano baseado em 45% do seu Poder de Ataque e regenerando vida nos próximos 5 ataques.", type: "active", spellCost: "30 Fúria" },
-        ],
-      },
-      {
-        id: "protection",
-        name: "Proteção",
-        icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_06.jpg",
-        pointsSpent: protSpent,
-        nodes: [
-          { id: "wp1", name: "Bloqueio com Escudo Aprimorado", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_defensivestance.jpg", row: 0, col: 1, rank: protSpent >= 5 ? 5 : Math.min(protSpent, 5), maxRank: 5, description: "Aumenta a chance de bloqueio em 5%." },
-          { id: "wp2", name: "Especialização em Escudo", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_06.jpg", row: 1, col: 1, rank: protSpent >= 10 ? 5 : 0, maxRank: 5, description: "Gera 1 ponto de Fúria adicional toda vez que você bloqueia um ataque." },
-          { id: "wp3", name: "Escudo Batido (Shield Slam)", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_05.jpg", row: 6, col: 1, rank: protSpent >= 31 ? 1 : 0, maxRank: 1, description: "Golpeia o alvo com o escudo, causando alto dano baseado no seu valor de bloqueio e dissipando 1 efeito mágico.", type: "active", spellCost: "20 Fúria" },
-        ],
-      },
-    ];
-  }
-
-  // 4. MAGE, ROGUE & GENERIC CLASSIC FALLBACK
+  // Fallback Warrior / Standard 3 specs
   return [
     {
-      id: "tree1",
-      name: "Especialização Primária",
-      icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_magicalsentry.jpg",
+      id: "arms",
+      name: "Arms",
+      icon: "https://wow.zamimg.com/images/wow/icons/large/ability_rogue_eviscerate.jpg",
       pointsSpent: totalTalentPoints,
       nodes: [
-        { id: "g1", name: "Poder Arcano Concentrado", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_wispheal.jpg", row: 0, col: 1, rank: Math.min(totalTalentPoints, 5), maxRank: 5, description: "Aumenta a eficácia de combate e reduz tempos de lançamento em 10%." },
-        { id: "g2", name: "Mestria Elemental", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_fire_firebolt02.jpg", row: 1, col: 1, rank: Math.max(0, Math.min(totalTalentPoints - 5, 3)), maxRank: 3, description: "Aumenta a chance de acerto crítico de habilidades ofensivas em 6%." },
-        { id: "g3", name: "Sobrecarga de Energia", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_lightning.jpg", row: 2, col: 1, rank: totalTalentPoints >= 9 ? 1 : 0, maxRank: 1, description: "Garante regeneração contínua de recursos e bônus de dano de pico.", type: "active" },
-        { id: "g4", name: "Barreira Protetora", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_shadow_detectlesserinvisibility.jpg", row: 3, col: 2, rank: totalTalentPoints >= 15 ? 2 : 0, maxRank: 2, description: "Absorve dano sofrido quando a vida cai abaixo de 35%." },
+        { id: "w1", name: "Improved Heroic Strike", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_rogue_ambush.jpg", row: 0, col: 0, rank: 3, maxRank: 3, description: "Reduces the Rage cost of your Heroic Strike ability by 3." },
+        { id: "w2", name: "Deflection", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_parry.jpg", row: 0, col: 1, rank: 2, maxRank: 5, description: "Increases your Parry chance by 5%." },
+        { id: "w3", name: "Improved Charge", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_charge.jpg", row: 1, col: 0, rank: 2, maxRank: 2, description: "Increases the Rage generated by your Charge ability by 6." },
+        { id: "w4", name: "Deep Wounds", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_backstab.jpg", row: 2, col: 1, rank: 3, maxRank: 3, description: "Your critical strikes cause the opponent to bleed for 60% of your melee weapon's average damage over 12 sec." },
+        { id: "w5", name: "Mortal Strike", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_savageblow.jpg", row: 6, col: 1, rank: 1, maxRank: 1, description: "A vicious weapon strike that deals weapon damage plus 85 and reduces healing received by 50%.", type: "active", spellCost: "30 Rage" },
       ],
     },
     {
-      id: "tree2",
-      name: "Especialização Secundária",
-      icon: "https://wow.zamimg.com/images/wow/icons/large/spell_fire_flameshock.jpg",
+      id: "fury",
+      name: "Fury",
+      icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_innerrage.jpg",
       pointsSpent: 0,
       nodes: [
-        { id: "g5", name: "Impacto Crítico Devastador", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_fire_immolation.jpg", row: 0, col: 1, rank: 0, maxRank: 5, description: "Aumenta o multiplicador de dano crítico em 25%." },
-        { id: "g6", name: "Velocidade de Conjuração", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_quickshot.jpg", row: 1, col: 1, rank: 0, maxRank: 3, description: "Aumenta a velocidade de ataque e conjuração em 9%." },
+        { id: "wf1", name: "Cruelty", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_rogue_eviscerate.jpg", row: 0, col: 1, rank: 0, maxRank: 5, description: "Increases your chance to get a critical strike with melee weapons by 5%." },
+        { id: "wf2", name: "Enrage", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_shadow_unholyfrenzy.jpg", row: 2, col: 1, rank: 0, maxRank: 5, description: "Gives you a 25% melee damage bonus for 12 sec after being the victim of a critical strike." },
+        { id: "wf3", name: "Bloodthirst", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_bloodlust.jpg", row: 6, col: 1, rank: 0, maxRank: 1, description: "Instantly attack the target causing damage equal to 45% of your attack power and healing.", type: "active" },
       ],
     },
     {
-      id: "tree3",
-      name: "Especialização de Suporte / Defesa",
-      icon: "https://wow.zamimg.com/images/wow/icons/large/spell_frost_frostarmor02.jpg",
+      id: "protection",
+      name: "Protection",
+      icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_06.jpg",
       pointsSpent: 0,
       nodes: [
-        { id: "g7", name: "Reserva Arcana", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_arcane_arcane01.jpg", row: 0, col: 1, rank: 0, maxRank: 5, description: "Reduz o consumo de energia ou mana em 10%." },
+        { id: "wp1", name: "Shield Specialization", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_06.jpg", row: 0, col: 1, rank: 0, maxRank: 5, description: "Increases your chance to block attacks with a shield by 5% and generates 1 Rage on block." },
+        { id: "wp2", name: "Shield Slam", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_05.jpg", row: 6, col: 1, rank: 0, maxRank: 1, description: "Slams the target with your shield, causing high damage and dispelling 1 magic effect.", type: "active" },
       ],
     },
   ];
 }
 
 // -------------------------------------------------------------
-// RETAIL TALENT DUAL TREE (Class Tree + Spec Tree)
+// CLASSIC TBC (Burning Crusade 2.4.3 - Level 70, 61 Points & 41-pt Capstones)
 // -------------------------------------------------------------
+export function getTBCTalentTrees(
+  className: string,
+  specName: string,
+  level: number = 70
+): WoWTalentTreeData[] {
+  const normClass = (className || "Druid").toLowerCase();
+  const normSpec = (specName || "Feral").toLowerCase();
+  const trees = getClassicTalentTrees(className, specName, level);
 
+  // Add iconic TBC 41-point capstones for each tree!
+  trees.forEach((tree) => {
+    if (tree.id === "feral") {
+      tree.nodes.push({
+        id: "tbc_mangle",
+        name: "Mangle",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_mangle2.jpg",
+        row: 8,
+        col: 1,
+        rank: 1,
+        maxRank: 1,
+        description: "Mangles the target for 115% weapon damage and causes the target to take 30% additional damage from Bleed effects and Shred.",
+        type: "active",
+      });
+      tree.pointsSpent = 41;
+    } else if (tree.id === "restoration") {
+      tree.nodes.push({
+        id: "tbc_treeoflife",
+        name: "Tree of Life",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_treeoflife.jpg",
+        row: 8,
+        col: 1,
+        rank: 0,
+        maxRank: 1,
+        description: "Shapeshift into the Tree of Life. While in this form your healing aura increases healing received by 9% of your Spirit.",
+        type: "active",
+      });
+    } else if (tree.id === "balance") {
+      tree.nodes.push({
+        id: "tbc_forceofnature",
+        name: "Force of Nature",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_forceofnature.jpg",
+        row: 8,
+        col: 1,
+        rank: 0,
+        maxRank: 1,
+        description: "Summons 3 treants to attack target for 30 sec.",
+        type: "active",
+      });
+    } else if (tree.id === "retribution") {
+      tree.nodes.push({
+        id: "tbc_crusaderstrike",
+        name: "Crusader Strike",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_crusaderstrike.jpg",
+        row: 8,
+        col: 1,
+        rank: 1,
+        maxRank: 1,
+        description: "An instant weapon strike that causes 110% weapon damage and refreshes all Judgements on the target.",
+        type: "active",
+      });
+      tree.pointsSpent = 41;
+    } else if (tree.id === "protection" && normClass.includes("paladin")) {
+      tree.nodes.push({
+        id: "tbc_avengersshield",
+        name: "Avenger's Shield",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_avengersshield.jpg",
+        row: 8,
+        col: 1,
+        rank: 0,
+        maxRank: 1,
+        description: "Hurls a holy shield at the enemy, dealing Holy damage and dazing them, bouncing to up to 3 targets.",
+        type: "active",
+      });
+    } else if (tree.id === "arms") {
+      tree.nodes.push({
+        id: "tbc_endlessrage",
+        name: "Endless Rage",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_endlessrage.jpg",
+        row: 8,
+        col: 1,
+        rank: 1,
+        maxRank: 1,
+        description: "You generate 25% more Rage from damage dealt.",
+        type: "passive",
+      });
+      tree.pointsSpent = 41;
+    } else if (tree.id === "fury") {
+      tree.nodes.push({
+        id: "tbc_rampage",
+        name: "Rampage",
+        icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_rampage.jpg",
+        row: 8,
+        col: 1,
+        rank: 0,
+        maxRank: 1,
+        description: "Goes on a rampage, increasing melee attack power by 50 and causing most successful melee hits to increase attack power further.",
+        type: "active",
+      });
+    }
+  });
+
+  return trees;
+}
+
+// -------------------------------------------------------------
+// CLASSIC MOP (Mists of Pandaria 5.4 - 6 Tier Matrix: Lv 15, 30, 45, 60, 75, 90)
+// -------------------------------------------------------------
+export function getMoPTalentMatrix(className: string, specName: string): MoPTierRow[] {
+  const normClass = (className || "Druid").toLowerCase();
+
+  if (normClass.includes("druid")) {
+    return [
+      {
+        level: 15,
+        talents: [
+          { id: "mop_d1", name: "Feline Swiftness", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_tirelesspursuit.jpg", row: 0, col: 0, rank: 1, maxRank: 1, selected: true, description: "Increases your movement speed by 15% at all times." },
+          { id: "mop_d2", name: "Displacer Beast", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_displacement.jpg", row: 0, col: 1, rank: 0, maxRank: 1, selected: false, description: "Teleports the Druid up to 20 yards forward, activates Cat Form, and grants 50% movement speed for 4 sec.", type: "active", cooldown: "30s" },
+          { id: "mop_d3", name: "Wild Charge", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_wildcharge.jpg", row: 0, col: 2, rank: 0, maxRank: 1, selected: false, description: "Grants a movement ability that varies by shapeshift form.", type: "active", cooldown: "15s" },
+        ],
+      },
+      {
+        level: 30,
+        talents: [
+          { id: "mop_d4", name: "Ysera's Gift", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg", row: 1, col: 0, rank: 1, maxRank: 1, selected: true, description: "Heals you for 5% of your maximum health every 5 sec. If at full health, heals a nearby injured party member." },
+          { id: "mop_d5", name: "Renewal", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_naturestouch.jpg", row: 1, col: 1, rank: 0, maxRank: 1, selected: false, description: "Instantly heals you for 30% of your maximum health. Usable in all shapeshift forms.", type: "active", cooldown: "2 min" },
+          { id: "mop_d6", name: "Cenarion Ward", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_naturalperfection.jpg", row: 1, col: 2, rank: 0, maxRank: 1, selected: false, description: "Protects a friendly target, healing them for periodic Nature healing every 2 sec for 6 sec when taking damage.", type: "active", cooldown: "30s" },
+        ],
+      },
+      {
+        level: 45,
+        talents: [
+          { id: "mop_d7", name: "Faerie Swarm", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg", row: 2, col: 0, rank: 0, maxRank: 1, selected: false, description: "Upgrades Faerie Fire, also reducing movement speed by 50% for 15 sec." },
+          { id: "mop_d8", name: "Mass Entanglement", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_stranglevines.jpg", row: 2, col: 1, rank: 0, maxRank: 1, selected: false, description: "Roots target and all enemies within 15 yards in place for up to 20 sec.", type: "active", cooldown: "30s" },
+          { id: "mop_d9", name: "Typhoon", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_typhoon.jpg", row: 2, col: 2, rank: 1, maxRank: 1, selected: true, description: "Summons a violent Typhoon that knocks back enemies within 30 yards and dazes them for 6 sec.", type: "active", cooldown: "30s" },
+        ],
+      },
+      {
+        level: 60,
+        talents: [
+          { id: "mop_d10", name: "Soul of the Forest", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_manatree.jpg", row: 3, col: 0, rank: 0, maxRank: 1, selected: false, description: "Grants powerful bonuses after casting your spec's signature core abilities." },
+          { id: "mop_d11", name: "Incarnation: King of the Jungle", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_incarnation.jpg", row: 3, col: 1, rank: 1, maxRank: 1, selected: true, description: "An improved Cat Form that allows Prowl in combat and reduces Energy costs by 50%.", type: "active", cooldown: "3 min" },
+          { id: "mop_d12", name: "Force of Nature", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_forceofnature.jpg", row: 3, col: 2, rank: 0, maxRank: 1, selected: false, description: "Summons a Treant which immediately assists you in battle for 15 sec.", type: "active" },
+        ],
+      },
+      {
+        level: 75,
+        talents: [
+          { id: "mop_d13", name: "Disorienting Roar", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_demoralizingroar.jpg", row: 4, col: 0, rank: 0, maxRank: 1, selected: false, description: "Invokes the roar of Ursoc, disorienting all enemies within 10 yards for 3 sec.", type: "active", cooldown: "30s" },
+          { id: "mop_d14", name: "Ursol's Vortex", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_ursolsvortex.jpg", row: 4, col: 1, rank: 1, maxRank: 1, selected: true, description: "Creates a vortex of wind at target location. Enemies who try to leave are pulled back into the center.", type: "active", cooldown: "1 min" },
+          { id: "mop_d15", name: "Mighty Bash", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_bash.jpg", row: 4, col: 2, rank: 0, maxRank: 1, selected: false, description: "Invokes the spirit of Ursoc to stun the target for 5 sec. Usable in all forms.", type: "active", cooldown: "50s" },
+        ],
+      },
+      {
+        level: 90,
+        talents: [
+          { id: "mop_d16", name: "Heart of the Wild", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofagility.jpg", row: 5, col: 0, rank: 1, maxRank: 1, selected: true, description: "Dramatically increases the Druid's ability to heal, tank, or cast damage spells outside their normal role for 45 sec.", type: "active", cooldown: "6 min" },
+          { id: "mop_d17", name: "Dream of Cenarius", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_dreamstate.jpg", row: 5, col: 1, rank: 0, maxRank: 1, selected: false, description: "Casting Healing Touch increases the damage of your next 2 melee abilities by 30%." },
+          { id: "mop_d18", name: "Nature's Vigil", icon: "https://wow.zamimg.com/images/wow/icons/large/achievement_zone_feralas.jpg", row: 5, col: 2, rank: 0, maxRank: 1, selected: false, description: "While active, all single-target damage and healing spells also heal a nearby friendly target for 25% of the amount.", type: "active", cooldown: "1.5 min" },
+        ],
+      },
+    ];
+  }
+
+  // Paladin MoP Matrix
+  if (normClass.includes("paladin")) {
+    return [
+      {
+        level: 15,
+        talents: [
+          { id: "mop_p1", name: "Speed of Light", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_speedoflight.jpg", row: 0, col: 0, rank: 1, maxRank: 1, selected: true, description: "Increases your movement speed by 70% for 8 sec.", type: "active", cooldown: "45s" },
+          { id: "mop_p2", name: "Long Arm of the Law", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_longarmofthelaw.jpg", row: 0, col: 1, rank: 0, maxRank: 1, selected: false, description: "A successful Judgement increases your movement speed by 45% for 3 sec." },
+          { id: "mop_p3", name: "Pursuit of Justice", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_vindicatingstrike.jpg", row: 0, col: 2, rank: 0, maxRank: 1, selected: false, description: "Increases movement speed by 15% plus 5% for each charge of Holy Power up to 3." },
+        ],
+      },
+      {
+        level: 30,
+        talents: [
+          { id: "mop_p4", name: "Fist of Justice", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_fistofjustice.jpg", row: 1, col: 0, rank: 1, maxRank: 1, selected: true, description: "Stuns the target for 6 sec. 20 yd range.", type: "active", cooldown: "30s" },
+          { id: "mop_p5", name: "Repentance", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_prayerofhealing.jpg", row: 1, col: 1, rank: 0, maxRank: 1, selected: false, description: "Incapacitates an enemy target for up to 1 min.", type: "active", cooldown: "15s" },
+          { id: "mop_p6", name: "Evil is a Point of View", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_turnundead.jpg", row: 1, col: 2, rank: 0, maxRank: 1, selected: false, description: "Your Turn Evil spell now also affects Humanoids and Beasts." },
+        ],
+      },
+      {
+        level: 45,
+        talents: [
+          { id: "mop_p7", name: "Selfless Healer", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_selflesshealer.jpg", row: 2, col: 0, rank: 1, maxRank: 1, selected: true, description: "Your successful Judgements reduce cast time and mana cost of your next Flash of Light by 35%." },
+          { id: "mop_p8", name: "Eternal Flame", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_torch_lit.jpg", row: 2, col: 1, rank: 0, maxRank: 1, selected: false, description: "Replaces Word of Glory, providing periodic healing over 30 sec.", type: "active" },
+          { id: "mop_p9", name: "Sacred Shield", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_blessedmending.jpg", row: 2, col: 2, rank: 0, maxRank: 1, selected: false, description: "Protects target with a holy shield that absorbs damage every 6 sec.", type: "active" },
+        ],
+      },
+      {
+        level: 60,
+        talents: [
+          { id: "mop_p10", name: "Hand of Purity", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_sealofwisdom.jpg", row: 3, col: 0, rank: 0, maxRank: 1, selected: false, description: "Places a Hand on an ally, reducing damage from periodic effects by 80% for 6 sec.", type: "active", cooldown: "30s" },
+          { id: "mop_p11", name: "Unbreakable Spirit", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_unbreakablespirit.jpg", row: 3, col: 1, rank: 1, maxRank: 1, selected: true, description: "Reduces the cooldown of your Divine Shield, Divine Protection, and Lay on Hands by 50%." },
+          { id: "mop_p12", name: "Clemency", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_clemency.jpg", row: 3, col: 2, rank: 0, maxRank: 1, selected: false, description: "You can use Hand of Freedom, Hand of Protection, and Hand of Sacrifice twice before incurring cooldown." },
+        ],
+      },
+      {
+        level: 75,
+        talents: [
+          { id: "mop_p13", name: "Holy Avenger", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_holyavenger.jpg", row: 4, col: 0, rank: 1, maxRank: 1, selected: true, description: "Abilities that generate Holy Power generate 3 charges of Holy Power for 18 sec.", type: "active", cooldown: "2 min" },
+          { id: "mop_p14", name: "Sanctified Wrath", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_sanctifiedwrath.jpg", row: 4, col: 1, rank: 0, maxRank: 1, selected: false, description: "Avenging Wrath lasts 50% longer and grants enhanced rotational ability cooldowns." },
+          { id: "mop_p15", name: "Divine Purpose", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_divinepurpose.jpg", row: 4, col: 2, rank: 0, maxRank: 1, selected: false, description: "Abilities that cost Holy Power have a 25% chance to cause your next Holy Power ability to cost no Holy Power." },
+        ],
+      },
+      {
+        level: 90,
+        talents: [
+          { id: "mop_p16", name: "Holy Prism", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_paladin_holyprism.jpg", row: 5, col: 0, rank: 0, maxRank: 1, selected: false, description: "Sends a beam of holy light into a target, bursting into radiant energy.", type: "active", cooldown: "20s" },
+          { id: "mop_p17", name: "Light's Hammer", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_paladin_lightshammer.jpg", row: 5, col: 1, rank: 0, maxRank: 1, selected: false, description: "Hurls a Light-infused hammer into the ground, blasting holy arcs at enemies and healing allies.", type: "active", cooldown: "1 min" },
+          { id: "mop_p18", name: "Execution Sentence", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_paladin_executionsentence.jpg", row: 5, col: 2, rank: 1, maxRank: 1, selected: true, description: "A hammer slowly falls from the sky, dealing increasing Holy damage over 10 sec, culminating in a burst.", type: "active", cooldown: "1 min" },
+        ],
+      },
+    ];
+  }
+
+  // Generic Warrior / Generic MoP Matrix
+  return [
+    {
+      level: 15,
+      talents: [
+        { id: "mop_w1", name: "Juggernaut", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_charge.jpg", row: 0, col: 0, rank: 1, maxRank: 1, selected: true, description: "Reduces the cooldown of Charge to 12 sec." },
+        { id: "mop_w2", name: "Double Time", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_horn_04.jpg", row: 0, col: 1, rank: 0, maxRank: 1, selected: false, description: "You may use Charge twice in a row with a 20 sec recharge." },
+        { id: "mop_w3", name: "Warbringer", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_warbringer.jpg", row: 0, col: 2, rank: 0, maxRank: 1, selected: false, description: "Your Charge stuns target for 4 sec." },
+      ],
+    },
+    {
+      level: 30,
+      talents: [
+        { id: "mop_w4", name: "Enraged Regeneration", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_focusedrage.jpg", row: 1, col: 0, rank: 1, maxRank: 1, selected: true, description: "Instantly heals you for 10% of total health, and an additional 20% over 5 sec.", type: "active", cooldown: "1 min" },
+        { id: "mop_w5", name: "Second Wind", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_harass.jpg", row: 1, col: 1, rank: 0, maxRank: 1, selected: false, description: "Whenever you are below 35% health, you regenerate 3% health per second." },
+        { id: "mop_w6", name: "Impending Victory", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_healingtouch.jpg", row: 1, col: 2, rank: 0, maxRank: 1, selected: false, description: "Instantly attack the target for weapon damage and heal for 15% health.", type: "active", cooldown: "30s" },
+      ],
+    },
+    {
+      level: 45,
+      talents: [
+        { id: "mop_w7", name: "Staggering Shout", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_warcry.jpg", row: 2, col: 0, rank: 0, maxRank: 1, selected: false, description: "Roots all snared enemies within 20 yards for 5 sec." },
+        { id: "mop_w8", name: "Piercing Howl", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_shadow_deathscream.jpg", row: 2, col: 1, rank: 1, maxRank: 1, selected: true, description: "Causes all enemies within 15 yards to be snared by 50% for 15 sec.", type: "active" },
+        { id: "mop_w9", name: "Disrupting Shout", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_shieldbash.jpg", row: 2, col: 2, rank: 0, maxRank: 1, selected: false, description: "Interrupts all spellcasting within 10 yards and locks school for 4 sec.", type: "active", cooldown: "40s" },
+      ],
+    },
+    {
+      level: 60,
+      talents: [
+        { id: "mop_w10", name: "Bladestorm", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_bladestorm.jpg", row: 3, col: 0, rank: 1, maxRank: 1, selected: true, description: "Become an unstoppable storm of destructive force, spinning for 6 sec.", type: "active", cooldown: "1 min" },
+        { id: "mop_w11", name: "Shockwave", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_shockwave.jpg", row: 3, col: 1, rank: 0, maxRank: 1, selected: false, description: "Sends a wave of force in a frontal cone, stunning enemies for 4 sec.", type: "active", cooldown: "40s" },
+        { id: "mop_w12", name: "Dragon Roar", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_dragonroar.jpg", row: 3, col: 2, rank: 0, maxRank: 1, selected: false, description: "Roars ferociously, dealing damage that ignores armor and knocks back enemies.", type: "active", cooldown: "1 min" },
+      ],
+    },
+    {
+      level: 75,
+      talents: [
+        { id: "mop_w13", name: "Mass Spell Reflection", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_shieldreflection.jpg", row: 4, col: 0, rank: 1, maxRank: 1, selected: true, description: "Reflects the next spell cast on you and all party members within 20 yards.", type: "active", cooldown: "1 min" },
+        { id: "mop_w14", name: "Safeguard", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_safeguard.jpg", row: 4, col: 1, rank: 0, maxRank: 1, selected: false, description: "Run at top speed to an ally, intercepting next attack and reducing damage taken by 20%." },
+        { id: "mop_w15", name: "Vigilance", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_vigilance.jpg", row: 4, col: 2, rank: 0, maxRank: 1, selected: false, description: "Focus your protective gaze on an ally, reducing damage they take by 30% for 12 sec.", type: "active", cooldown: "2 min" },
+      ],
+    },
+    {
+      level: 90,
+      talents: [
+        { id: "mop_w16", name: "Avatar", icon: "https://wow.zamimg.com/images/wow/icons/large/warrior_talent_icon_avatar.jpg", row: 5, col: 0, rank: 1, maxRank: 1, selected: true, description: "Transform into an unstoppable colossus for 20 sec, increasing damage dealt by 20%.", type: "active", cooldown: "3 min" },
+        { id: "mop_w17", name: "Bloodbath", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_bloodspurt.jpg", row: 5, col: 1, rank: 0, maxRank: 1, selected: false, description: "For 12 sec, your melee attacks cause an additional 30% bleed damage and slow enemies.", type: "active", cooldown: "1 min" },
+        { id: "mop_w18", name: "Storm Bolt", icon: "https://wow.zamimg.com/images/wow/icons/large/warrior_talent_icon_stormbolt.jpg", row: 5, col: 2, rank: 0, maxRank: 1, selected: false, description: "Hurl your weapon at an enemy, dealing high damage and stunning them for 4 sec.", type: "active", cooldown: "30s" },
+      ],
+    },
+  ];
+}
+
+// -------------------------------------------------------------
+// RETAIL (Midnight - Class Tree + Spec Tree + Hero Talents)
+// -------------------------------------------------------------
 export function getRetailDualTalentTrees(className: string, specName: string): RetailDualTalents {
   const normClass = (className || "Druid").toLowerCase();
   const normSpec = (specName || "Feral").toLowerCase();
 
-  // DRUID
-  if (normClass.includes("druid") || normClass.includes("druida")) {
-    return {
-      classTree: {
-        title: "Árvore de Classe: Druida",
-        pointsSpent: 31,
-        maxPoints: 31,
-        nodes: [
-          { id: "rc_d1", name: "Rejuvenescimento", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_rejuvenation.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", spellCost: "2.2% Mana", castTime: "Instantâneo", description: "Cura o alvo aliado ao longo de 12s." },
-          { id: "rc_d2", name: "Fogo Lunar", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg", row: 0, col: 2, rank: 1, maxRank: 1, type: "active", spellCost: "1.2% Mana", castTime: "Instantâneo", description: "Um feitiço rápido que causa dano Arcano e dano adicional ao longo de 18s." },
-          { id: "rc_d3", name: "Forma de Felino", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_catform.jpg", row: 1, col: 0, rank: 1, maxRank: 1, type: "active", description: "Transforma o druida em felino, aumentando a velocidade de movimento em 30%." },
-          { id: "rc_d4", name: "Marca do Ermo", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_regeneration.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", description: "Aumenta a Versatilidade de todos os membros do grupo ou raide em 3%." },
-          { id: "rc_d5", name: "Forma de Urso", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_racial_bearform.jpg", row: 1, col: 2, rank: 1, maxRank: 1, type: "active", description: "Transforma o druida em urso, aumentando a armadura em 220% e o vigor em 45%." },
-          { id: "rc_d6", name: "Investida Selvagem", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_hunter_pet_bear.jpg", row: 2, col: 1, rank: 1, maxRank: 1, type: "choice", cooldown: "15s", description: "Garante uma mobilidade situacional conforme a forma atual (salto em felino, investida em urso)." },
-          { id: "rc_d7", name: "Pele de Carvalho", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_stoneclawtotem.jpg", row: 3, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "1 min", description: "Reduz todo o dano sofrido em 20% por 12s." },
-          { id: "rc_d8", name: "Ciclone", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_earthbindtotem.jpg", row: 4, col: 0, rank: 1, maxRank: 1, type: "active", castTime: "1.7s", description: "Ergue o alvo no ar, tornando-o invulnerável mas incapaz de agir por 6s." },
-          { id: "rc_d9", name: "Coração do Ermo", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofagility.jpg", row: 6, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "5 min", description: "Aprimora massivamente as habilidades fora da sua especialização primária por 45s." },
-        ],
-      },
-      specTree: {
-        title: "Árvore de Especialização: Combate Feral",
-        specName: "Feral",
-        pointsSpent: 30,
-        maxPoints: 30,
-        nodes: [
-          { id: "rs_f1", name: "Rasgar", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_ghoulfrenzy.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", spellCost: "30 Energia", description: "Golpe finalizador que estraçalha o alvo, causando sangramento contínuo que escala com pontos de combo." },
-          { id: "rs_f2", name: "Mordida Feroz", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_ferociousbite.jpg", row: 0, col: 2, rank: 1, maxRank: 1, type: "active", spellCost: "25 Energia", description: "Golpe finalizador devastador que consome até 25 de energia extra para dobrar o dano." },
-          { id: "rs_f3", name: "Fúria do Tigre", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_jungletiger.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "30s", description: "Restaura 50 de Energia instantaneamente e aumenta seu dano físico em 15% por 10s." },
-          { id: "rs_f4", name: "Patada Furiosa", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_swipe.jpg", row: 2, col: 0, rank: 1, maxRank: 1, type: "active", spellCost: "35 Energia", description: "Ataca todos os inimigos próximos causando dano físico." },
-          { id: "rs_f5", name: "Fartura Predatória", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_predatoryinstincts.jpg", row: 2, col: 1, rank: 2, maxRank: 2, type: "passive", description: "Seus finalizadores têm 20% de chance por ponto de combo de tornar seu próximo feitiço de cura instantâneo." },
-          { id: "rs_f6", name: "Berserk / Encarnação", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_incarnation.jpg", row: 4, col: 1, rank: 1, maxRank: 1, type: "choice", cooldown: "3 min", description: "Assume a forma de Avatar de Ashamane, reduzindo o custo de Energia de todas as habilidades em 50%." },
-          { id: "rs_f7", name: "Frenesi Feral", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_primaltenacity.jpg", row: 6, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "45s", description: "Desfere um frenesi de 5 garras no alvo causando dano massivo de sangramento e concedendo 5 pontos de combo." },
-        ],
-      },
-    };
-  }
+  const heroTreeName = normClass.includes("druid")
+    ? "Elune's Chosen"
+    : normClass.includes("paladin")
+    ? "Herald of the Sun"
+    : normClass.includes("warrior")
+    ? "Mountain Thane"
+    : "Midnight Paragon";
 
-  // PALADIN
-  if (normClass.includes("paladin") || normClass.includes("paladino")) {
-    return {
-      classTree: {
-        title: "Árvore de Classe: Paladino",
-        pointsSpent: 31,
-        maxPoints: 31,
-        nodes: [
-          { id: "rc_p1", name: "Imposição de Mãos", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_layonhands.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "7 min", description: "Cura um alvo aliado instantaneamente no valor da vida máxima do paladino." },
-          { id: "rc_p2", name: "Julgamento", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_righteousfury.jpg", row: 0, col: 2, rank: 1, maxRank: 1, type: "active", cooldown: "6s", description: "Julga o alvo com luz sagrada, fazendo com que receba 20% a mais de dano do seu próximo gastador de Poder Sagrado." },
-          { id: "rc_p3", name: "Bênção da Liberdade", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_sealofvalor.jpg", row: 1, col: 0, rank: 1, maxRank: 1, type: "active", cooldown: "25s", description: "Concede imunidade a efeitos redutores de movimento por 8s." },
-          { id: "rc_p4", name: "Martelo da Justiça", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_sealofmight.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "45s", description: "Atordoa o alvo por 6s." },
-          { id: "rc_p5", name: "Escudo Divino", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_divineintervention.jpg", row: 3, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "5 min", description: "Protege o paladino com uma bolha divina imune a todo tipo de dano e feitiços por 8s." },
-          { id: "rc_p6", name: "Cavalgar Divino", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_charger.jpg", row: 4, col: 2, rank: 2, maxRank: 2, type: "active", cooldown: "45s", description: "Monta na sua montaria de batalha por 3s, aumentando a velocidade em 100%." },
-          { id: "rc_p7", name: "Proteção da Luz", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_restoration.jpg", row: 6, col: 1, rank: 1, maxRank: 1, type: "active", description: "Garante resistência mágica e regeneração de Poder Sagrado contínua." },
-        ],
-      },
-      specTree: {
-        title: "Árvore de Especialização: Retribuição",
-        specName: "Retribution",
-        pointsSpent: 30,
-        maxPoints: 30,
-        nodes: [
-          { id: "rs_p1", name: "Veredito do Templário", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_paladin_templarsverdict.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", spellCost: "3 Poder Sagrado", description: "Golpe devastador com arma que causa alto dano Sagrado no alvo." },
-          { id: "rs_p2", name: "Lâmina da Justiça", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_bladeofjustice.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "10.5s", description: "Perfura o alvo com lâminas de luz, gerando 2 de Poder Sagrado." },
-          { id: "rs_f3", name: "Tempestade Divina", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_paladin_divinestorm.jpg", row: 2, col: 0, rank: 1, maxRank: 1, type: "active", spellCost: "3 Poder Sagrado", description: "Vórtice giratório de armas de luz que atinge até 5 inimigos ao redor." },
-          { id: "rs_p4", name: "Ira Vingativa (Asas)", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_avenginewrath.jpg", row: 3, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "2 min", description: "Invoca as asas sagradas da ira, aumentando o dano e a chance de acerto crítico em 20% por 20s." },
-          { id: "rs_p5", name: "Rastro de Cinzas", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_weaponmastery.jpg", row: 5, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "45s", description: "Corta os inimigos à frente com Cinzária, causando dano radiante massivo, atordoando demônios/mortos-vivos e gerando 3 de Poder Sagrado." },
-        ],
-      },
-    };
-  }
-
-  // DEFAULT / OTHER RETAIL CLASSES (Warrior, Mage, etc.)
   return {
     classTree: {
-      title: `Árvore de Classe: ${className}`,
+      title: `Class Tree: ${className}`,
       pointsSpent: 31,
       maxPoints: 31,
       nodes: [
-        { id: "rc_g1", name: "Fortitude & Vigor", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_wordfortitude.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "passive", description: "Aumenta o Vigor e atributos vitais básicos em 6%." },
-        { id: "rc_g2", name: "Ímpeto de Combate", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_warrior_charge.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "20s", description: "Concede mobilidade rápida para engajar ou reposicionar no combate." },
-        { id: "rc_g3", name: "Bastião Protetor", icon: "https://wow.zamimg.com/images/wow/icons/large/inv_shield_06.jpg", row: 2, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "1.5 min", description: "Reduz o dano sofrido em 20% por 8s." },
-        { id: "rc_g4", name: "Controle de Grupo & Interrupção", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_kick.jpg", row: 3, col: 0, rank: 1, maxRank: 1, type: "active", cooldown: "15s", description: "Interrompe a conjuração do feitiço inimigo e impede lançamentos daquela escola por 3s." },
+        { id: "rc_1", name: "Rejuvenation / Vitality", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_rejuvenation.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", spellCost: "2.2% Mana", castTime: "Instant", description: "Heals target for Nature healing over 12 sec." },
+        { id: "rc_2", name: "Moonfire / Arcane Blast", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg", row: 0, col: 2, rank: 1, maxRank: 1, type: "active", spellCost: "1.2% Mana", castTime: "Instant", description: "Burns enemy with swift lunar rays for Arcane damage over 18 sec." },
+        { id: "rc_3", name: "Mark of the Wild", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_regeneration.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", description: "Increases Versatility of all party and raid members by 3%." },
+        { id: "rc_4", name: "Barkskin / Iron Skin", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_stoneclawtotem.jpg", row: 3, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "1 min", description: "Reduces all damage taken by 20% for 12 sec." },
+        { id: "rc_5", name: "Heart of the Wild", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_blessingofagility.jpg", row: 6, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "5 min", description: "Dramatically enhances off-spec capabilities for 45 sec." },
       ],
     },
     specTree: {
-      title: `Árvore de Especialização: ${specName}`,
+      title: `Spec Tree: ${specName}`,
       specName,
       pointsSpent: 30,
       maxPoints: 30,
       nodes: [
-        { id: "rs_g1", name: "Habilidade Primária de Rotação", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_criticalstrike.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", description: "Ataque ou feitiço definidor da rotação que acumula recursos ou desencadeia procs." },
-        { id: "rs_g2", name: "Explosão de Dano Concentrada", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_bloodlust.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "45s", description: "Aumenta o poder destrutivo da especialização por um breve período." },
-        { id: "rs_g3", name: "Poder de Capstone", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_magicalsentry.jpg", row: 3, col: 1, rank: 1, maxRank: 1, type: "passive", description: "Habilidade de topo de árvore que amplifica permanentemente o pico da especialização." },
+        { id: "rs_1", name: "Rip / Mortal Strike", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_ghoulfrenzy.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "active", spellCost: "30 Energy", description: "Signature rotational finisher that causes heavy bleeding damage." },
+        { id: "rs_2", name: "Ferocious Bite / Bloodthirst", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_ferociousbite.jpg", row: 0, col: 2, rank: 1, maxRank: 1, type: "active", spellCost: "25 Energy", description: "Devastating burst damage strike consuming excess resources." },
+        { id: "rs_3", name: "Tiger's Fury / Recklessness", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_jungletiger.jpg", row: 1, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "30s", description: "Instantly restores resources and increases physical damage by 15%." },
+        { id: "rs_4", name: "Incarnation / Avatar", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_druid_incarnation.jpg", row: 4, col: 1, rank: 1, maxRank: 1, type: "choice", cooldown: "3 min", description: "Ascend into a supreme combat form with halved costs and empowered procs." },
+        { id: "rs_5", name: "Apex Capstone", icon: "https://wow.zamimg.com/images/wow/icons/large/ability_druid_primaltenacity.jpg", row: 6, col: 1, rank: 1, maxRank: 1, type: "active", cooldown: "45s", description: "Unleash devastating apex burst dealing severe physical damage and generating combo points." },
+      ],
+    },
+    heroTree: {
+      heroTreeName,
+      pointsSpent: 10,
+      maxPoints: 10,
+      nodes: [
+        { id: "hero_keystone", name: `${heroTreeName} Keystone`, icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_auramastery.jpg", row: 0, col: 1, rank: 1, maxRank: 1, type: "passive", description: "Signature hero mastery enabling lunar arcane strikes and ambient shielding." },
+        { id: "hero_minor1", name: "Astral Attunement", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_starfall.jpg", row: 1, col: 0, rank: 1, maxRank: 1, type: "passive", description: "Increases Arcane and Astral damage dealt by 10%." },
+        { id: "hero_minor2", name: "Lunar Ward", icon: "https://wow.zamimg.com/images/wow/icons/large/spell_holy_devotionaura.jpg", row: 1, col: 2, rank: 1, maxRank: 1, type: "passive", description: "Converts 15% of critical damage dealt into an ambient shield." },
+        { id: "hero_capstone", name: `${heroTreeName} Capstone`, icon: "https://wow.zamimg.com/images/wow/icons/large/spell_nature_forceofnature.jpg", row: 3, col: 1, rank: 1, maxRank: 1, type: "passive", description: "Pinnacle Hero Talent that unleashes an apocalyptic celestial barrage on critical hits." },
       ],
     },
   };

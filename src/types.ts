@@ -126,12 +126,15 @@ export interface Game {
   blizzardRealm?: string;
   blizzardCharacters?: BlizzardCharacterSummary[];
   blizzardProfileData?: BlizzardProfileData;
+  wowVersion?: "retail" | "classic" | "forever" | "tbc" | "mop" | string;
   igdbId?: number;
   igdbRating?: number;
   igdbSlug?: string;
   igdbUrl?: string;
   steamGridDbId?: number;
 }
+
+export type WoWVersion = "retail" | "forever" | "classic" | "tbc" | "mop";
 
 export interface BlizzardCharacterSummary {
   id?: number | string;
@@ -150,8 +153,8 @@ export interface BlizzardCharacterSummary {
   activeSpec?: string;
   achievementPoints?: number;
   lastLoginTimestamp?: number;
-  gameMode?: "retail" | "classic" | "forever" | "tbc" | string;
-  wow_version?: "retail" | "classic" | "forever" | "tbc" | string;
+  gameMode?: "retail" | "forever" | "classic" | "tbc" | "mop" | string;
+  wow_version?: "retail" | "forever" | "classic" | "tbc" | "mop" | string;
   classIconUrl?: string;
   raceIconUrl?: string;
   factionIconUrl?: string;
@@ -161,18 +164,20 @@ export interface BlizzardGearItem {
   slot: string; // e.g. "HEAD", "NECK", "SHOULDER", "BACK", "CHEST", "SHIRT", "TABARD", "WRIST", "HANDS", "WAIST", "LEGS", "FEET", "RING_1", "RING_2", "TRINKET_1", "TRINKET_2", "MAIN_HAND", "OFF_HAND", "RANGED"
   name: string;
   id?: number;
+  displayId?: number;
+  slotId?: number;
   itemLevel?: number;
   quality?: "POOR" | "COMMON" | "UNCOMMON" | "RARE" | "EPIC" | "LEGENDARY" | "ARTIFACT" | "HEIRLOOM" | string;
   iconUrl?: string;
   armor?: number;
-  armorType?: string; // e.g. "Placas", "Malha", "Couro", "Tecido", "Escudo"
-  weaponType?: string; // e.g. "Cajado", "Espada de Uma Mão", "Machado de Duas Mãos", "Adaga", "Arco", "Varinha"
-  damageRange?: string; // e.g. "28 - 42 Dano"
+  armorType?: string; // e.g. "Plate", "Mail", "Leather", "Cloth", "Shield"
+  weaponType?: string; // e.g. "Staff", "One-Handed Sword", "Two-Handed Axe", "Dagger", "Bow", "Wand"
+  damageRange?: string; // e.g. "28 - 42 Damage"
   attackSpeed?: string; // e.g. "2.60"
-  dps?: string; // e.g. "13.5 dano por seg."
+  dps?: string; // e.g. "13.5 damage per sec"
   stats?: string[];
   enchantment?: string;
-  binding?: string; // e.g. "Vinculado ao recolher", "Vinculado ao ser equipado"
+  binding?: string; // e.g. "Binds when picked up", "Binds when equipped"
   durability?: string; // e.g. "85 / 85"
   requiredLevel?: number;
   useEffect?: string;
@@ -185,12 +190,114 @@ export interface BlizzardReputation {
   id: number;
   name: string;
   standing: string; // "Hated" | "Hostile" | "Unfriendly" | "Neutral" | "Friendly" | "Honored" | "Revered" | "Exalted"
-  standingPtBR: string; // "Odiado" | "Hostil" | "Desfavorável" | "Neutro" | "Amistoso" | "Honrado" | "Reverenciado" | "Exaltado"
+  standingPtBR?: string;
   current: number;
   max: number;
   percent: number;
   tierColor?: string;
   category?: string;
+}
+
+export interface BlizzardInventoryItem {
+  id: number;
+  name: string;
+  quality: "POOR" | "COMMON" | "UNCOMMON" | "RARE" | "EPIC" | "LEGENDARY" | "ARTIFACT" | "HEIRLOOM" | string;
+  iconUrl: string;
+  itemLevel?: number;
+  stackCount: number;
+  maxStack?: number;
+  bagIndex: number; // 0 = Backpack, 1-4 = Bag slots
+  slotIndex: number; // 0-based index inside the bag
+  itemType: "consumable" | "equipment" | "tradegoods" | "quest" | "junk" | "misc";
+  itemSubType?: string;
+  description?: string;
+  stats?: string[];
+  useEffect?: string;
+  binding?: string;
+  sellPrice?: { gold: number; silver: number; copper: number };
+}
+
+export interface BlizzardBagContainer {
+  id: number;
+  name: string;
+  iconUrl: string;
+  slotCount: number;
+  bagSlotIndex: number; // 0: Backpack (16 slots), 1-4: Equipped bags
+  items: (BlizzardInventoryItem | null)[];
+}
+
+export interface BlizzardCollectionMount {
+  id: number;
+  name: string;
+  iconUrl: string;
+  creatureDisplayId?: number;
+  mountType: "ground" | "flying" | "aquatic" | "dragonriding";
+  source: string;
+  description: string;
+  isCollected?: boolean;
+  isFavorite?: boolean;
+  speedBonus?: string;
+  factionRequirement?: "ALLIANCE" | "HORDE" | "ANY";
+}
+
+export interface BlizzardCollectionToy {
+  id: number;
+  name: string;
+  iconUrl: string;
+  source: string;
+  description: string;
+  cooldown?: string;
+  isCollected?: boolean;
+  isFavorite?: boolean;
+}
+
+export interface BlizzardCollectionPet {
+  id: number;
+  name: string;
+  iconUrl: string;
+  family: "Beast" | "Dragonkin" | "Flying" | "Humanoid" | "Magical" | "Mechanical" | "Undead" | "Water" | "Elemental";
+  level: number;
+  quality: string;
+  source: string;
+  abilities?: string[];
+  isCollected?: boolean;
+  isFavorite?: boolean;
+  creatureDisplayId?: number;
+}
+
+export interface BlizzardCollectionTitle {
+  id: number;
+  name: string;
+  titleFormat: string; // e.g. "%s the Kingslayer" or "Champion %s"
+  source: string;
+  isCurrent?: boolean;
+  isCollected?: boolean;
+}
+
+export interface BlizzardCharacterInventory {
+  backpack: BlizzardBagContainer;
+  bags: BlizzardBagContainer[];
+  currencies: {
+    id: number;
+    name: string;
+    count: number;
+    max?: number;
+    iconUrl: string;
+    category?: string;
+  }[];
+  gold: number;
+  silver: number;
+  copper: number;
+}
+
+export interface BlizzardCharacterCollections {
+  mounts: BlizzardCollectionMount[];
+  toys: BlizzardCollectionToy[];
+  pets: BlizzardCollectionPet[];
+  titles: BlizzardCollectionTitle[];
+  totalMountsCount?: number;
+  totalToysCount?: number;
+  totalPetsCount?: number;
 }
 
 export type BlizzardEquipmentItem = BlizzardGearItem;
@@ -260,6 +367,8 @@ export interface BlizzardProfileData {
   }[];
   talents?: any;
   reputations?: BlizzardReputation[];
+  inventory?: BlizzardCharacterInventory;
+  collections?: BlizzardCharacterCollections;
   lastSyncedAt?: string;
 }
 
@@ -270,7 +379,7 @@ export interface BlizzardOfficialGame {
   icon: string;
   hasCharacterArmory: boolean;
   isWow: boolean;
-  wowVersion?: "retail" | "classic" | "forever" | "tbc";
+  wowVersion?: WoWVersion;
   description?: string;
 }
 

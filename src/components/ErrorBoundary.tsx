@@ -28,6 +28,16 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("Uncaught Error caught by ErrorBoundary:", error, errorInfo);
+    if (error?.message?.includes("exceeded the quota") || error?.name === "QuotaExceededError") {
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith("steamgriddb_") || k.startsWith("igdb_cache_") || k.startsWith("temp_upload_") || k.includes("_temp_"))) {
+            localStorage.removeItem(k);
+          }
+        }
+      } catch (_) {}
+    }
   }
 
   handleReload = () => {

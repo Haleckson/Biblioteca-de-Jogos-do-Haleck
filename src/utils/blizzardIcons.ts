@@ -12,7 +12,7 @@ export interface WoWClassInfo {
   ptBR: string;
   color: string;
   iconUrl: string;
-  availableIn: ("retail" | "classic" | "forever" | "tbc")[];
+  availableIn: ("retail" | "classic" | "forever" | "tbc" | "mop")[];
 }
 
 export interface WoWRaceInfo {
@@ -21,12 +21,13 @@ export interface WoWRaceInfo {
   ptBR: string;
   faction: "HORDE" | "ALLIANCE" | "NEUTRAL";
   iconUrl: string;
-  availableIn: ("retail" | "classic" | "forever" | "tbc")[];
+  availableIn: ("retail" | "classic" | "forever" | "tbc" | "mop")[];
 }
 
 export interface WoWFactionInfo {
   type: "HORDE" | "ALLIANCE" | "NEUTRAL";
   name: string;
+  namePtBR: string;
   color: string;
   crestUrl: string;
   iconUrl: string;
@@ -37,6 +38,7 @@ export interface WoWFactionInfo {
 
 export interface WoWItemQualityInfo {
   quality: "POOR" | "COMMON" | "UNCOMMON" | "RARE" | "EPIC" | "LEGENDARY" | "ARTIFACT" | "HEIRLOOM";
+  name: string;
   namePtBR: string;
   color: string;
   borderClass: string;
@@ -48,7 +50,8 @@ export interface WoWItemQualityInfo {
 export const WOW_FACTIONS: Record<string, WoWFactionInfo> = {
   HORDE: {
     type: "HORDE",
-    name: "Horda",
+    name: "Horde",
+    namePtBR: "Horda",
     color: "#C41E3A",
     crestUrl: `${WOW_ICON_BASE}/achievement_pvp_h_01.jpg`,
     iconUrl: `${WOW_ICON_BASE}/pvpcurrency-honor-horde.jpg`,
@@ -58,7 +61,8 @@ export const WOW_FACTIONS: Record<string, WoWFactionInfo> = {
   },
   ALLIANCE: {
     type: "ALLIANCE",
-    name: "Aliança",
+    name: "Alliance",
+    namePtBR: "Aliança",
     color: "#0078FF",
     crestUrl: `${WOW_ICON_BASE}/achievement_pvp_a_01.jpg`,
     iconUrl: `${WOW_ICON_BASE}/pvpcurrency-honor-alliance.jpg`,
@@ -68,7 +72,8 @@ export const WOW_FACTIONS: Record<string, WoWFactionInfo> = {
   },
   NEUTRAL: {
     type: "NEUTRAL",
-    name: "Neutro",
+    name: "Neutral",
+    namePtBR: "Neutro",
     color: "#D4AF37",
     crestUrl: `${WOW_ICON_BASE}/inv_misc_coin_01.jpg`,
     iconUrl: `${WOW_ICON_BASE}/inv_misc_coin_01.jpg`,
@@ -314,6 +319,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
 export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   POOR: {
     quality: "POOR",
+    name: "Poor",
     namePtBR: "Pobre",
     color: "#9D9D9D",
     borderClass: "border-zinc-600/50",
@@ -322,6 +328,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   COMMON: {
     quality: "COMMON",
+    name: "Common",
     namePtBR: "Comum",
     color: "#FFFFFF",
     borderClass: "border-zinc-400/50",
@@ -330,6 +337,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   UNCOMMON: {
     quality: "UNCOMMON",
+    name: "Uncommon",
     namePtBR: "Incomum",
     color: "#1EFF00",
     borderClass: "border-emerald-500/60",
@@ -338,6 +346,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   RARE: {
     quality: "RARE",
+    name: "Rare",
     namePtBR: "Raro",
     color: "#0070DD",
     borderClass: "border-blue-500/60",
@@ -346,6 +355,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   EPIC: {
     quality: "EPIC",
+    name: "Epic",
     namePtBR: "Épico",
     color: "#A335EE",
     borderClass: "border-purple-500/60",
@@ -354,6 +364,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   LEGENDARY: {
     quality: "LEGENDARY",
+    name: "Legendary",
     namePtBR: "Lendário",
     color: "#FF8000",
     borderClass: "border-amber-500/70",
@@ -362,6 +373,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   ARTIFACT: {
     quality: "ARTIFACT",
+    name: "Artifact",
     namePtBR: "Artefato",
     color: "#E6CC80",
     borderClass: "border-yellow-500/70",
@@ -370,6 +382,7 @@ export const WOW_QUALITIES: Record<string, WoWItemQualityInfo> = {
   },
   HEIRLOOM: {
     quality: "HEIRLOOM",
+    name: "Heirloom",
     namePtBR: "Herança",
     color: "#00CCFF",
     borderClass: "border-cyan-500/60",
@@ -527,6 +540,46 @@ export function getWoWFactionIcon(factionName?: string): string {
 // HELPER: WoW Version formatting & badges
 export function getWoWVersionInfo(version?: string) {
   const v = (version || "retail").toLowerCase();
+
+  if (v.includes("mop") || v.includes("pandaria")) {
+    return {
+      key: "mop" as const,
+      name: "World of Warcraft: Classic MoP",
+      shortName: "Classic MoP",
+      badgeBg: "bg-emerald-950/70",
+      borderClass: "border-emerald-400/60",
+      textClass: "text-emerald-300",
+      icon: `${WOW_ICON_BASE}/inv_misc_bell_01.jpg`,
+      levelCap: 90,
+    };
+  }
+
+  if (v.includes("tbc") || v.includes("crusade") || v.includes("burning")) {
+    return {
+      key: "tbc" as const,
+      name: "World of Warcraft: Classic TBC",
+      shortName: "Classic TBC",
+      badgeBg: "bg-teal-950/70",
+      borderClass: "border-teal-500/50",
+      textClass: "text-teal-300",
+      icon: `${WOW_ICON_BASE}/inv_misc_gem_bloodgem_01.jpg`,
+      levelCap: 70,
+    };
+  }
+
+  if (v.includes("forever") || v.includes("vanilla+")) {
+    return {
+      key: "forever" as const,
+      name: "World of Warcraft: Forever",
+      shortName: "Forever",
+      badgeBg: "bg-green-950/70",
+      borderClass: "border-green-500/50",
+      textClass: "text-green-300",
+      icon: `${WOW_ICON_BASE}/spell_nature_spiritarmor.jpg`,
+      levelCap: 60,
+    };
+  }
+
   if (v.includes("classic") || v === "era") {
     return {
       key: "classic" as const,
@@ -539,34 +592,12 @@ export function getWoWVersionInfo(version?: string) {
       levelCap: 60,
     };
   }
-  if (v.includes("forever") || v.includes("vanilla+")) {
-    return {
-      key: "forever" as const,
-      name: "World of Warcraft Forever (Vanilla+)",
-      shortName: "WoW Forever",
-      badgeBg: "bg-emerald-950/70",
-      borderClass: "border-emerald-500/50",
-      textClass: "text-emerald-300",
-      icon: `${WOW_ICON_BASE}/spell_nature_spiritarmor.jpg`,
-      levelCap: 60,
-    };
-  }
-  if (v.includes("tbc") || v.includes("crusade")) {
-    return {
-      key: "tbc" as const,
-      name: "World of Warcraft: The Burning Crusade Classic",
-      shortName: "TBC Classic",
-      badgeBg: "bg-teal-950/70",
-      borderClass: "border-teal-500/50",
-      textClass: "text-teal-300",
-      icon: `${WOW_ICON_BASE}/inv_misc_gem_bloodgem_01.jpg`,
-      levelCap: 70,
-    };
-  }
+
+  // Default: Retail (Midnight)
   return {
     key: "retail" as const,
-    name: "World of Warcraft: The War Within (Retail)",
-    shortName: "WoW Retail",
+    name: "World of Warcraft: Retail (Midnight)",
+    shortName: "Retail (Midnight)",
     badgeBg: "bg-cyan-950/70",
     borderClass: "border-cyan-500/50",
     textClass: "text-cyan-300",
@@ -597,59 +628,73 @@ export function getWoWGameModeInfo(gameId?: string): {
 } {
   const g = (gameId || "wow-retail").toLowerCase();
 
-  if (g.includes("classic") && !g.includes("forever") && !g.includes("tbc")) {
+  if (g.includes("mop") || g.includes("pandaria")) {
     return {
-      id: "wow-classic",
-      name: "World of Warcraft: Classic Era (Vanilla)",
-      shortName: "Classic Era",
-      maxLevel: 60,
-      badgeBg: "bg-amber-950/70",
-      badgeBorder: "border-amber-500/50",
-      badgeText: "text-amber-300",
-      namespace: "profile-classic1x",
-      description: "Vanilla WoW 1.14 / Nível Máximo 60 / Reinos da Era Clássica",
-    };
-  }
-
-  if (g.includes("forever")) {
-    return {
-      id: "wow-forever",
-      name: "World of Warcraft Forever (Vanilla+)",
-      shortName: "WoW Forever",
-      maxLevel: 60,
+      id: "wow-mop",
+      name: "World of Warcraft: Classic MoP",
+      shortName: "Classic MoP",
+      maxLevel: 90,
       badgeBg: "bg-emerald-950/70",
-      badgeBorder: "border-emerald-500/50",
+      badgeBorder: "border-emerald-400/50",
       badgeText: "text-emerald-300",
-      namespace: "profile-classic1x",
-      description: "Servidores Vanilla+ Forever / Nível Máximo 60",
+      namespace: "profile-classic-mop",
+      description: "Mists of Pandaria Classic / Level Cap 90 / Pandaria Realms",
     };
   }
 
   if (g.includes("tbc") || g.includes("burning") || g.includes("crusade")) {
     return {
       id: "wow-tbc",
-      name: "World of Warcraft: The Burning Crusade / Classic Progression",
-      shortName: "TBC Classic",
+      name: "World of Warcraft: Classic TBC",
+      shortName: "Classic TBC",
       maxLevel: 70,
       badgeBg: "bg-teal-950/70",
       badgeBorder: "border-teal-500/50",
       badgeText: "text-teal-300",
       namespace: "classicann",
-      description: "Progressão de Expansão / Nível Máximo 70 / Reinos TBC",
+      description: "The Burning Crusade Classic / Level Cap 70 / Outland Realms",
     };
   }
 
-  // Default: Retail / The War Within
+  if (g.includes("forever")) {
+    return {
+      id: "wow-forever",
+      name: "World of Warcraft: Forever",
+      shortName: "Forever",
+      maxLevel: 60,
+      badgeBg: "bg-green-950/70",
+      badgeBorder: "border-green-500/50",
+      badgeText: "text-green-300",
+      namespace: "profile-classic1x",
+      description: "Vanilla+ Forever Servers / Level Cap 60",
+    };
+  }
+
+  if (g.includes("classic") && !g.includes("forever") && !g.includes("tbc") && !g.includes("mop")) {
+    return {
+      id: "wow-classic",
+      name: "World of Warcraft: Classic Era",
+      shortName: "Classic Era",
+      maxLevel: 60,
+      badgeBg: "bg-amber-950/70",
+      badgeBorder: "border-amber-500/50",
+      badgeText: "text-amber-300",
+      namespace: "profile-classic1x",
+      description: "Vanilla WoW 1.14 / Level Cap 60 / Classic Era Realms",
+    };
+  }
+
+  // Default: Retail (Midnight)
   return {
     id: "wow-retail",
-    name: "World of Warcraft: The War Within (Retail)",
-    shortName: "WoW Retail",
+    name: "World of Warcraft: Retail (Midnight)",
+    shortName: "Retail (Midnight)",
     maxLevel: 80,
     badgeBg: "bg-cyan-950/70",
     badgeBorder: "border-cyan-500/50",
     badgeText: "text-cyan-300",
     namespace: "profile",
-    description: "Versão Atual Oficial (The War Within) / Nível Máximo 80",
+    description: "Official Current & Next Expansion (Midnight / Retail) / Level Cap 80+",
   };
 }
 
@@ -664,6 +709,7 @@ export function filterCharactersByGameMode<T extends {
   gender?: string;
   faction?: string;
   gameMode?: string;
+  wow_version?: string;
   classIconUrl?: string;
   raceIconUrl?: string;
   factionIconUrl?: string;
@@ -674,30 +720,27 @@ export function filterCharactersByGameMode<T extends {
   const modeInfo = getWoWGameModeInfo(gameId);
 
   return characters.filter((char) => {
-    // 1. If character has an explicit gameMode tag, match strictly
-    if (char.gameMode) {
-      if (modeInfo.id === "wow-retail") return char.gameMode === "retail";
-      if (modeInfo.id === "wow-classic") return char.gameMode === "classic";
-      if (modeInfo.id === "wow-forever") return char.gameMode === "forever";
-      if (modeInfo.id === "wow-tbc") return char.gameMode === "tbc";
+    const rawVersion = (char.wow_version || char.gameMode || "").toLowerCase();
+
+    // 1. If character has an explicit gameMode/wow_version tag, match strictly
+    if (rawVersion) {
+      if (modeInfo.id === "wow-retail") return rawVersion === "retail" || rawVersion.includes("midnight");
+      if (modeInfo.id === "wow-classic") return rawVersion === "classic" || rawVersion.includes("era");
+      if (modeInfo.id === "wow-forever") return rawVersion === "forever";
+      if (modeInfo.id === "wow-tbc") return rawVersion === "tbc";
+      if (modeInfo.id === "wow-mop") return rawVersion === "mop";
     }
 
     const lvl = char.level || 1;
 
     // 2. Retail Mode:
-    // Retail characters can be level 71-80 (or modern classes like Evoker, Demon Hunter, Monk, DK).
-    // If it's a Retail game, allow all characters that fit Retail (or don't violate Classic limits)
     if (modeInfo.id === "wow-retail") {
-      // Classic Era level 60 characters with specific Classic realm names can be filtered out if requested
       const classInfo = getWoWClassInfo(char.characterClass);
-      // Evoker, Demon Hunter, Monk, Death Knight are strictly retail in modern context
-      if (["evoker", "demonhunter", "monk", "deathknight"].includes(classInfo.id)) {
-        return true;
-      }
+      if (["evoker", "demonhunter"].includes(classInfo.id)) return true;
       return lvl > 70 || !char.realm?.toLowerCase().includes("forever");
     }
 
-    // 3. Classic Era Mode (Max level 60, Vanilla 9 classes only, no modern races/classes):
+    // 3. Classic Era Mode (Max level 60):
     if (modeInfo.id === "wow-classic") {
       if (lvl > 60) return false;
       const classInfo = getWoWClassInfo(char.characterClass);
@@ -715,11 +758,17 @@ export function filterCharactersByGameMode<T extends {
       return true;
     }
 
-    // 5. TBC Progression Mode (Max level 70, no DKs/Monks/DHs/Evokers):
+    // 5. TBC Progression Mode (Max level 70):
     if (modeInfo.id === "wow-tbc") {
       if (lvl > 70) return false;
       const classInfo = getWoWClassInfo(char.characterClass);
       if (!classInfo.availableIn.includes("tbc")) return false;
+      return true;
+    }
+
+    // 6. MoP Classic Mode (Max level 90):
+    if (modeInfo.id === "wow-mop") {
+      if (lvl > 90) return false;
       return true;
     }
 

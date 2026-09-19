@@ -73,6 +73,39 @@ export function sanitizeConsoleArgs(args: any[]): any[] {
       return summarizeError(arg);
     }
 
+    if (typeof HTMLElement !== "undefined" && arg instanceof HTMLElement) {
+      return `[HTMLElement <${arg.tagName.toLowerCase()}>]`;
+    }
+
+    if (typeof arg === "object") {
+      // Check if it's a jQuery or DOM container wrapper
+      if (arg.jquery || (arg[0] && typeof HTMLElement !== "undefined" && arg[0] instanceof HTMLElement)) {
+        return `[jQuery Container (${arg.length || 1} elements)]`;
+      }
+      // Shallow copy or clean check to remove __reactFiber or circular refs
+      try {
+        const seen = new WeakSet();
+        const cleanCopy = (obj: any, depth = 0): any => {
+          if (depth > 2 || obj === null || typeof obj !== "object") return obj;
+          if (typeof HTMLElement !== "undefined" && obj instanceof HTMLElement) {
+            return `[${obj.tagName.toLowerCase()}]`;
+          }
+          if (seen.has(obj)) return "[Circular]";
+          seen.add(obj);
+          if (Array.isArray(obj)) return obj.map((i) => cleanCopy(i, depth + 1));
+          const out: Record<string, any> = {};
+          for (const k of Object.keys(obj)) {
+            if (k.startsWith("__react") || k.startsWith("_react")) continue;
+            out[k] = cleanCopy(obj[k], depth + 1);
+          }
+          return out;
+        };
+        return cleanCopy(arg);
+      } catch (_) {
+        return "[Complex Object]";
+      }
+    }
+
     return arg;
   });
 }
@@ -95,16 +128,54 @@ export function setupConsoleSanitizer(): void {
 
   if (typeof window === "undefined" || !window.console) return;
 
+  const originalLog = console.log;
+  const originalInfo = console.info;
+  const originalDebug = console.debug;
   const originalWarn = console.warn;
   const originalError = console.error;
 
+  console.log = (...args: any[]) => {
+    try {
+      const sanitized = sanitizeConsoleArgs(args);
+      originalLog.apply(console, sanitized);
+    } catch (_) {
+      originalLog.apply(console, ["[Log payload]"]);
+    }
+  };
+
+  console.info = (...args: any[]) => {
+    try {
+      const sanitized = sanitizeConsoleArgs(args);
+      originalInfo.apply(console, sanitized);
+    } catch (_) {
+      originalInfo.apply(console, ["[Info payload]"]);
+    }
+  };
+
+  console.debug = (...args: any[]) => {
+    try {
+      const sanitized = sanitizeConsoleArgs(args);
+      originalDebug.apply(console, sanitized);
+    } catch (_) {
+      originalDebug.apply(console, ["[Debug payload]"]);
+    }
+  };
+
   console.warn = (...args: any[]) => {
-    const sanitized = sanitizeConsoleArgs(args);
-    originalWarn.apply(console, sanitized);
+    try {
+      const sanitized = sanitizeConsoleArgs(args);
+      originalWarn.apply(console, sanitized);
+    } catch (_) {
+      originalWarn.apply(console, ["[Warn payload]"]);
+    }
   };
 
   console.error = (...args: any[]) => {
-    const sanitized = sanitizeConsoleArgs(args);
-    originalError.apply(console, sanitized);
+    try {
+      const sanitized = sanitizeConsoleArgs(args);
+      originalError.apply(console, sanitized);
+    } catch (_) {
+      originalError.apply(console, ["[Error payload]"]);
+    }
   };
 }

@@ -13,10 +13,68 @@
     <link rel="preconnect" href="https://cdn2.steamgriddb.com" crossorigin />
     <link rel="dns-prefetch" href="https://cdn2.steamgriddb.com" />
 
-    <title>Biblioteca de Jogos do Haleck</title>
+    <title>Haleck GameLog</title>
+    <meta name="description" content="Biblioteca de jogos do Haleck e WoW Armory completo com modelos 3D, talent trees, inventário e coleções." />
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      window.CONTENT_PATH = "/api/zamimg/modelviewer/live/";
+      if (!window.WH) {
+        window.WH = {};
+        window.WH.debug = function () {};
+        window.WH.defaultAnimation = "Stand";
+        window.WH.WebP = { getImageExtension: function() { return ".webp"; } };
+        window.WH.Wow = {
+          Item: {
+            INVENTORY_TYPE_HEAD: 1,
+            INVENTORY_TYPE_NECK: 2,
+            INVENTORY_TYPE_SHOULDERS: 3,
+            INVENTORY_TYPE_SHIRT: 4,
+            INVENTORY_TYPE_CHEST: 5,
+            INVENTORY_TYPE_WAIST: 6,
+            INVENTORY_TYPE_LEGS: 7,
+            INVENTORY_TYPE_FEET: 8,
+            INVENTORY_TYPE_WRISTS: 9,
+            INVENTORY_TYPE_HANDS: 10,
+            INVENTORY_TYPE_FINGER: 11,
+            INVENTORY_TYPE_TRINKET: 12,
+            INVENTORY_TYPE_ONE_HAND: 13,
+            INVENTORY_TYPE_SHIELD: 14,
+            INVENTORY_TYPE_RANGED: 15,
+            INVENTORY_TYPE_BACK: 16,
+            INVENTORY_TYPE_TWO_HAND: 17,
+            INVENTORY_TYPE_BAG: 18,
+            INVENTORY_TYPE_TABARD: 19,
+            INVENTORY_TYPE_ROBE: 20,
+            INVENTORY_TYPE_MAIN_HAND: 21,
+            INVENTORY_TYPE_OFF_HAND: 22,
+            INVENTORY_TYPE_HELD_IN_OFF_HAND: 23,
+            INVENTORY_TYPE_PROJECTILE: 24,
+            INVENTORY_TYPE_THROWN: 25,
+            INVENTORY_TYPE_RANGED_RIGHT: 26,
+            INVENTORY_TYPE_QUIVER: 27,
+            INVENTORY_TYPE_RELIC: 28,
+            INVENTORY_TYPE_PROFESSION_TOOL: 29,
+            INVENTORY_TYPE_PROFESSION_ACCESSORY: 30
+          }
+        };
+      }
+    </script>
+    <script src="/vendor/jquery.min.js"></script>
+    <script>
+      window.$ = window.jQuery = window.jQuery || window.$;
+      if (window.jQuery) {
+        window.jQuery.support = window.jQuery.support || {};
+        window.jQuery.support.cors = true;
+      }
+    </script>
+    <script src="/vendor/viewer.min.js"></script>
+    <script>
+      if (window.ZamModelViewer) {
+        console.info("ZamModelViewer 3D engine initialized successfully.");
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
