@@ -408,15 +408,7 @@ export function isBattlenetGame(game?: {
   blizzardGameId?: string;
 } | null): boolean {
   if (!game) return false;
-  if (game.integrationPlatform === "battlenet") return true;
-  if (Boolean(game.blizzardGameId)) return true;
-  const plat = (game.platform || "").toLowerCase();
-  return (
-    plat.includes("battlenet") ||
-    plat.includes("battle.net") ||
-    plat.includes("bnet") ||
-    plat.includes("blizzard")
-  );
+  return game.integrationPlatform === "battlenet";
 }
 
 // Group characters by their WoW version (retail, classic, forever, tbc)

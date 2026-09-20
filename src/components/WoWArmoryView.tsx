@@ -21,12 +21,19 @@ import {
   RefreshCw,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   Maximize2,
+  Users,
+  Search,
+  Check,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import {
   BlizzardProfileData,
   BlizzardGearItem,
   BlizzardReputation,
+  BlizzardCharacterSummary,
 } from "../types";
 import {
   getWoWClassInfo,
@@ -46,6 +53,11 @@ interface WoWArmoryViewProps {
   onRefresh?: () => void;
   isLoading?: boolean;
   gameVersion?: string;
+  characters?: BlizzardCharacterSummary[];
+  activeCharacterName?: string;
+  onSelectCharacter?: (char: BlizzardCharacterSummary) => void;
+  filterVersion?: string;
+  onFilterVersionChange?: (version: string) => void;
 }
 
 // Paperdoll standard equipment slots (authentic English terms)
@@ -82,10 +94,19 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
   onRefresh,
   isLoading = false,
   gameVersion,
+  characters,
+  activeCharacterName,
+  onSelectCharacter,
+  filterVersion,
+  onFilterVersionChange,
 }) => {
   const [activeTab, setActiveTab] = useState<
     "armory" | "inventory" | "collections" | "talents" | "reputations" | "achievements" | "stats"
   >("armory");
+
+  // Character Selector Dropdown State for Unified Header
+  const [isCharSelectorOpen, setIsCharSelectorOpen] = useState(false);
+  const [charSearchQuery, setCharSearchQuery] = useState("");
 
   // Determine effective expansion version strictly for this game
   const resolvedVersion = useMemo(() => {
@@ -96,6 +117,28 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
     if (raw.includes("classic") || raw.includes("era") || raw.includes("vanilla")) return "classic";
     return "retail";
   }, [gameVersion, profile.wow_version, profile.gameMode]);
+
+  // Filter available characters for fast switching
+  const availableCharacters = useMemo(() => {
+    if (!characters || !Array.isArray(characters)) return [];
+    let list = [...characters];
+    if (filterVersion && filterVersion !== "all") {
+      list = list.filter((c) => {
+        const v = (c.wow_version || c.gameMode || "retail").toLowerCase();
+        return v.includes(filterVersion.toLowerCase());
+      });
+    }
+    if (charSearchQuery.trim()) {
+      const q = charSearchQuery.toLowerCase();
+      list = list.filter(
+        (c) =>
+          c.name.toLowerCase().includes(q) ||
+          (c.realm && c.realm.toLowerCase().includes(q)) ||
+          (c.characterClass && c.characterClass.toLowerCase().includes(q))
+      );
+    }
+    return list;
+  }, [characters, filterVersion, charSearchQuery]);
 
   // Collections interface only existed in MoP and Retail (not in Classic Era, Forever, or TBC)
   const hasCollections = resolvedVersion === "mop" || resolvedVersion === "retail";
@@ -112,8 +155,10 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
     }
   }, [hasCollections, hasAchievements, activeTab]);
 
-  // Armory Visualizer Display: 3D interactive WebGL, 2D avatar paperdoll, or split view
-  const [armoryDisplayMode, setArmoryDisplayMode] = useState<"3d" | "2d" | "split">("3d");
+  // Armory Visualizer Display: 2D Paperdoll as primary/default (official Blizzard Armory style), with 3D as secondary
+  const [armoryDisplayMode, setArmoryDisplayMode] = useState<"2d" | "3d" | "split">("2d");
+  // Paperdoll Zoom / Framing scale (default 1.5x to eliminate empty Blizzard transparent margins)
+  const [paperdollScale, setPaperdollScale] = useState<number>(1.5);
 
   const [hoveredItem, setHoveredItem] = useState<{ item: BlizzardGearItem; slotLabel: string } | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -284,8 +329,29 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
             </div>
           </div>
 
-          {/* Quick Metrics Badges (iLvl & Achievements) */}
-          <div className="flex items-center gap-3 flex-wrap">
+          {/* Quick Metrics Badges (iLvl & Achievements) & Character Switcher */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            {characters && characters.length > 0 && onSelectCharacter && (
+              <button
+                type="button"
+                id="wow-armory-switch-char-btn"
+                onClick={() => setIsCharSelectorOpen(!isCharSelectorOpen)}
+                className="px-3 py-2 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/90 border border-cyan-500/40 text-cyan-200 font-bold text-xs transition-all shadow-md cursor-pointer flex items-center gap-2 hover:border-cyan-400 group"
+              >
+                <Users size={14} className="text-cyan-400 group-hover:scale-110 transition-transform" />
+                <span>Trocar Personagem</span>
+                <span className="px-1.5 py-0.2 rounded-full bg-cyan-900/80 text-[10px] text-cyan-300 font-mono border border-cyan-700/50">
+                  {characters.length}
+                </span>
+                <ChevronDown
+                  size={14}
+                  className={`text-cyan-400 transition-transform duration-200 ${
+                    isCharSelectorOpen ? "rotate-180" : ""
+                  }`}
+                />
+              </button>
+            )}
+
             <div className="px-3.5 py-2 rounded-xl bg-purple-950/40 border border-purple-500/40 text-center shadow-inner">
               <span className="text-[10px] uppercase font-bold text-purple-300 block tracking-wider">
                 Item Level
@@ -297,7 +363,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
 
             <div className="px-3.5 py-2 rounded-xl bg-amber-950/40 border border-amber-500/40 text-center shadow-inner">
               <span className="text-[10px] uppercase font-bold text-amber-300 block tracking-wider flex items-center justify-center gap-1">
-                <Trophy size={11} /> Achievements
+                <Trophy size={11} /> Conquistas
               </span>
               <span className="text-xl font-black font-mono text-amber-200">
                 {(profile.achievementPoints || 0).toLocaleString()}
@@ -305,6 +371,110 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Expandable Unified Character Switcher Drawer */}
+        {isCharSelectorOpen && characters && characters.length > 0 && onSelectCharacter && (
+          <div className="mt-4 pt-4 border-t border-zinc-800/80 space-y-3 animate-in fade-in duration-200">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Users size={14} className="text-cyan-400" />
+                <span className="text-xs font-bold text-white">
+                  Selecione um Personagem da sua Conta Blizzard
+                </span>
+                <span className="text-[11px] font-mono text-zinc-400">
+                  ({availableCharacters.length} encontrados)
+                </span>
+              </div>
+
+              {/* Quick Search */}
+              <div className="relative w-full sm:w-64">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" />
+                <input
+                  type="text"
+                  value={charSearchQuery}
+                  onChange={(e) => setCharSearchQuery(e.target.value)}
+                  placeholder="Filtrar por nome, reino ou classe..."
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-500"
+                />
+              </div>
+            </div>
+
+            {/* Character Cards Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5 max-h-72 overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-zinc-700">
+              {availableCharacters.map((c) => {
+                const cClassInfo = getWoWClassInfo(c.characterClass || "Warrior");
+                const cRaceInfo = getWoWRaceInfo(c.race || "Human", c.gender);
+                const cFactionInfo = getWoWFactionInfo(c.faction || "ALLIANCE");
+                const isSelected =
+                  c.name.toLowerCase() === (activeCharacterName || profile.name).toLowerCase() &&
+                  (!c.realm || !profile.realm || c.realm.toLowerCase() === profile.realm.toLowerCase());
+
+                return (
+                  <button
+                    key={`${c.name}-${c.realm}-${c.wow_version || "retail"}`}
+                    type="button"
+                    onClick={() => {
+                      onSelectCharacter(c);
+                      setIsCharSelectorOpen(false);
+                    }}
+                    className={`flex items-center gap-3 p-2.5 rounded-xl border text-left transition-all cursor-pointer group relative ${
+                      isSelected
+                        ? "bg-cyan-950/80 border-cyan-500/80 shadow-md shadow-cyan-950/50"
+                        : "bg-zinc-900/80 hover:bg-zinc-850 border-zinc-800 hover:border-zinc-700"
+                    }`}
+                  >
+                    {/* Class & Faction Icon */}
+                    <div className="relative shrink-0">
+                      <img
+                        src={c.avatarUrl || cClassInfo.iconUrl}
+                        alt={c.name}
+                        onError={(e) => {
+                          e.currentTarget.src = cClassInfo.iconUrl;
+                        }}
+                        className="w-10 h-10 rounded-xl border object-cover shadow"
+                        style={{ borderColor: cClassInfo.color }}
+                      />
+                      <div className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full border border-zinc-800 bg-black flex items-center justify-center overflow-hidden">
+                        <WoWFactionCrest faction={c.faction} size={12} glow={false} />
+                      </div>
+                    </div>
+
+                    {/* Info */}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1">
+                        <span
+                          className="text-xs font-black truncate block"
+                          style={{ color: cClassInfo.color }}
+                        >
+                          {c.name}
+                        </span>
+                        {isSelected && (
+                          <Check size={12} className="text-cyan-400 shrink-0" />
+                        )}
+                      </div>
+                      <div className="text-[10px] text-zinc-400 truncate flex items-center gap-1 font-mono">
+                        <span className="text-amber-300 font-bold">Nív {c.level}</span>
+                        <span>•</span>
+                        <span>{c.realm}</span>
+                      </div>
+                      <div className="text-[10px] text-zinc-500 truncate flex items-center gap-1">
+                        <span>{cRaceInfo.name}</span>
+                        <span>•</span>
+                        <span className="text-purple-300 font-mono font-bold">ilvl {c.equippedItemLevel || "?"}</span>
+                      </div>
+                    </div>
+                  </button>
+                );
+              })}
+
+              {availableCharacters.length === 0 && (
+                <div className="col-span-full text-center py-6 text-xs text-zinc-500 font-mono">
+                  Nenhum personagem encontrado com o filtro "{charSearchQuery}".
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 2. Comprehensive Navigation Tabs with Clear Icons & Statuses */}
@@ -422,232 +592,387 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
       {/* TAB: ARMORY (Equipped gear with 3D Wowhead WebGL Visualizer) */}
       {activeTab === "armory" && (
         <div className="space-y-4">
-          {/* Visualizer Display Mode Switcher */}
-          <div className="flex items-center justify-between gap-3 flex-wrap p-2.5 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs">
-            <div className="flex items-center gap-2">
-              <span className="text-zinc-400 font-bold">Display Mode:</span>
-              <span className="text-zinc-500 text-[11px]">
-                Interactive 3D model with gear, poses & dynamic lighting
+          {/* Visualizer Display Mode Switcher (Paperdoll Primary, 3D Secondary) */}
+          <div className="flex items-center justify-between gap-3 flex-wrap p-3 rounded-2xl bg-zinc-950/80 border border-zinc-800 text-xs shadow-lg">
+            <div className="flex items-center gap-2.5">
+              <span className="text-zinc-300 font-bold flex items-center gap-1.5">
+                <Shield size={14} className="text-amber-400" />
+                Modo de Visualização:
+              </span>
+              <span className="text-zinc-500 text-[11px] hidden sm:inline">
+                {armoryDisplayMode === "2d"
+                  ? "Paperdoll clássico oficial com equipamentos in-game da Blizzard"
+                  : "Modelo 3D interativo WebGL com rotação, animação e zoom"}
               </span>
             </div>
 
-            <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-0.5">
+            <div className="flex items-center bg-zinc-900 border border-zinc-800 rounded-xl p-1 gap-1">
               <button
                 type="button"
-                onClick={() => setArmoryDisplayMode("3d")}
-                className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
-                  armoryDisplayMode === "3d"
-                    ? "bg-cyan-500 text-black shadow"
-                    : "text-zinc-400 hover:text-white"
-                }`}
-              >
-                <Box size={13} />
-                <span>3D WebGL Model</span>
-              </button>
-              <button
-                type="button"
+                id="wow-toggle-paperdoll"
                 onClick={() => setArmoryDisplayMode("2d")}
-                className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                   armoryDisplayMode === "2d"
-                    ? "bg-cyan-500 text-black shadow"
+                    ? "bg-amber-500 text-black shadow-md shadow-amber-500/20"
                     : "text-zinc-400 hover:text-white"
                 }`}
               >
                 <Eye size={13} />
-                <span>2D Paperdoll</span>
+                <span>Paperdoll (Padrão)</span>
               </button>
               <button
                 type="button"
+                id="wow-toggle-3d"
+                onClick={() => setArmoryDisplayMode("3d")}
+                className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  armoryDisplayMode === "3d"
+                    ? "bg-cyan-500 text-black shadow-md shadow-cyan-500/20"
+                    : "text-zinc-400 hover:text-white"
+                }`}
+              >
+                <Box size={13} />
+                <span>Modelo 3D</span>
+              </button>
+              <button
+                type="button"
+                id="wow-toggle-split"
                 onClick={() => setArmoryDisplayMode("split")}
-                className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                className={`px-2.5 py-1.5 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
                   armoryDisplayMode === "split"
-                    ? "bg-cyan-500 text-black shadow"
+                    ? "bg-purple-600 text-white shadow-md shadow-purple-600/20"
                     : "text-zinc-400 hover:text-white"
                 }`}
               >
                 <Maximize2 size={13} />
-                <span>Split View</span>
+                <span className="hidden md:inline">Lado a Lado</span>
               </button>
             </div>
           </div>
 
-          {/* Main Paperdoll Canvas */}
-          <div className="relative rounded-2xl bg-zinc-950/80 border border-zinc-800 p-4 overflow-hidden shadow-2xl">
-            <div className="relative grid grid-cols-1 lg:grid-cols-12 gap-4 items-center">
-              {/* Left Slots Column (8 Slots) */}
-              <div className="lg:col-span-3 space-y-2">
+          {/* Main Paperdoll Canvas (Official Blizzard Armory Layout in Vertical Portrait Format) */}
+          <div className="relative rounded-2xl bg-zinc-950/90 border border-zinc-800/90 p-4 sm:p-6 overflow-hidden shadow-2xl">
+            {/* Background Ambient Radial Glow */}
+            <div
+              className="absolute inset-0 pointer-events-none opacity-25"
+              style={{
+                background: `radial-gradient(ellipse at 50% 35%, ${classInfo.color}40 0%, transparent 70%)`,
+              }}
+            />
+
+            <div className="relative grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 items-stretch">
+              {/* Left Slots Column (8 Slots) - Vertically Balanced */}
+              <div className="lg:col-span-3 flex flex-col justify-between space-y-2 sm:space-y-3 z-10">
                 {LEFT_SLOTS.map((slot) => renderSlot(slot, false))}
               </div>
 
-              {/* Center Column: Character Model Showcase & Vital Gauges */}
-              <div className="lg:col-span-6 flex flex-col items-center justify-center p-2 text-center relative min-h-[380px]">
-                {/* 3D Model Display (Wowhead-style WebGL Viewer) */}
+              {/* Center Column: Grand Portrait Character Model Showcase (Paperdoll or 3D) */}
+              <div className="lg:col-span-6 flex flex-col items-center justify-between p-2 text-center relative min-h-[640px] sm:min-h-[720px] lg:min-h-[820px]">
+                {/* 3D Model Display (Full Portrait View) */}
                 {armoryDisplayMode === "3d" && (
-                  <div className="w-full h-96 rounded-2xl overflow-hidden shadow-2xl border border-zinc-800/80">
-                    <WoWModelViewer3D profile={profile} height={380} />
-                  </div>
-                )}
-
-                {/* Split View: Side-by-Side 3D + Vital Gauges */}
-                {armoryDisplayMode === "split" && (
-                  <div className="w-full space-y-3">
-                    <div className="w-full h-64 rounded-2xl overflow-hidden shadow-xl border border-zinc-800/80">
-                      <WoWModelViewer3D profile={profile} height={256} />
+                  <div className="w-full flex-1 flex flex-col items-center justify-between space-y-3">
+                    <div className="w-full flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-800 rounded-xl text-xs">
+                      <span className="text-zinc-300 font-bold flex items-center gap-1.5">
+                        <Box size={13} className="text-cyan-400" />
+                        Modelo 3D Interativo Wowhead (Corpo Completo)
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setArmoryDisplayMode("2d")}
+                        className="text-xs text-amber-400 hover:text-amber-300 font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                      >
+                        <Eye size={12} />
+                        Voltar para Paperdoll 2D
+                      </button>
+                    </div>
+                    <div className="w-full h-[580px] sm:h-[660px] lg:h-[740px] rounded-2xl overflow-hidden shadow-2xl border border-zinc-800/80 bg-black/60">
+                      <WoWModelViewer3D profile={profile} height={740} aspect={0.82} />
                     </div>
                   </div>
                 )}
 
-                {/* 2D Portrait / Render Display */}
-                {armoryDisplayMode === "2d" && (
-                  <div className="relative w-52 h-64 sm:w-60 sm:h-72 flex flex-col items-center justify-center z-10">
-                    {/* Class Aura Ring */}
-                    <div
-                      className="absolute inset-2 rounded-full blur-2xl opacity-30 animate-pulse"
-                      style={{ backgroundColor: classInfo.color }}
-                    />
+                {/* Split View: Side-by-Side 3D + Paperdoll info */}
+                {armoryDisplayMode === "split" && (
+                  <div className="w-full flex-1 flex flex-col items-center justify-center space-y-3">
+                    <div className="w-full h-[560px] sm:h-[640px] lg:h-[720px] rounded-2xl overflow-hidden shadow-xl border border-zinc-800/80 bg-black/60">
+                      <WoWModelViewer3D profile={profile} height={720} aspect={0.82} />
+                    </div>
+                  </div>
+                )}
 
-                    {profile.renderUrl && profile.renderUrl.includes("render.worldofwarcraft.com") ? (
-                      <img
-                        src={profile.renderUrl}
-                        alt={profile.name}
-                        onError={(e) => {
-                          e.currentTarget.style.display = "none";
-                        }}
-                        className="relative w-full h-full object-contain drop-shadow-[0_15px_25px_rgba(0,0,0,0.8)] z-10 transition-transform duration-300 hover:scale-105"
-                      />
-                    ) : (
-                      <div className="relative flex flex-col items-center justify-center p-2">
-                        <div
-                          className="relative w-32 h-32 sm:w-40 sm:h-40 rounded-full p-1.5 shadow-2xl border-4 transition-transform duration-300 hover:scale-105 bg-zinc-950"
-                          style={{
-                            borderColor: classInfo.color,
-                            boxShadow: `0 0 25px ${classInfo.color}40`,
-                          }}
+                {/* 2D Paperdoll Display (Primary / Default View - Official Full-Body Blizzard Style) */}
+                {armoryDisplayMode === "2d" && (
+                  <div className="relative w-full flex-1 flex flex-col items-center justify-between z-10">
+                    {/* Paperdoll Controls Bar: 3D Toggle, Zoom Presets & Fine-tuning */}
+                    <div className="w-full flex items-center justify-between gap-2 px-3 py-1.5 bg-zinc-900/90 border border-zinc-800 rounded-xl text-xs flex-wrap mb-2">
+                      <button
+                        type="button"
+                        onClick={() => setArmoryDisplayMode("3d")}
+                        className="group inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-800 hover:bg-cyan-950/80 border border-zinc-700 hover:border-cyan-500/60 text-zinc-300 hover:text-cyan-300 text-xs font-bold transition-all cursor-pointer shadow-sm"
+                        title="Alternar para visualização 3D interativa de 360°"
+                      >
+                        <Box size={13} className="text-cyan-400 group-hover:rotate-12 transition-transform" />
+                        <span>Visualizar em 3D</span>
+                      </button>
+
+                      {/* Zoom & Enquadramento Controls */}
+                      <div className="flex items-center gap-1 bg-zinc-950/90 border border-zinc-800 rounded-lg p-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setPaperdollScale((prev) => Math.max(0.8, Number((prev - 0.15).toFixed(2))))}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                          title="Diminuir enquadramento (-)"
                         >
+                          <ZoomOut size={12} />
+                        </button>
+
+                        <div className="flex items-center gap-0.5 text-[11px] font-mono px-1">
+                          <button
+                            type="button"
+                            onClick={() => setPaperdollScale(1.0)}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                              paperdollScale === 1.0 ? "bg-cyan-500/20 text-cyan-300" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                            title="Escala original (100%)"
+                          >
+                            1x
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPaperdollScale(1.45)}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                              paperdollScale === 1.45 ? "bg-cyan-500/20 text-cyan-300" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                            title="Escala Ideal (1.45x - Otimizado para preencher todo o espaço vertical)"
+                          >
+                            Ideal
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPaperdollScale(1.7)}
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors cursor-pointer ${
+                              paperdollScale === 1.7 ? "bg-cyan-500/20 text-cyan-300" : "text-zinc-400 hover:text-zinc-200"
+                            }`}
+                            title="Zoom em Detalhes (1.7x)"
+                          >
+                            1.7x
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setPaperdollScale((prev) => Math.min(2.4, Number((prev + 0.15).toFixed(2))))}
+                          className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                          title="Aumentar enquadramento (+)"
+                        >
+                          <ZoomIn size={12} />
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Grand Character Full-Body Paperdoll Render */}
+                    <div className="relative w-full h-[580px] sm:h-[660px] lg:h-[740px] flex items-center justify-center overflow-hidden rounded-2xl">
+                      {/* Class Aura Floor Ring */}
+                      <div
+                        className="absolute bottom-6 w-80 sm:w-96 h-28 rounded-full blur-3xl opacity-40 animate-pulse pointer-events-none"
+                        style={{ backgroundColor: classInfo.color }}
+                      />
+
+                      {profile.renderUrl || profile.mainRawUrl ? (
+                        <div className="relative w-full h-full flex items-center justify-center overflow-hidden">
                           <img
-                            src={profile.avatarUrl || raceInfo.iconUrl || classInfo.iconUrl}
+                            src={profile.mainRawUrl || profile.renderUrl}
                             alt={profile.name}
                             onError={(e) => {
-                              e.currentTarget.src = raceInfo.iconUrl || classInfo.iconUrl;
+                              // If full render fails, fall back to avatar portrait
+                              const target = e.currentTarget;
+                              target.style.display = "none";
+                              const fallbackDiv = document.getElementById("wow-paperdoll-portrait-fallback");
+                              if (fallbackDiv) fallbackDiv.style.display = "flex";
                             }}
-                            className="w-full h-full object-cover rounded-full"
+                            style={{
+                              transform: `scale(${paperdollScale}) translateY(-1%)`,
+                              transformOrigin: "center center",
+                            }}
+                            className="relative h-full w-auto max-h-[740px] min-h-[500px] object-contain drop-shadow-[0_25px_50px_rgba(0,0,0,0.95)] z-10 transition-transform duration-200 pointer-events-auto select-none"
                           />
-                          <div
-                            className="absolute -bottom-1 -right-1 w-9 h-9 sm:w-10 sm:h-10 rounded-full border-2 overflow-hidden shadow-lg bg-black"
-                            style={{ borderColor: classInfo.color }}
-                          >
-                            <img
-                              src={classInfo.iconUrl}
-                              alt={classInfo.name}
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                          <div
-                            className="absolute -top-1 -left-1 w-8 h-8 sm:w-9 sm:h-9 rounded-full border-2 border-zinc-700 bg-zinc-950 overflow-hidden shadow-lg flex items-center justify-center p-1"
-                            title={factionInfo.name}
-                          >
-                            <WoWFactionCrest faction={profile.faction} size={24} glow={false} />
-                          </div>
-                        </div>
 
-                        <div className="mt-2.5 text-center">
-                          <span className="text-xs font-mono font-bold text-amber-300 tracking-wider">
-                            Level {profile.level || 1} • {raceInfo.name}
-                          </span>
-                          <h3
-                            className="text-lg sm:text-xl font-black text-white tracking-wide"
-                            style={{ color: classInfo.color }}
+                          {/* Fallback container if full-body image fails */}
+                          <div
+                            id="wow-paperdoll-portrait-fallback"
+                            style={{ display: "none" }}
+                            className="flex-col items-center justify-center p-4 w-full h-full"
                           >
-                            {profile.name}
-                          </h3>
-                          <span className="text-[11px] font-mono text-zinc-400">
-                            {charSpec} {classInfo.name} {profile.guild ? `• <${profile.guild}>` : ""}
-                          </span>
+                            <div
+                              className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl p-2 shadow-2xl border-4 bg-zinc-950 flex items-center justify-center"
+                              style={{
+                                borderColor: classInfo.color,
+                                boxShadow: `0 0 45px ${classInfo.color}50`,
+                              }}
+                            >
+                              <img
+                                src={profile.avatarUrl || raceInfo.iconUrl || classInfo.iconUrl}
+                                alt={profile.name}
+                                className="w-full h-full object-cover rounded-xl"
+                              />
+                            </div>
+                            <div className="mt-4 text-center">
+                              <button
+                                type="button"
+                                onClick={() => setArmoryDisplayMode("3d")}
+                                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center gap-2 mx-auto cursor-pointer"
+                              >
+                                <Box size={14} /> Carregar Modelo 3D Interativo
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      ) : (
+                        <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
+                          <div className="w-full max-w-sm p-6 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-2xl text-center space-y-4">
+                            <div
+                              className="relative mx-auto w-40 h-40 sm:w-48 sm:h-48 rounded-2xl border-2 p-1 bg-zinc-950 overflow-hidden shadow-2xl"
+                              style={{ borderColor: classInfo.color }}
+                            >
+                              <img
+                                src={profile.avatarUrl || raceInfo.iconUrl || classInfo.iconUrl}
+                                alt={profile.name}
+                                className="w-full h-full object-cover rounded-xl"
+                              />
+                              <div
+                                className="absolute -bottom-1 -right-1 w-10 h-10 rounded-full border-2 overflow-hidden shadow-lg bg-black"
+                                style={{ borderColor: classInfo.color }}
+                              >
+                                <img
+                                  src={classInfo.iconUrl}
+                                  alt={classInfo.name}
+                                  className="w-full h-full object-cover"
+                                />
+                              </div>
+                              <div
+                                className="absolute -top-1 -left-1 w-9 h-9 rounded-full border border-zinc-700 bg-zinc-950 overflow-hidden shadow-lg flex items-center justify-center p-1"
+                              >
+                                <WoWFactionCrest faction={profile.faction} size={22} glow={false} />
+                              </div>
+                            </div>
+
+                            <div>
+                              <span className="text-xs font-mono font-bold text-amber-300 tracking-wider">
+                                Nível {profile.level || 1} • {raceInfo.name}
+                              </span>
+                              <h3
+                                className="text-2xl font-black text-white tracking-wide mt-0.5"
+                                style={{ color: classInfo.color }}
+                              >
+                                {profile.name}
+                              </h3>
+                              <span className="text-xs font-mono text-zinc-400 block mt-0.5">
+                                {charSpec} {classInfo.name} {profile.guild ? `• <${profile.guild}>` : ""}
+                              </span>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => setArmoryDisplayMode("3d")}
+                              className="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
+                            >
+                              <Box size={15} />
+                              <span>Ativar Modelo 3D de Corpo Completo</span>
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
-                {/* Vital Resource Bars */}
-                <div className="w-full max-w-sm space-y-2 mt-3 z-10">
-                  {/* Health Bar */}
-                  <div>
-                    <div className="flex justify-between text-[11px] font-mono text-zinc-300 font-bold mb-1">
-                      <span className="flex items-center gap-1 text-emerald-400">
-                        <Heart size={11} /> Health
-                      </span>
-                      <span>
-                        {maxHealth.toLocaleString()} / {maxHealth.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="w-full h-2.5 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
-                      <div className="w-full h-full bg-emerald-500 rounded-full shadow-sm shadow-emerald-500/50" />
-                    </div>
-                  </div>
-
-                  {/* Resource Bar (Mana / Energy / Rage) */}
-                  <div>
-                    <div className="flex justify-between text-[11px] font-mono text-zinc-300 font-bold mb-1">
-                      <span className={`flex items-center gap-1 ${resourceColor.text}`}>
-                        <Zap size={11} /> {resourceColor.label}
-                      </span>
-                      <span>
-                        {maxPower.toLocaleString()} / {maxPower.toLocaleString()}
-                      </span>
-                    </div>
-                    <div className="w-full h-2.5 bg-zinc-900 rounded-full overflow-hidden border border-zinc-800">
-                      <div className={`w-full h-full ${resourceColor.bg} rounded-full shadow-sm`} />
-                    </div>
-                  </div>
-                </div>
-
-                {/* Quick Combat Ratings Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 w-full max-w-md mt-4 text-left z-10">
-                  <div className="p-2 rounded-xl bg-zinc-900/90 border border-zinc-800">
-                    <span className="text-[9px] uppercase font-bold text-zinc-500 block">Critical</span>
-                    <span className="text-xs font-mono font-bold text-amber-300">
-                      {stats.crit ? `${stats.crit.toFixed(1)}%` : "16.4%"}
-                    </span>
-                  </div>
-                  <div className="p-2 rounded-xl bg-zinc-900/90 border border-zinc-800">
-                    <span className="text-[9px] uppercase font-bold text-zinc-500 block">Haste</span>
-                    <span className="text-xs font-mono font-bold text-purple-300">
-                      {stats.haste ? `${stats.haste.toFixed(1)}%` : "8.2%"}
-                    </span>
-                  </div>
-                  <div className="p-2 rounded-xl bg-zinc-900/90 border border-zinc-800">
-                    <span className="text-[9px] uppercase font-bold text-zinc-500 block">Mastery</span>
-                    <span className="text-xs font-mono font-bold text-cyan-300">
-                      {stats.mastery ? `${stats.mastery.toFixed(1)}%` : "24.0%"}
-                    </span>
-                  </div>
-                  <div className="p-2 rounded-xl bg-zinc-900/90 border border-zinc-800">
-                    <span className="text-[9px] uppercase font-bold text-zinc-500 block">Armor</span>
-                    <span className="text-xs font-mono font-bold text-zinc-200">
-                      {stats.armor ? stats.armor.toLocaleString() : "2,480"}
-                    </span>
-                  </div>
+                {/* Bottom Weapons Row (Main Hand, Off Hand, Ranged) Under Character Feet */}
+                <div className="w-full pt-4 border-t border-zinc-800/80 flex items-center justify-center gap-3 flex-wrap z-10">
+                  {WEAPON_SLOTS.map((slot) => {
+                    const item = gearMap.get(slot.key);
+                    if (!item && slot.key === "RANGED" && charLevel > 70) return null;
+                    return (
+                      <div key={slot.key} className="w-full sm:w-56">
+                        {renderSlot(slot, false)}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
-              {/* Right Slots Column (8 Slots) */}
-              <div className="lg:col-span-3 space-y-2">
+              {/* Right Slots Column (8 Slots) - Vertically Balanced */}
+              <div className="lg:col-span-3 flex flex-col justify-between space-y-2 sm:space-y-3 z-10">
                 {RIGHT_SLOTS.map((slot) => renderSlot(slot, true))}
               </div>
             </div>
+          </div>
 
-            {/* Bottom Weapons Row (Main Hand, Off Hand, Ranged) */}
-            <div className="mt-4 pt-3 border-t border-zinc-800/80 flex items-center justify-center gap-4 flex-wrap">
-              {WEAPON_SLOTS.map((slot) => {
-                const item = gearMap.get(slot.key);
-                if (!item && slot.key === "RANGED" && charLevel > 70) return null;
-                return (
-                  <div key={slot.key} className="w-full sm:w-60">
-                    {renderSlot(slot, false)}
-                  </div>
-                );
-              })}
+          {/* Panel: Dedicated Vital Resource Gauges & Combat Secondary Ratings */}
+          <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/85 border border-zinc-800/90 shadow-xl space-y-4">
+            {/* Health Bar & Power Bar in High-Contrast Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {/* Health Bar */}
+              <div className="p-3 rounded-xl bg-zinc-900/70 border border-zinc-800/80">
+                <div className="flex justify-between text-xs font-mono text-zinc-300 font-bold mb-1.5">
+                  <span className="flex items-center gap-1.5 text-emerald-400">
+                    <Heart size={13} /> Vida
+                  </span>
+                  <span>
+                    {maxHealth.toLocaleString()} / {maxHealth.toLocaleString()}
+                  </span>
+                </div>
+                <div className="w-full h-3 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                  <div className="w-full h-full bg-emerald-500 rounded-full shadow-sm shadow-emerald-500/50" />
+                </div>
+              </div>
+
+              {/* Resource Bar (Mana / Energy / Rage) */}
+              <div className="p-3 rounded-xl bg-zinc-900/70 border border-zinc-800/80">
+                <div className="flex justify-between text-xs font-mono text-zinc-300 font-bold mb-1.5">
+                  <span className={`flex items-center gap-1.5 ${resourceColor.text}`}>
+                    <Zap size={13} /> {resourceColor.label}
+                  </span>
+                  <span>
+                    {maxPower.toLocaleString()} / {maxPower.toLocaleString()}
+                  </span>
+                </div>
+                <div className="w-full h-3 bg-zinc-950 rounded-full overflow-hidden border border-zinc-800">
+                  <div className={`w-full h-full ${resourceColor.bg} rounded-full shadow-sm`} />
+                </div>
+              </div>
+            </div>
+
+            {/* Secondary Combat Ratings Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5">
+              <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-left">
+                <span className="text-[10px] uppercase font-bold text-zinc-500 block tracking-wider">Crítico</span>
+                <span className="text-sm font-mono font-bold text-amber-300">
+                  {stats.crit ? `${stats.crit.toFixed(1)}%` : "16.4%"}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-left">
+                <span className="text-[10px] uppercase font-bold text-zinc-500 block tracking-wider">Aceleração</span>
+                <span className="text-sm font-mono font-bold text-purple-300">
+                  {stats.haste ? `${stats.haste.toFixed(1)}%` : "8.2%"}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-left">
+                <span className="text-[10px] uppercase font-bold text-zinc-500 block tracking-wider">Maestria</span>
+                <span className="text-sm font-mono font-bold text-cyan-300">
+                  {stats.mastery ? `${stats.mastery.toFixed(1)}%` : "24.0%"}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-left">
+                <span className="text-[10px] uppercase font-bold text-zinc-500 block tracking-wider">Versatilidade</span>
+                <span className="text-sm font-mono font-bold text-emerald-300">
+                  {stats.versatility ? `${stats.versatility.toFixed(1)}%` : "5.0%"}
+                </span>
+              </div>
+              <div className="p-3 rounded-xl bg-zinc-900/80 border border-zinc-800 text-left">
+                <span className="text-[10px] uppercase font-bold text-zinc-500 block tracking-wider">Armadura</span>
+                <span className="text-sm font-mono font-bold text-zinc-200">
+                  {stats.armor ? stats.armor.toLocaleString() : "2,480"}
+                </span>
+              </div>
             </div>
           </div>
 

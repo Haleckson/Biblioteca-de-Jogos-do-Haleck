@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { motion, AnimatePresence, useMotionValue, animate } from "motion/react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -15,6 +15,7 @@ import {
   ImageIcon,
   Film,
   Tv,
+  Sparkles,
 } from "lucide-react";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
 import { getYoutubeEmbedUrl } from "../utils/youtube";
@@ -45,14 +46,34 @@ export default function ImageZoomLightbox({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [imgError, setImgError] = useState(false);
   const [resolvedSrc, setResolvedSrc] = useState<string | null>(currentSrc);
+  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgRef = useRef<HTMLImageElement>(null);
   const initialTouchDistRef = useRef<number | null>(null);
   const initialScaleRef = useRef<number>(1);
   const lastTapRef = useRef<number>(0);
 
+  // Motion values for smooth panning and guaranteed reset to center
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+
+  // Track window size for accurate constraint calculations across ultrawide & standard displays
+  const [viewportSize, setViewportSize] = useState({
+    width: typeof window !== "undefined" ? window.innerWidth : 1920,
+    height: typeof window !== "undefined" ? window.innerHeight : 1080,
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setViewportSize({ width: window.innerWidth, height: window.innerHeight });
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
   const youtubeEmbedUrl = currentSrc ? getYoutubeEmbedUrl(currentSrc) : null;
-  const isVideo = React.useMemo(() => {
+  const isVideo = useMemo(() => {
     if (!currentSrc) return false;
     if (youtubeEmbedUrl) return true;
     if (currentSrc.startsWith("data:video")) return true;
@@ -77,7 +98,7 @@ export default function ImageZoomLightbox({
   };
 
   // Filter valid images list
-  const validImages = React.useMemo(() => {
+  const validImages = useMemo(() => {
     let rawList: string[] = [];
     if (allImages && allImages.length > 0) {
       rawList = allImages.filter(Boolean).map(cleanDirectUrl);
@@ -92,7 +113,7 @@ export default function ImageZoomLightbox({
     return unique;
   }, [allImages, currentSrc]);
 
-  const currentIndex = React.useMemo(() => {
+  const currentIndex = useMemo(() => {
     if (!currentSrc || validImages.length === 0) return -1;
     const directIdx = validImages.indexOf(currentSrc);
     if (directIdx !== -1) return directIdx;
@@ -110,13 +131,74 @@ export default function ImageZoomLightbox({
     return foundIdx !== -1 ? foundIdx : 0;
   }, [currentSrc, validImages]);
 
-  // Reset states and resolve cache when opening a new image
+  // Detect ultrawide aspect ratio (>= 2.0, e.g. 21:9 or 32:9)
+  const ultrawideRatio = useMemo(() => {
+    if (!naturalSize || naturalSize.height === 0) return null;
+    const ratio = naturalSize.width / naturalSize.height;
+    if (ratio >= 1.95) {
+      return (Math.round(ratio * 10) / 10).toFixed(1);
+    }
+    return null;
+  }, [naturalSize]);
+
+  // Dynamic drag constraints taking into account viewport, image dimensions, and zoom level
+  const { maxDragX, maxDragY } = useMemo(() => {
+    if (zoomScale <= 1.02) {
+      return { maxDragX: 0, maxDragY: 0 };
+    }
+    const renderedW = imgRef.current?.clientWidth || (naturalSize ? Math.min(naturalSize.width, viewportSize.width) : viewportSize.width * 0.95);
+    const renderedH = imgRef.current?.clientHeight || (naturalSize ? Math.min(naturalSize.height, viewportSize.height) : viewportSize.height * 0.9);
+
+    // Scaled dimensions
+    const scaledW = renderedW * zoomScale;
+    const scaledH = renderedH * zoomScale;
+
+    // How much the scaled image overflows the viewport
+    const overflowX = Math.max(0, (scaledW - viewportSize.width) / 2);
+    const overflowY = Math.max(0, (scaledH - viewportSize.height) / 2);
+
+    // Generous boundary margin (200px) so the user can easily pan past and see edges in full detail
+    const boundX = Math.max(Math.round(overflowX + 200), 200);
+    const boundY = Math.max(Math.round(overflowY + 200), 200);
+
+    return { maxDragX: boundX, maxDragY: boundY };
+  }, [zoomScale, naturalSize, viewportSize]);
+
+  // Reset zoom and pan smoothly back to dead center
+  const resetZoomAndPan = useCallback(() => {
+    setZoomScale(1);
+    animate(x, 0, { type: "spring", stiffness: 350, damping: 32 });
+    animate(y, 0, { type: "spring", stiffness: 350, damping: 32 });
+  }, [x, y]);
+
+  // When zoom drops to 1x or less, immediately animate pan position back to dead center
+  useEffect(() => {
+    if (zoomScale <= 1.05) {
+      animate(x, 0, { type: "spring", stiffness: 350, damping: 32 });
+      animate(y, 0, { type: "spring", stiffness: 350, damping: 32 });
+    } else {
+      // If user zoomed out while panned far away, constrain smoothly within active bounds
+      const currentX = x.get();
+      const currentY = y.get();
+      if (Math.abs(currentX) > maxDragX) {
+        animate(x, Math.sign(currentX) * maxDragX, { type: "spring", stiffness: 320, damping: 28 });
+      }
+      if (Math.abs(currentY) > maxDragY) {
+        animate(y, Math.sign(currentY) * maxDragY, { type: "spring", stiffness: 320, damping: 28 });
+      }
+    }
+  }, [zoomScale, maxDragX, maxDragY, x, y]);
+
+  // Reset states, motion values, and resolve cache when opening a new image
   useEffect(() => {
     if (currentSrc) {
       setZoomScale(1);
+      x.jump(0);
+      y.jump(0);
       setImgError(false);
       setControlsVisible(true);
       setResolvedSrc(currentSrc);
+      setNaturalSize(null);
 
       if (!isVideo) {
         getCachedImageUrl(currentSrc).then((cached) => {
@@ -124,7 +206,7 @@ export default function ImageZoomLightbox({
         });
       }
     }
-  }, [currentSrc, isVideo]);
+  }, [currentSrc, isVideo, x, y]);
 
   // Preload adjacent images into CacheStorage
   useEffect(() => {
@@ -137,20 +219,24 @@ export default function ImageZoomLightbox({
     preloadImagesToCache(adjacent);
   }, [isOpen, currentIndex, validImages]);
 
-  // Navigate functions
+  // Navigate functions with immediate position reset
   const handleNext = useCallback(() => {
     if (validImages.length <= 1 || currentIndex === -1) return;
     const nextIdx = (currentIndex + 1) % validImages.length;
     setZoomScale(1);
+    x.jump(0);
+    y.jump(0);
     onSelectImage?.(validImages[nextIdx]);
-  }, [validImages, currentIndex, onSelectImage]);
+  }, [validImages, currentIndex, onSelectImage, x, y]);
 
   const handlePrev = useCallback(() => {
     if (validImages.length <= 1 || currentIndex === -1) return;
     const prevIdx = (currentIndex - 1 + validImages.length) % validImages.length;
     setZoomScale(1);
+    x.jump(0);
+    y.jump(0);
     onSelectImage?.(validImages[prevIdx]);
-  }, [validImages, currentIndex, onSelectImage]);
+  }, [validImages, currentIndex, onSelectImage, x, y]);
 
   // Fullscreen toggle
   const toggleFullscreen = useCallback(() => {
@@ -165,8 +251,15 @@ export default function ImageZoomLightbox({
 
   // Double tap / double click zoom toggle
   const handleDoubleTap = useCallback(() => {
-    setZoomScale((prev) => (prev > 1.2 ? 1 : 2.5));
-  }, []);
+    setZoomScale((prev) => {
+      if (prev > 1.2) {
+        animate(x, 0, { type: "spring", stiffness: 350, damping: 32 });
+        animate(y, 0, { type: "spring", stiffness: 350, damping: 32 });
+        return 1;
+      }
+      return 2.5;
+    });
+  }, [x, y]);
 
   // Copy Image Link
   const handleCopyLink = useCallback(() => {
@@ -226,7 +319,7 @@ export default function ImageZoomLightbox({
         e.preventDefault();
         setZoomScale((prev) => Math.max(prev - 0.3, 0.5));
       } else if (e.key === "0" || e.key.toLowerCase() === "r") {
-        setZoomScale(1);
+        resetZoomAndPan();
       } else if (e.key.toLowerCase() === "f") {
         toggleFullscreen();
       }
@@ -241,7 +334,7 @@ export default function ImageZoomLightbox({
       window.removeEventListener("touchstart", handleUserActivity);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [isOpen, handleNext, handlePrev, onClose, toggleFullscreen]);
+  }, [isOpen, handleNext, handlePrev, onClose, resetZoomAndPan, toggleFullscreen]);
 
   // Pinch-to-zoom touch handlers
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -284,7 +377,7 @@ export default function ImageZoomLightbox({
       <div
         ref={containerRef}
         key="image-zoom-lightbox-modal"
-        className="fixed inset-0 z-[200] flex flex-col items-center justify-center p-2 sm:p-4 select-none overflow-hidden"
+        className="fixed inset-0 z-[200] flex flex-col items-center justify-center select-none overflow-hidden"
         onWheel={(e) => {
           const factor = 0.12;
           if (e.deltaY < 0) {
@@ -302,48 +395,56 @@ export default function ImageZoomLightbox({
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
-          className="absolute inset-0 bg-black/95 backdrop-blur-xl cursor-zoom-out"
+          className="absolute inset-0 bg-black/95 backdrop-blur-2xl cursor-zoom-out"
           onClick={onClose}
         />
 
         {/* Top Header Bar */}
         <div
-          className={`absolute top-0 left-0 right-0 p-4 sm:p-6 flex items-center justify-between z-30 transition-all duration-500 bg-gradient-to-b from-black/90 via-black/50 to-transparent ${
+          className={`absolute top-0 left-0 right-0 p-3 sm:p-5 flex items-center justify-between z-30 transition-all duration-500 bg-gradient-to-b from-black/95 via-black/60 to-transparent ${
             controlsVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4 pointer-events-none"
           }`}
         >
-          <div className="flex items-center gap-2.5 max-w-[60%] sm:max-w-[80%]">
-            <div className={`p-2 rounded-xl border shrink-0 ${
-              isVideo
-                ? "bg-cyan-950/90 border-cyan-500/50 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)]"
-                : "bg-zinc-900/90 border-zinc-800 text-cyan-400"
-            }`}>
+          <div className="flex items-center gap-2.5 max-w-[65%] sm:max-w-[80%]">
+            <div
+              className={`p-2 rounded-xl border shrink-0 ${
+                isVideo
+                  ? "bg-cyan-950/90 border-cyan-500/50 text-cyan-300 shadow-[0_0_15px_rgba(6,182,212,0.3)]"
+                  : "bg-zinc-900/90 border-zinc-800 text-cyan-400"
+              }`}
+            >
               {isVideo ? <Film size={18} className="animate-pulse" /> : <ImageIcon size={18} />}
             </div>
-            <div>
-              <div className="flex items-center gap-2">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm sm:text-base font-bold text-white tracking-wide truncate">
-                  {title || (isVideo ? "Modo Teatro" : "Visualizador de Imagem")}
+                  {title || (isVideo ? "Modo Teatro" : "Visualizador em Destaque")}
                 </h3>
                 {isVideo && (
                   <span className="hidden sm:inline-flex px-2 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-widest bg-cyan-950 border border-cyan-500/40 text-cyan-300">
                     Modo Teatro
                   </span>
                 )}
+                {ultrawideRatio && (
+                  <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-mono font-extrabold uppercase tracking-widest bg-cyan-950/80 border border-cyan-500/40 text-cyan-300">
+                    <Sparkles size={11} className="text-cyan-400" />
+                    Ultrawide {ultrawideRatio}:1
+                  </span>
+                )}
               </div>
               {validImages.length > 1 && (
-                <p className="text-[11px] font-mono text-zinc-400">
+                <p className="text-[11px] font-mono text-zinc-400 truncate">
                   Mídia {currentIndex + 1} de {validImages.length}
                 </p>
               )}
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 shrink-0">
             <button
               type="button"
               onClick={handleCopyLink}
-              className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
+              className="p-2 sm:p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
               title="Copiar Link da Mídia"
             >
               {copied ? <Check size={18} className="text-emerald-400" /> : <Copy size={18} />}
@@ -353,7 +454,7 @@ export default function ImageZoomLightbox({
               <button
                 type="button"
                 onClick={handleDownload}
-                className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
+                className="p-2 sm:p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg flex items-center justify-center"
                 title="Baixar Imagem"
               >
                 <Download size={18} />
@@ -363,7 +464,7 @@ export default function ImageZoomLightbox({
             <button
               type="button"
               onClick={toggleFullscreen}
-              className="p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg hidden sm:flex items-center justify-center"
+              className="p-2 sm:p-2.5 rounded-full bg-zinc-900/90 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer border border-zinc-800 shadow-lg hidden sm:flex items-center justify-center"
               title={isFullscreen ? "Sair da Tela Cheia (F)" : "Tela Cheia Nativa (F)"}
             >
               {isFullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
@@ -372,7 +473,7 @@ export default function ImageZoomLightbox({
             <button
               type="button"
               onClick={onClose}
-              className="p-2.5 rounded-full bg-red-950/80 hover:bg-red-900 text-red-200 transition-all cursor-pointer border border-red-800/60 shadow-lg flex items-center justify-center"
+              className="p-2 sm:p-2.5 rounded-full bg-red-950/80 hover:bg-red-900 text-red-200 transition-all cursor-pointer border border-red-800/60 shadow-lg flex items-center justify-center"
               title="Fechar (Esc)"
             >
               <X size={20} />
@@ -380,72 +481,81 @@ export default function ImageZoomLightbox({
           </div>
         </div>
 
-        {/* Main Stage */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          transition={{ type: "spring", damping: 28, stiffness: 350 }}
-          className="relative w-full max-w-7xl h-full max-h-[88vh] z-10 flex flex-col items-center justify-center overflow-hidden my-auto"
-        >
-          <div className="w-full h-full flex items-center justify-center p-2 sm:p-4 select-none">
-            {isVideo ? (
-              <div className="w-full max-w-5xl aspect-video rounded-2xl overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 bg-black relative flex items-center justify-center my-auto ring-1 ring-cyan-500/20">
-                {youtubeEmbedUrl ? (
-                  <iframe
-                    src={`${youtubeEmbedUrl}?autoplay=1&rel=0&modestbranding=1`}
-                    title={title || "Vídeo em Modo Teatro"}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                    allowFullScreen
-                    className="w-full h-full border-0"
-                  />
-                ) : (
-                  <video
-                    src={currentSrc}
-                    controls
-                    autoPlay
-                    className="w-full h-full object-contain bg-black"
-                  />
-                )}
-              </div>
-            ) : imgError ? (
-              <div className="flex flex-col items-center justify-center p-8 bg-zinc-900/80 border border-zinc-800 rounded-2xl text-center max-w-md gap-3">
-                <ImageIcon size={48} className="text-zinc-600" />
-                <h4 className="text-sm font-bold text-zinc-300">Não foi possível carregar esta imagem</h4>
-                <p className="text-xs text-zinc-500 break-all">{currentSrc}</p>
-                <button
-                  onClick={() => setImgError(false)}
-                  className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-white transition-all mt-2"
-                >
-                  Tentar Novamente
-                </button>
-              </div>
-            ) : (
-              <motion.img
-                drag={zoomScale > 1.05}
-                dragSnapToOrigin={false}
-                dragConstraints={{ left: -1000, right: 1000, top: -1000, bottom: 1000 }}
-                dragTransition={{ bounceStiffness: 300, bounceDamping: 30 }}
-                animate={{ scale: zoomScale }}
-                transition={{ type: "spring", stiffness: 320, damping: 28 }}
-                src={resolvedSrc || currentSrc}
-                alt="Zoom Imagem"
-                onDoubleClick={handleDoubleTap}
-                onClick={(e) => {
-                  if (zoomScale <= 1.05) {
-                    e.stopPropagation();
-                    onClose();
-                  }
-                }}
-                title={zoomScale <= 1.05 ? "Clique para fechar" : undefined}
-                className={`max-w-full max-h-[80vh] sm:max-h-[85vh] object-contain rounded-2xl shadow-2xl border border-zinc-800/80 select-none ${
-                  zoomScale > 1.05 ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
-                }`}
-                referrerPolicy="no-referrer"
-                onError={() => setImgError(true)}
-              />
-            )}
-          </div>
+        {/* Main Stage - Maximized screen utilization for standard and Ultrawide displays */}
+        <div className="relative w-full h-full z-10 flex items-center justify-center overflow-hidden p-1 sm:p-2 md:p-3">
+          {isVideo ? (
+            <div className="w-full max-w-[96vw] max-h-[88vh] aspect-video rounded-2xl overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 bg-black relative flex items-center justify-center my-auto ring-1 ring-cyan-500/20">
+              {youtubeEmbedUrl ? (
+                <iframe
+                  src={`${youtubeEmbedUrl}?autoplay=1&rel=0&modestbranding=1`}
+                  title={title || "Vídeo em Modo Teatro"}
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                  className="w-full h-full border-0"
+                />
+              ) : (
+                <video
+                  src={currentSrc}
+                  controls
+                  autoPlay
+                  className="w-full h-full object-contain bg-black"
+                />
+              )}
+            </div>
+          ) : imgError ? (
+            <div className="flex flex-col items-center justify-center p-8 bg-zinc-900/80 border border-zinc-800 rounded-2xl text-center max-w-md gap-3">
+              <ImageIcon size={48} className="text-zinc-600" />
+              <h4 className="text-sm font-bold text-zinc-300">Não foi possível carregar esta imagem</h4>
+              <p className="text-xs text-zinc-500 break-all">{currentSrc}</p>
+              <button
+                onClick={() => setImgError(false)}
+                className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-white transition-all mt-2"
+              >
+                Tentar Novamente
+              </button>
+            </div>
+          ) : (
+            <motion.img
+              ref={imgRef}
+              key={resolvedSrc || currentSrc}
+              style={{ x, y }}
+              drag={zoomScale > 1.05}
+              dragSnapToOrigin={false}
+              dragElastic={0.18}
+              dragConstraints={{
+                left: -maxDragX,
+                right: maxDragX,
+                top: -maxDragY,
+                bottom: maxDragY,
+              }}
+              dragTransition={{ bounceStiffness: 300, bounceDamping: 30 }}
+              animate={{ scale: zoomScale }}
+              transition={{ type: "spring", stiffness: 320, damping: 28 }}
+              src={resolvedSrc || currentSrc}
+              alt="Mídia em Modo Teatro"
+              onLoad={(e) => {
+                const img = e.currentTarget;
+                setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
+              }}
+              onDoubleClick={handleDoubleTap}
+              onClick={(e) => {
+                if (zoomScale <= 1.05) {
+                  e.stopPropagation();
+                  onClose();
+                }
+              }}
+              title={
+                zoomScale <= 1.05
+                  ? "Clique para fechar • Duplo clique para dar zoom"
+                  : "Arraste para mover • Duplo clique para restaurar tamanho"
+              }
+              className={`w-auto h-auto max-w-[calc(100vw-12px)] sm:max-w-[calc(100vw-24px)] md:max-w-[calc(100vw-36px)] max-h-[calc(100vh-16px)] sm:max-h-[calc(100vh-24px)] md:max-h-[calc(100vh-32px)] object-contain rounded-xl sm:rounded-2xl shadow-2xl border border-zinc-800/80 select-none ${
+                zoomScale > 1.05 ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+              }`}
+              referrerPolicy="no-referrer"
+              onError={() => setImgError(true)}
+            />
+          )}
 
           {/* Floating Prev / Next Navigation Buttons */}
           {validImages.length > 1 && (
@@ -456,7 +566,7 @@ export default function ImageZoomLightbox({
                   e.stopPropagation();
                   handlePrev();
                 }}
-                className={`absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 p-3 sm:p-4 rounded-full bg-zinc-950/90 hover:bg-zinc-850 text-white transition-all cursor-pointer border border-zinc-800 shadow-2xl z-30 flex items-center justify-center hover:scale-110 active:scale-95 duration-300 ${
+                className={`absolute left-3 sm:left-6 top-1/2 -translate-y-1/2 p-3 sm:p-4 rounded-full bg-zinc-950/85 hover:bg-zinc-800 text-white transition-all cursor-pointer border border-zinc-700/60 shadow-2xl z-30 flex items-center justify-center hover:scale-110 active:scale-95 duration-300 backdrop-blur-md ${
                   controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
                 }`}
                 title="Mídia anterior (Seta esquerda)"
@@ -470,7 +580,7 @@ export default function ImageZoomLightbox({
                   e.stopPropagation();
                   handleNext();
                 }}
-                className={`absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 p-3 sm:p-4 rounded-full bg-zinc-950/90 hover:bg-zinc-850 text-white transition-all cursor-pointer border border-zinc-800 shadow-2xl z-30 flex items-center justify-center hover:scale-110 active:scale-95 duration-300 ${
+                className={`absolute right-3 sm:right-6 top-1/2 -translate-y-1/2 p-3 sm:p-4 rounded-full bg-zinc-950/85 hover:bg-zinc-800 text-white transition-all cursor-pointer border border-zinc-700/60 shadow-2xl z-30 flex items-center justify-center hover:scale-110 active:scale-95 duration-300 backdrop-blur-md ${
                   controlsVisible ? "opacity-100 scale-100 pointer-events-auto" : "opacity-0 scale-95 pointer-events-none"
                 }`}
                 title="Próxima mídia (Seta direita)"
@@ -482,7 +592,7 @@ export default function ImageZoomLightbox({
 
           {/* Bottom Floating Control Bar */}
           <div
-            className={`absolute bottom-4 sm:bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-3 bg-zinc-950/95 border border-zinc-800 backdrop-blur-xl px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-2xl shadow-2xl select-none z-30 transition-all duration-500 max-w-[95vw] overflow-x-auto ${
+            className={`absolute bottom-3 sm:bottom-5 left-1/2 -translate-x-1/2 flex items-center gap-2 sm:gap-3 bg-zinc-950/95 border border-zinc-800 backdrop-blur-xl px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-2xl shadow-2xl select-none z-30 transition-all duration-500 max-w-[95vw] overflow-x-auto ${
               controlsVisible ? "opacity-100 translate-y-0 pointer-events-auto" : "opacity-0 translate-y-4 pointer-events-none"
             }`}
           >
@@ -522,11 +632,17 @@ export default function ImageZoomLightbox({
                 </button>
 
                 <div className="flex items-center gap-1">
-                  {[1, 1.5, 2].map((preset) => (
+                  {[1, 1.5, 2, 2.5].map((preset) => (
                     <button
                       key={preset}
                       type="button"
-                      onClick={() => setZoomScale(preset)}
+                      onClick={() => {
+                        if (preset === 1) {
+                          resetZoomAndPan();
+                        } else {
+                          setZoomScale(preset);
+                        }
+                      }}
                       className={`px-2 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer ${
                         Math.abs(zoomScale - preset) < 0.05
                           ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
@@ -551,7 +667,7 @@ export default function ImageZoomLightbox({
 
                 <button
                   type="button"
-                  onClick={() => setZoomScale(1)}
+                  onClick={resetZoomAndPan}
                   className="p-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center justify-center hover:scale-105 active:scale-95"
                   title="Redefinir Zoom (0 ou R)"
                 >
@@ -569,8 +685,9 @@ export default function ImageZoomLightbox({
               </>
             )}
           </div>
-        </motion.div>
+        </div>
       </div>
     </AnimatePresence>
   );
 }
+

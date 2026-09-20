@@ -32,6 +32,7 @@ interface WoWModelViewer3DProps {
   profile: BlizzardProfileData;
   className?: string;
   height?: number | string;
+  aspect?: number;
 }
 
 // Typical classic / retail tier gear display IDs for stunning visualization
@@ -157,6 +158,7 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
   profile,
   className = "",
   height = 540,
+  aspect = 0.85,
 }) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const viewerInstanceRef = useRef<ZamViewerInstance | null>(null);
@@ -194,7 +196,7 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
     const iconicFallback = CLASS_ICONIC_DISPLAYS[charClass] || CLASS_ICONIC_DISPLAYS["Warrior"];
 
     // Slot IDs in WoW:
-    // 1: Head, 3: Shoulder, 4: Shirt, 5: Chest, 6: Waist, 7: Legs, 8: Feet, 9: Wrist, 10: Hands, 15: Back, 19: Tabard, 21: Main Hand, 22: Off Hand
+    // 1: Head, 3: Shoulder, 4: Shirt, 5: Chest, 6: Waist, 7: Legs, 8: Feet, 9: Wrist, 10: Hands, 15: Back, 19: Tabard, 21: Main Hand, 22: Off Hand, 26: Ranged
     const slotMapping: Record<string, number> = {
       HEAD: 1,
       SHOULDER: 3,
@@ -209,15 +211,36 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
       TABARD: 19,
       MAIN_HAND: 21,
       OFF_HAND: 22,
+      RANGED: 26,
     };
 
-    if (profile.gear && Array.isArray(profile.gear)) {
-      for (const g of profile.gear) {
-        const slotNum = g.slotId || slotMapping[g.slot];
-        if (slotNum && g.displayId) {
-          itemsMap.push([slotNum, g.displayId]);
-        } else if (slotNum && iconicFallback[slotNum]) {
-          itemsMap.push([slotNum, iconicFallback[slotNum]]);
+    // Priority 1: Direct Blizzard Appearance Items with official display_ids
+    const appearanceItems = profile.appearance?.items;
+    if (appearanceItems && Array.isArray(appearanceItems)) {
+      for (const aIt of appearanceItems) {
+        const slotKey = aIt.slot?.type?.toUpperCase();
+        const slotNum = slotMapping[slotKey];
+        const displayId = aIt.display_id || aIt.item_appearance_modifier_id;
+        if (slotNum && displayId) {
+          itemsMap.push([slotNum, displayId]);
+        }
+      }
+    }
+
+    // Priority 2: Equipped gear items with displayId
+    const allGear = profile.gear || profile.equippedItems;
+    if (allGear && Array.isArray(allGear)) {
+      for (const g of allGear) {
+        const slotNum = g.slotId || slotMapping[g.slot?.toUpperCase()];
+        if (slotNum) {
+          const alreadyAdded = itemsMap.some(([s]) => s === slotNum);
+          if (!alreadyAdded) {
+            if (g.displayId) {
+              itemsMap.push([slotNum, g.displayId]);
+            } else if (iconicFallback[slotNum]) {
+              itemsMap.push([slotNum, iconicFallback[slotNum]]);
+            }
+          }
         }
       }
     }
@@ -238,10 +261,11 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
       hairColor: 1,
       facialStyle: 0,
       items: itemsMap,
+      customizations: profile.appearance?.customizations,
     };
 
     try {
-      const viewer = await createWowCharacterViewer(mountRef.current, characterConfig);
+      const viewer = await createWowCharacterViewer(mountRef.current, characterConfig, aspect);
       if (viewer) {
         viewerInstanceRef.current = viewer;
         viewer.setAnimation(currentAnim);
@@ -256,7 +280,7 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
       setIsLoading(false);
       setLoadError("WebGL interactive mode initialized.");
     }
-  }, [charRace, charGender, charClass, profile.name, profile.realm, profile.gear]);
+  }, [charRace, charGender, charClass, profile.name, profile.realm, profile.gear, profile.equippedItems, profile.appearance, aspect]);
 
   useEffect(() => {
     initViewer();

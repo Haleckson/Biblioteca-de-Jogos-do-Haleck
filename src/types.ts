@@ -367,6 +367,20 @@ export interface BlizzardProfileData {
   }[];
   talents?: any;
   reputations?: BlizzardReputation[];
+  mainRawUrl?: string;
+  insetImageUrl?: string;
+  appearance?: {
+    customizations?: {
+      option: { id: number; name?: string };
+      choice: { id: number; name?: string };
+    }[];
+    items?: {
+      slot: { type: string };
+      item: { id: number };
+      display_id?: number;
+      item_appearance_modifier_id?: number;
+    }[];
+  };
   inventory?: BlizzardCharacterInventory;
   collections?: BlizzardCharacterCollections;
   lastSyncedAt?: string;

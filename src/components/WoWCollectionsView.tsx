@@ -29,6 +29,7 @@ import {
   BlizzardCollectionTitle,
 } from "../types";
 import { createWowMountViewer, ZamViewerInstance } from "../utils/wowModelEngine";
+import { generateWoWCharacterProfile } from "../utils/blizzardCharacterData";
 
 interface WoWCollectionsViewProps {
   profile: BlizzardProfileData;
@@ -62,7 +63,22 @@ export const WoWCollectionsView: React.FC<WoWCollectionsViewProps> = ({ profile,
   const [mountFilter, setMountFilter] = useState<"all" | "ground" | "flying" | "dragonriding" | "favorite">("all");
   const [petFamilyFilter, setPetFamilyFilter] = useState<string>("all");
 
-  const collections = profile.collections;
+  const collections = useMemo(() => {
+    if (profile.collections && ((profile.collections.mounts && profile.collections.mounts.length > 0) || (profile.collections.pets && profile.collections.pets.length > 0))) {
+      return profile.collections;
+    }
+    const gen = generateWoWCharacterProfile({
+      name: profile.name,
+      realm: profile.realm,
+      characterClass: profile.characterClass,
+      race: profile.race,
+      level: profile.level,
+      gender: profile.gender,
+      faction: profile.faction,
+      gameMode: resolvedVersion,
+    });
+    return gen.collections || { mounts: [], pets: [], toys: [], titles: [] };
+  }, [profile, resolvedVersion]);
 
   // Selected item for 3D preview
   const [selectedMount, setSelectedMount] = useState<BlizzardCollectionMount | null>(

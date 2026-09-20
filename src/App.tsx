@@ -16,7 +16,8 @@ import { CustomAlert, CustomConfirm, CustomPasswordPrompt, CustomDriveConnectPro
 import { Search, Plus, Filter, Image, Gamepad2, Info, CheckCircle2, Cloud, HardDrive, Lock, Unlock, Mail, Move, ArrowUp, RotateCcw, Key, Settings, BarChart3, Sparkles, Wifi, WifiOff } from "lucide-react";
 import GlobalSearchModal from "./components/GlobalSearchModal";
 import { DashboardView } from "./components/DashboardView";
-import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, verifyGameDataIntegrity, auth, syncGogAuthFromFirebase } from "./utils/firebase";
+import { isFirebaseConfigured, syncFromFirebase, saveToFirebase, verifyGameDataIntegrity, auth, syncGogAuthFromFirebase, syncBlizzardAuthFromFirebase } from "./utils/firebase";
+import { setStoredBlizzardOAuthToken, setStoredBlizzardBattleTag, setStoredBlizzardAccountId, setStoredBlizzardRegion } from "./utils/blizzardApi";
 import { uploadToImgBB, getCustomImgBBKey } from "./utils/imgbb";
 import {
   signInWithGoogleDrive,
@@ -650,6 +651,32 @@ export default function App() {
       }
     }
 
+    // Sincronizar credenciais de autenticação da Battle.net armazenadas no Firebase (Cross-Device & Cross-Origin)
+    let unsubscribeBlizzardAuth: (() => void) | undefined;
+    if (isFirebaseConfigured()) {
+      try {
+        unsubscribeBlizzardAuth = syncBlizzardAuthFromFirebase((authData) => {
+          if (authData) {
+            console.log("[CrossDeviceBlizzard] Sessão Battle.net sincronizada da nuvem:", authData.battleTag);
+            if (authData.token) {
+              setStoredBlizzardOAuthToken(authData.token, authData.expiresAt, authData.refreshToken, true);
+            }
+            if (authData.battleTag) {
+              setStoredBlizzardBattleTag(authData.battleTag, true);
+            }
+            if (authData.accountId) {
+              setStoredBlizzardAccountId(authData.accountId, true);
+            }
+            if (authData.region) {
+              setStoredBlizzardRegion(authData.region as any);
+            }
+          }
+        });
+      } catch (err) {
+        console.warn("Erro ao escutar sessão Battle.net no Firebase:", err);
+      }
+    }
+
     const loadGamingProfiles = async () => {
       try {
         const steamProf = await fetchSteamProfile();
@@ -674,6 +701,7 @@ export default function App() {
       mounted = false;
       clearInterval(interval);
       if (unsubscribeGogAuth) unsubscribeGogAuth();
+      if (unsubscribeBlizzardAuth) unsubscribeBlizzardAuth();
     };
   }, []);
 

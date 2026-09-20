@@ -477,6 +477,7 @@ export default function GameDetailDrawer({
       setIsReadingMode(true);
       setExpandedMediaEntries({});
       setIsAchievementsGalleryOpen(false);
+      setIsBlizzardSectionExpanded(false);
       if (initialSelectedDiaryId) {
         const initialMap: Record<string, boolean> = {};
         if (game?.diary) {
@@ -686,6 +687,7 @@ export default function GameDetailDrawer({
     setIsEntrySelectionMode(false);
     setCelebrationData(null);
     setIsAchievementsGalleryOpen(false);
+    setIsBlizzardSectionExpanded(false);
   }, [propGame?.id]);
 
   useEffect(() => {
@@ -753,6 +755,7 @@ export default function GameDetailDrawer({
   const [isSyncingBlizzard, setIsSyncingBlizzard] = useState<boolean>(false);
   const [selectedBlizzardCharTab, setSelectedBlizzardCharTab] = useState<"overview" | "gear" | "talents" | "achievements">("overview");
   const [blizzardArmorySearch, setBlizzardArmorySearch] = useState<string>("");
+  const [isBlizzardSectionExpanded, setIsBlizzardSectionExpanded] = useState<boolean>(false);
 
   // Process and filter GOG Achievements
   const processedGogAchievements = useMemo(() => {
@@ -1299,27 +1302,27 @@ export default function GameDetailDrawer({
     }
   }, [game?.gogGameId, game?.integrationPlatform, isOpen]);
 
-  // Blizzard Profile & Characters loader in Drawer
+  // Blizzard Profile & Characters loader in Drawer - ONLY LOADS ON DEMAND WHEN EXPANDED!
   useEffect(() => {
-    const isBattlenet = Boolean(
-      game?.integrationPlatform === "battlenet" ||
-      game?.blizzardGameId ||
-      (game?.platform && (
-        game.platform.toLowerCase().includes("battlenet") ||
-        game.platform.toLowerCase().includes("battle.net") ||
-        game.platform.toLowerCase().includes("bnet")
-      ))
-    );
+    const isBattlenet = Boolean(game?.integrationPlatform === "battlenet");
 
     if (!isOpen || !game || !isBattlenet) {
-      // Lazy cleanup: Clear WoW data when drawer is closed so cards remain lightweight and unburdened
+      // Lazy cleanup: Clear WoW data when drawer is closed or integration is disabled
       setBlizzardChars([]);
       setBlizzardActiveProfile(null);
       setIsLoadingBlizzardChars(false);
       return;
     }
 
-    if (isOpen && game && isBattlenet) {
+    // Performance Optimization: Only load characters and profile when user explicitly expands the section!
+    if (!isBlizzardSectionExpanded) {
+      if (game.blizzardProfileData && !blizzardActiveProfile) {
+        setBlizzardActiveProfile(game.blizzardProfileData);
+      }
+      return;
+    }
+
+    if (isOpen && game && isBattlenet && isBlizzardSectionExpanded) {
       if (game.blizzardProfileData) {
         setBlizzardActiveProfile(game.blizzardProfileData);
       }
@@ -1389,7 +1392,7 @@ export default function GameDetailDrawer({
           setIsLoadingBlizzardChars(false);
         });
     }
-  }, [isOpen, game?.id, game?.integrationPlatform, game?.blizzardGameId, game?.wowVersion, game?.blizzardCharacterName, game?.platform]);
+  }, [isOpen, game?.id, game?.integrationPlatform, game?.blizzardGameId, game?.wowVersion, game?.blizzardCharacterName, isBlizzardSectionExpanded]);
 
   useEffect(() => {
     if (game && game.metacriticUrl && isOpen) {
@@ -4535,27 +4538,27 @@ export default function GameDetailDrawer({
                       )}
 
                       {/* BLIZZARD BATTLE.NET & WORLD OF WARCRAFT / WARCRAFT SPECIAL SECTION */}
-                      {(game.integrationPlatform === "battlenet" ||
-                        Boolean(game.blizzardGameId) ||
-                        Boolean(
-                          game.platform && (
-                            game.platform.toLowerCase().includes("battlenet") ||
-                            game.platform.toLowerCase().includes("battle.net") ||
-                            game.platform.toLowerCase().includes("bnet")
-                          )
-                        )
-                      ) && (
+                      {game.integrationPlatform === "battlenet" && (
                         <div id="blizzard-characters-section" className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-cyan-500/50 hover:border-cyan-500/80 shadow-md shadow-cyan-500/10 mt-1 text-left space-y-4 transition-all">
-                          {/* Header Bar */}
-                          <div className="flex items-center justify-between gap-3 flex-wrap border-b border-cyan-500/30 pb-3">
+                          {/* Header Bar Colapsável */}
+                          <div 
+                            onClick={() => setIsBlizzardSectionExpanded(!isBlizzardSectionExpanded)}
+                            className="flex items-center justify-between gap-3 flex-wrap border-b border-cyan-500/30 pb-3 cursor-pointer select-none group"
+                            title={isBlizzardSectionExpanded ? "Clique para recolher seção" : "Clique para expandir e carregar armory e personagens sob demanda"}
+                          >
                             <div className="flex items-center gap-2.5">
-                              <span className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse" />
+                              <span className={`w-2.5 h-2.5 rounded-full ${isBlizzardSectionExpanded ? "bg-cyan-400 animate-pulse" : "bg-zinc-500"}`} />
                               <div className="flex items-center gap-2">
-                                <Shield size={18} className="text-cyan-400" />
+                                <Shield size={18} className={isBlizzardSectionExpanded ? "text-cyan-400" : "text-cyan-500/80"} />
                                 <div>
-                                  <h3 className="text-cyan-300 text-sm uppercase tracking-wider font-extrabold font-mono leading-none">
-                                    Personagens Blizzard
-                                  </h3>
+                                  <div className="flex items-center gap-2">
+                                    <h3 className="text-cyan-300 text-sm uppercase tracking-wider font-extrabold font-mono leading-none group-hover:text-cyan-200 transition-colors">
+                                      Personagens Blizzard
+                                    </h3>
+                                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-cyan-950/80 text-cyan-300 border border-cyan-500/40">
+                                      {game.wowVersion ? `WoW ${game.wowVersion.toUpperCase()}` : "Battle.net"}
+                                    </span>
+                                  </div>
                                   <p className="text-[11px] text-zinc-400 font-sans mt-0.5">
                                     Battle.net • {game.blizzardGameName || game.name || "World of Warcraft"}
                                   </p>
@@ -4563,22 +4566,24 @@ export default function GameDetailDrawer({
                               </div>
                             </div>
 
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                               {blizzardActiveProfile && (
                                 <span className="text-xs font-mono font-bold text-cyan-200 bg-cyan-950/60 px-2.5 py-1 rounded-xl border border-cyan-500/30">
                                   {blizzardActiveProfile.name} ({blizzardActiveProfile.realm})
                                 </span>
                               )}
 
-                              {isAdmin && (
+                              {isAdmin && isBlizzardSectionExpanded && (
                                 <button
                                   type="button"
-                                  onClick={async () => {
+                                  onClick={async (e) => {
+                                    e.stopPropagation();
                                     setIsSyncingBlizzard(true);
                                     try {
                                       const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
-                                      const gId = game.blizzardGameId || "wow-retail";
-                                      const chars = await fetchWoWUserCharacters({ region, version: "all", gameId: gId });
+                                      const targetWoWVersion: WoWVersionType = (game.wowVersion as WoWVersionType) || "retail";
+                                      const gId = game.blizzardGameId || `wow-${targetWoWVersion}`;
+                                      const chars = await fetchWoWUserCharacters({ region, version: targetWoWVersion, gameId: gId });
                                       setBlizzardChars(chars);
                                       const targetCharObj = chars.find((c) => c.name.toLowerCase() === (game.blizzardCharacterName || "").toLowerCase()) || (chars.length > 0 ? chars[0] : null);
                                       const targetChar = targetCharObj ? targetCharObj.name : (game.blizzardCharacterName || "");
@@ -4595,7 +4600,7 @@ export default function GameDetailDrawer({
                                           faction: targetCharObj?.faction,
                                           activeSpec: targetCharObj?.activeSpec,
                                           equippedItemLevel: targetCharObj?.equippedItemLevel,
-                                          version: targetCharObj?.wow_version || targetCharObj?.gameMode,
+                                          version: targetCharObj?.wow_version || targetCharObj?.gameMode || targetWoWVersion,
                                         });
                                         if (prof) {
                                           setBlizzardActiveProfile(prof);
@@ -4625,11 +4630,53 @@ export default function GameDetailDrawer({
                                   ) : (
                                     <RefreshCw size={12} />
                                   )}
-                                  <span>Atualizar Battle.net</span>
+                                  <span>Atualizar</span>
                                 </button>
                               )}
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setIsBlizzardSectionExpanded(!isBlizzardSectionExpanded);
+                                }}
+                                className="px-3 py-1.5 rounded-xl bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                              >
+                                <span>{isBlizzardSectionExpanded ? "Recolher" : "Expandir"}</span>
+                                <ChevronDown size={14} className={`transform transition-transform duration-200 ${isBlizzardSectionExpanded ? "rotate-180" : ""}`} />
+                              </button>
                             </div>
                           </div>
+
+                          {/* Estado Colapsado: Banner sutil sem sobrecarga */}
+                          {!isBlizzardSectionExpanded && (
+                            <div 
+                              onClick={() => setIsBlizzardSectionExpanded(true)}
+                              className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/20 hover:border-cyan-500/50 hover:bg-cyan-950/30 transition-all flex items-center justify-between gap-3 cursor-pointer text-xs text-zinc-300"
+                            >
+                              <div className="flex items-center gap-2.5">
+                                <Shield size={16} className="text-cyan-400 shrink-0" />
+                                <div>
+                                  <span className="font-semibold text-white">Sessão da Battle.net sob demanda.</span>
+                                  <span className="text-zinc-400 ml-1.5">Clique para carregar armory, talentos e lista real de personagens.</span>
+                                </div>
+                              </div>
+                              <span className="text-[11px] font-mono font-bold text-cyan-300 flex items-center gap-1 shrink-0">
+                                Expandir <ChevronDown size={13} />
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Estado Expandido: Exibição completa on-demand */}
+                          {isBlizzardSectionExpanded && (
+                            <div className="space-y-4 pt-1">
+                              {isLoadingBlizzardChars && blizzardChars.length === 0 && (
+                                <div className="p-6 rounded-xl bg-cyan-950/20 border border-cyan-500/30 text-center space-y-2">
+                                  <Loader2 size={24} className="animate-spin text-cyan-400 mx-auto" />
+                                  <p className="text-xs font-bold text-cyan-200">Carregando personagens da Battle.net sob demanda...</p>
+                                  <p className="text-[11px] text-zinc-400">Consultando a API oficial da Blizzard para a versão selecionada.</p>
+                                </div>
+                              )}
 
                           {/* DYNAMIC BLIZZARD LAYOUT ACCORDING TO SELECTED GAME */}
                           {(() => {
@@ -4701,13 +4748,14 @@ export default function GameDetailDrawer({
 
                               return (
                                 <div className="space-y-4">
-                                  {/* WoWCharacterGrid: Subcomponente com cards da versão específica do jogo */}
-                                  <WoWCharacterGrid
-                                    characters={blizzardChars}
-                                    activeCharacterName={charName}
+                                  {/* Visão de Armory Completa com Seleção Integrada e Paperdoll Estilo Blizzard Oficial */}
+                                  <WoWArmoryView
+                                    profile={activeProfileToRender}
                                     isLoading={isLoadingBlizzardChars}
+                                    gameVersion={blizzardVersionFilter}
+                                    characters={filteredChars.length > 0 ? filteredChars : blizzardChars}
+                                    activeCharacterName={charName}
                                     filterVersion={blizzardVersionFilter}
-                                    showVersionTabs={false}
                                     onFilterVersionChange={setBlizzardVersionFilter}
                                     onSelectCharacter={async (c) => {
                                       try {
@@ -4776,13 +4824,6 @@ export default function GameDetailDrawer({
                                         console.warn("Erro ao inspecionar personagem selecionado:", err);
                                       }
                                     }}
-                                  />
-
-                                  {/* Visão de Armory Completa com Paperdoll Estilo Wowhead / Blizzard */}
-                                  <WoWArmoryView
-                                    profile={activeProfileToRender}
-                                    isLoading={isLoadingBlizzardChars}
-                                    gameVersion={blizzardVersionFilter}
                                     onRefresh={async () => {
                                       try {
                                         const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
@@ -5047,6 +5088,8 @@ export default function GameDetailDrawer({
                               </div>
                             );
                           })()}
+                            </div>
+                          )}
                         </div>
                       )}
 

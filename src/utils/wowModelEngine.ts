@@ -15,9 +15,16 @@ export interface Character3DConfig {
   hairColor?: number;
   facialStyle?: number;
   items?: [number, number][]; // [slotId, displayId]
+  customizations?: {
+    optionId?: number;
+    choiceId?: number;
+    option?: { id: number; name?: string };
+    choice?: { id: number; name?: string };
+  }[];
 }
 
 export const RACE_NAME_TO_ID: Record<string, number> = {
+  // English
   human: 1,
   orc: 2,
   dwarf: 3,
@@ -54,12 +61,61 @@ export const RACE_NAME_TO_ID: Record<string, number> = {
   mechagnome: 37,
   dracthyr: 52,
   earthen: 84,
+
+  // Português (pt_BR)
+  humano: 1,
+  humana: 1,
+  anao: 3,
+  anão: 3,
+  ana: 3,
+  anã: 3,
+  "elfo noturno": 4,
+  "elfa noturna": 4,
+  "morto-vivo": 5,
+  "morta-viva": 5,
+  "morto vivo": 5,
+  "morta viva": 5,
+  renegado: 5,
+  renegada: 5,
+  gnomo: 7,
+  gnoma: 7,
+  "elfo sangrento": 10,
+  "elfa sangrenta": 10,
+  "elfo de sangue": 10,
+  "filho da noite": 27,
+  "filha da noite": 27,
+  "tauren altamontês": 28,
+  "tauren altamontes": 28,
+  "elfo caótico": 29,
+  "elfa caótica": 29,
+  "elfo caotico": 29,
+  "elfa caotica": 29,
+  "draenei forjado a luz": 30,
+  "draeneio forjado a luz": 30,
+  "forjado a luz": 30,
+  "troll zandalari": 31,
+  kultireno: 32,
+  kultirena: 32,
+  "kul tireno": 32,
+  "kul tirena": 32,
+  "anão ferro negro": 34,
+  "anao ferro negro": 34,
+  "orc mag'har": 36,
+  "gnomo mecânico": 37,
+  "gnomo mecanico": 37,
+  terrano: 84,
+  terrana: 84,
 };
 
 export function getRaceIdFromName(raceName?: string): number {
   if (!raceName) return 1;
-  const clean = raceName.toLowerCase().trim();
-  return RACE_NAME_TO_ID[clean] || 1;
+  const clean = raceName
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim();
+  const rawClean = raceName.toLowerCase().trim();
+  return RACE_NAME_TO_ID[rawClean] || RACE_NAME_TO_ID[clean] || 1;
 }
 
 export function getGenderId(gender?: string): number {
@@ -200,9 +256,20 @@ export async function createWowCharacterViewer(
   const raceGender = race * 2 - 1 + gender;
 
   let charOptions: any[] = [];
-  const fullOptions = await fetchCharacterCustomizationOptions(race, gender);
-  if (fullOptions) {
-    charOptions = buildCharacterOptions(character, fullOptions);
+  if (character.customizations && Array.isArray(character.customizations) && character.customizations.length > 0) {
+    charOptions = character.customizations
+      .map((c: any) => ({
+        optionId: c.option?.id ?? c.optionId,
+        choiceId: c.choice?.id ?? c.choiceId,
+      }))
+      .filter((c: any) => c.optionId !== undefined && c.choiceId !== undefined);
+  }
+
+  if (charOptions.length === 0) {
+    const fullOptions = await fetchCharacterCustomizationOptions(race, gender);
+    if (fullOptions) {
+      charOptions = buildCharacterOptions(character, fullOptions);
+    }
   }
 
   const items = (character.items || []).filter(([slot]) => !NOT_DISPLAYED_SLOTS.includes(slot));

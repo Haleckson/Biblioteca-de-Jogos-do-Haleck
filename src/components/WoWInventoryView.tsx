@@ -22,6 +22,7 @@ import {
   BlizzardBagContainer,
 } from "../types";
 import { getWoWItemQuality } from "../utils/blizzardIcons";
+import { generateWoWCharacterProfile } from "../utils/blizzardCharacterData";
 
 interface WoWInventoryViewProps {
   profile: BlizzardProfileData;
@@ -38,7 +39,22 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
     y: number;
   } | null>(null);
 
-  const inventory = profile.inventory;
+  const inventory = useMemo(() => {
+    if (profile.inventory && (profile.inventory.backpack || (profile.inventory.bags && profile.inventory.bags.length > 0))) {
+      return profile.inventory;
+    }
+    const gen = generateWoWCharacterProfile({
+      name: profile.name,
+      realm: profile.realm,
+      characterClass: profile.characterClass,
+      race: profile.race,
+      level: profile.level,
+      gender: profile.gender,
+      faction: profile.faction,
+      gameMode: profile.wow_version || profile.gameMode || "retail",
+    });
+    return gen.inventory;
+  }, [profile]);
 
   // Aggregate all bags
   const allContainers = useMemo(() => {

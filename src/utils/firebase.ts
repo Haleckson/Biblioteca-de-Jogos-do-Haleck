@@ -160,8 +160,20 @@ export const syncFromFirebase = (
             blizzardGameName: game.blizzardGameName || undefined,
             blizzardRegion: game.blizzardRegion || undefined,
             blizzardSelectedCharacter: game.blizzardSelectedCharacter || undefined,
+            blizzardCharacterName: game.blizzardCharacterName || undefined,
+            blizzardRealm: game.blizzardRealm || undefined,
             blizzardCharacters: Array.isArray(game.blizzardCharacters) ? game.blizzardCharacters : undefined,
             blizzardProfileData: game.blizzardProfileData || undefined,
+            wowVersion: game.wowVersion || undefined,
+            bannerImage: game.bannerImage || undefined,
+            bannerPosition: safeNumber(game.bannerPosition),
+            bannerPositionX: safeNumber(game.bannerPositionX),
+            bannerZoom: safeNumber(game.bannerZoom),
+            igdbId: safeNumber(game.igdbId),
+            igdbRating: safeNumber(game.igdbRating),
+            igdbSlug: game.igdbSlug || undefined,
+            igdbUrl: game.igdbUrl || undefined,
+            steamGridDbId: safeNumber(game.steamGridDbId),
             diary: diaryRaw.map((entry: any) => {
               const mediasRaw = parseArraySafely(entry.medias);
               const keyMomentsRaw = parseArraySafely(entry.keyMoments);
@@ -169,10 +181,11 @@ export const syncFromFirebase = (
                 id: entry.id || "",
                 period: entry.period || "",
                 medias: mediasRaw
-                  .filter((m) => m && (m.src || m.id))
+                  .filter((m) => m && (m.src || m.url || m.id))
                   .map((media: any) => ({
+                    ...media,
                     id: media.id || undefined,
-                    src: media.src || "",
+                    src: media.src || media.url || "",
                     isVideo: !!media.isVideo,
                     deleteUrl: media.deleteUrl || "",
                   })),

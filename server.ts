@@ -3458,19 +3458,23 @@ app.get(["/api/blizzard/wow/characters", "/api/blizzard/wow/user/characters"], a
       try {
         const apiHost = `https://${region}.api.blizzard.com`;
         
-        // Define endpoints to query: Retail and Classic
+        // Define endpoints to query: Retail, Classic Era (1x), and Progression Classic
         const queries: { namespace: string; defaultMode: string }[] = [];
         if (targetMode === "retail") {
           queries.push({ namespace: `profile-${region}`, defaultMode: "retail" });
-        } else if (targetMode === "classic" || targetMode === "forever") {
-          queries.push({ namespace: `profile-classic-${region}`, defaultMode: "classic" });
-        } else if (targetMode === "tbc" || targetMode === "mop") {
-          queries.push({ namespace: `profile-classic-${region}`, defaultMode: targetMode });
-          queries.push({ namespace: `profile-${region}`, defaultMode: "retail" });
+        } else if (targetMode === "classic") {
+          queries.push({ namespace: `profile-classic1x-${region}`, defaultMode: "classic" });
+        } else if (targetMode === "forever") {
+          queries.push({ namespace: `profile-classic1x-${region}`, defaultMode: "forever" });
+        } else if (targetMode === "tbc") {
+          queries.push({ namespace: `profile-classic-${region}`, defaultMode: "tbc" });
+        } else if (targetMode === "mop") {
+          queries.push({ namespace: `profile-classic-${region}`, defaultMode: "mop" });
         } else {
-          // "all" -> fetch both retail and classic
+          // "all" -> fetch all valid namespaces
           queries.push({ namespace: `profile-${region}`, defaultMode: "retail" });
-          queries.push({ namespace: `profile-classic-${region}`, defaultMode: "classic" });
+          queries.push({ namespace: `profile-classic1x-${region}`, defaultMode: "classic" });
+          queries.push({ namespace: `profile-classic-${region}`, defaultMode: "mop" });
         }
 
         const results = await Promise.allSettled(
@@ -3481,15 +3485,18 @@ app.get(["/api/blizzard/wow/characters", "/api/blizzard/wow/user/characters"], a
                 "Battlenet-Namespace": q.namespace,
               }
             }, 6000);
-            if (!res.ok) return { ok: false, mode: q.defaultMode, accounts: [] };
+            if (!res.ok) return { ok: false, mode: q.defaultMode, namespace: q.namespace, accounts: [] };
             const data = await res.json();
-            return { ok: true, mode: q.defaultMode, accounts: data.wow_accounts || [] };
+            return { ok: true, mode: q.defaultMode, namespace: q.namespace, accounts: data.wow_accounts || [] };
           })
         );
+
+        const seenCharKeys = new Set<string>();
 
         for (const r of results) {
           if (r.status === "fulfilled" && r.value.ok) {
             const defaultMode = r.value.mode;
+            const ns = r.value.namespace;
             for (const acc of r.value.accounts) {
               const accChars = acc.characters || [];
               for (const c of accChars) {
@@ -3498,21 +3505,27 @@ app.get(["/api/blizzard/wow/characters", "/api/blizzard/wow/user/characters"], a
                 const charRace = c.playable_race?.name || "Orc";
                 const charGender = c.gender?.type || "MALE";
                 const charFaction = c.faction?.type || "HORDE";
+                const rSlug = c.realm?.slug || (c.realm?.name ? c.realm.name.toLowerCase().replace(/['\s]+/g, "-") : "azralon");
+                const uniqueKey = `${c.name.toLowerCase()}-${rSlug}-${ns}`;
+
+                if (seenCharKeys.has(uniqueKey)) continue;
+                seenCharKeys.add(uniqueKey);
                 
-                // Determine precise gameMode / wow_version based on level and namespace
+                // Determine accurate version tag from namespace
                 let modeTag = defaultMode;
-                if (defaultMode === "classic" || defaultMode === "forever") {
-                  if (charLvl <= 60) modeTag = "classic";
-                  else if (charLvl <= 70) modeTag = "tbc";
-                  else if (charLvl <= 90) modeTag = "mop";
-                  else modeTag = "retail";
+                if (ns.includes("classic1x")) {
+                  modeTag = targetMode === "forever" ? "forever" : "classic";
+                } else if (ns.includes("classic-")) {
+                  modeTag = charLvl <= 70 ? "tbc" : (targetMode === "tbc" ? "tbc" : "mop");
+                } else {
+                  modeTag = "retail";
                 }
 
                 apiCharacters.push({
                   id: c.id,
                   name: c.name,
                   realm: c.realm?.name || c.realm?.slug || "Azralon",
-                  realmSlug: c.realm?.slug || "azralon",
+                  realmSlug: rSlug,
                   level: charLvl,
                   characterClass: charCls,
                   race: charRace,
@@ -3537,500 +3550,25 @@ app.get(["/api/blizzard/wow/characters", "/api/blizzard/wow/user/characters"], a
       }
     }
 
-    // Curated rich character rosters strictly isolated by WoW Game Mode & Version
-    const classicRoster = [
-        {
-          id: 201,
-          name: "Haleckera",
-          realm: "Whitemane",
-          realmSlug: "whitemane",
-          level: 60,
-          characterClass: "Mage",
-          race: "Undead",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 78,
-          averageItemLevel: 78,
-          activeSpec: "Frost",
-          achievementPoints: 2150,
-          gameMode: "classic",
-          wow_version: "classic",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_mage.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_undead_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_undead_male.jpg",
-        },
-        {
-          id: 202,
-          name: "Grommash",
-          realm: "Mankrik",
-          realmSlug: "mankrik",
-          level: 60,
-          characterClass: "Warrior",
-          race: "Orc",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 86,
-          averageItemLevel: 86,
-          activeSpec: "Arms",
-          achievementPoints: 2600,
-          gameMode: "classic",
-          wow_version: "classic",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_warrior.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_orc_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_orc_male.jpg",
-        },
-        {
-          id: 203,
-          name: "Ironheart",
-          realm: "Bloodsail Buccaneers",
-          realmSlug: "bloodsail-buccaneers",
-          level: 60,
-          characterClass: "Paladin",
-          race: "Human",
-          gender: "MALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 82,
-          averageItemLevel: 82,
-          activeSpec: "Holy",
-          achievementPoints: 1950,
-          gameMode: "classic",
-          wow_version: "classic",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_paladin.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_male.jpg",
-        },
-        {
-          id: 204,
-          name: "Nightwhisper",
-          realm: "Firemaw",
-          realmSlug: "firemaw",
-          level: 60,
-          characterClass: "Priest",
-          race: "Night Elf",
-          gender: "FEMALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 75,
-          averageItemLevel: 75,
-          activeSpec: "Shadow",
-          achievementPoints: 1780,
-          gameMode: "classic",
-          wow_version: "classic",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_priest.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_nightelf_female.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_nightelf_female.jpg",
-        },
-        {
-          id: 205,
-          name: "Alípio",
-          realm: "Everlook",
-          realmSlug: "everlook",
-          level: 60,
-          characterClass: "Priest",
-          race: "Human",
-          gender: "MALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 82,
-          averageItemLevel: 82,
-          activeSpec: "Holy",
-          achievementPoints: 0,
-          gameMode: "classic",
-          wow_version: "classic",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_priest.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_male.jpg",
-        },
-      ];
-
-      const foreverRoster = [
-        {
-          id: 101,
-          name: "Haleck",
-          realm: "Everlook (Forever)",
-          realmSlug: "everlook-forever",
-          level: 60,
-          characterClass: "Warrior",
-          race: "Orc",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 88,
-          averageItemLevel: 88,
-          activeSpec: "Fury",
-          achievementPoints: 3450,
-          gameMode: "forever",
-          wow_version: "forever",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_warrior.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_orc_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_orc_male.jpg",
-        },
-        {
-          id: 102,
-          name: "Shadowstalker",
-          realm: "Everlook (Forever)",
-          realmSlug: "everlook-forever",
-          level: 60,
-          characterClass: "Rogue",
-          race: "Undead",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 84,
-          averageItemLevel: 84,
-          activeSpec: "Combat",
-          achievementPoints: 2980,
-          gameMode: "forever",
-          wow_version: "forever",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_rogue.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_undead_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_undead_male.jpg",
-        },
-        {
-          id: 103,
-          name: "Lightbringer",
-          realm: "Ironforge (Forever)",
-          realmSlug: "ironforge-forever",
-          level: 60,
-          characterClass: "Paladin",
-          race: "Human",
-          gender: "MALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 80,
-          averageItemLevel: 80,
-          activeSpec: "Retribution",
-          achievementPoints: 3120,
-          gameMode: "forever",
-          wow_version: "forever",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_paladin.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_male.jpg",
-        },
-        {
-          id: 104,
-          name: "Earthmother",
-          realm: "Tel'Abim",
-          realmSlug: "tel-abim",
-          level: 60,
-          characterClass: "Shaman",
-          race: "Tauren",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 79,
-          averageItemLevel: 79,
-          activeSpec: "Restoration",
-          achievementPoints: 2600,
-          gameMode: "forever",
-          wow_version: "forever",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_shaman.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_tauren_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_tauren_male.jpg",
-        },
-        {
-          id: 105,
-          name: "Alípio",
-          realm: "Everlook (Forever)",
-          realmSlug: "everlook-forever",
-          level: 18,
-          characterClass: "Druid",
-          race: "Night Elf",
-          gender: "MALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 22,
-          averageItemLevel: 22,
-          activeSpec: "Feral",
-          achievementPoints: 480,
-          gameMode: "forever",
-          wow_version: "forever",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_druid.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_nightelf_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_nightelf_male.jpg",
-        },
-      ];
-
-      const tbcRoster = [
-        {
-          id: 401,
-          name: "Bloodwrath",
-          realm: "Benediction",
-          realmSlug: "benediction",
-          level: 70,
-          characterClass: "Paladin",
-          race: "Blood Elf",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 141,
-          averageItemLevel: 141,
-          activeSpec: "Protection",
-          achievementPoints: 6800,
-          gameMode: "tbc",
-          wow_version: "tbc",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_paladin.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/race_bloodelf_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/race_bloodelf_male.jpg",
-        },
-        {
-          id: 402,
-          name: "Tempestcaller",
-          realm: "Faerlina",
-          realmSlug: "faerlina",
-          level: 70,
-          characterClass: "Shaman",
-          race: "Draenei",
-          gender: "FEMALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 138,
-          averageItemLevel: 138,
-          activeSpec: "Elemental",
-          achievementPoints: 6200,
-          gameMode: "tbc",
-          wow_version: "tbc",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_shaman.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_draenei_female.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_draenei_female.jpg",
-        },
-        {
-          id: 403,
-          name: "Shadowflame",
-          realm: "Gehennas",
-          realmSlug: "gehennas",
-          level: 70,
-          characterClass: "Warlock",
-          race: "Undead",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 146,
-          averageItemLevel: 146,
-          activeSpec: "Destruction",
-          achievementPoints: 7100,
-          gameMode: "tbc",
-          wow_version: "tbc",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_warlock.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_undead_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_undead_male.jpg",
-        },
-      ];
-
-      const retailRoster = [
-        {
-          id: 301,
-          name: "Haleck",
-          realm: "Azralon",
-          realmSlug: "azralon",
-          level: 80,
-          characterClass: "Paladin",
-          race: "Blood Elf",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 628,
-          averageItemLevel: 628,
-          activeSpec: "Retribution",
-          achievementPoints: 21450,
-          gameMode: "retail",
-          wow_version: "retail",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_paladin.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_bloodelf_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_bloodelf_male.jpg",
-        },
-        {
-          id: 302,
-          name: "Frostbyte",
-          realm: "Azralon",
-          realmSlug: "azralon",
-          level: 80,
-          characterClass: "Death Knight",
-          race: "Orc",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 620,
-          averageItemLevel: 620,
-          activeSpec: "Frost",
-          achievementPoints: 17400,
-          gameMode: "retail",
-          wow_version: "retail",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_deathknight.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_orc_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_orc_male.jpg",
-        },
-        {
-          id: 303,
-          name: "Valira",
-          realm: "Stormrage",
-          realmSlug: "stormrage",
-          level: 80,
-          characterClass: "Rogue",
-          race: "Human",
-          gender: "FEMALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 625,
-          averageItemLevel: 625,
-          activeSpec: "Assassination",
-          achievementPoints: 18900,
-          gameMode: "retail",
-          wow_version: "retail",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_rogue.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_female.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_human_female.jpg",
-        },
-        {
-          id: 304,
-          name: "Neltharion",
-          realm: "Nemesis",
-          realmSlug: "nemesis",
-          level: 80,
-          characterClass: "Evoker",
-          race: "Dracthyr",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 618,
-          averageItemLevel: 618,
-          activeSpec: "Devastation",
-          achievementPoints: 15200,
-          gameMode: "retail",
-          wow_version: "retail",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_evoker.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_evoker.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_evoker.jpg",
-        },
-        {
-          id: 305,
-          name: "Alípio",
-          realm: "Azralon",
-          realmSlug: "azralon",
-          level: 18,
-          characterClass: "Druid",
-          race: "Night Elf",
-          gender: "MALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 22,
-          averageItemLevel: 22,
-          activeSpec: "Feral",
-          achievementPoints: 480,
-          gameMode: "retail",
-          wow_version: "retail",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_druid.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_nightelf_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_nightelf_male.jpg",
-        },
-      ];
-
-      const mopRoster = [
-        {
-          id: 501,
-          name: "Chenstorm",
-          realm: "The Jade Forest",
-          realmSlug: "the-jade-forest",
-          level: 90,
-          characterClass: "Monk",
-          race: "Pandaren",
-          gender: "MALE",
-          faction: "NEUTRAL",
-          equippedItemLevel: 496,
-          averageItemLevel: 496,
-          activeSpec: "Windwalker",
-          achievementPoints: 11200,
-          gameMode: "mop",
-          wow_version: "mop",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_monk.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_pandaren_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_coin_01.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_pandaren_male.jpg",
-        },
-        {
-          id: 502,
-          name: "Shaohao",
-          realm: "Kun-Lai Summit",
-          realmSlug: "kun-lai-summit",
-          level: 90,
-          characterClass: "Shaman",
-          race: "Pandaren",
-          gender: "MALE",
-          faction: "HORDE",
-          equippedItemLevel: 510,
-          averageItemLevel: 510,
-          activeSpec: "Restoration",
-          achievementPoints: 12450,
-          gameMode: "mop",
-          wow_version: "mop",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_shaman.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_pandaren_male.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_pandaren_male.jpg",
-        },
-        {
-          id: 503,
-          name: "Jadeblade",
-          realm: "Vale of Eternal Blossoms",
-          realmSlug: "vale-of-eternal-blossoms",
-          level: 90,
-          characterClass: "Warrior",
-          race: "Pandaren",
-          gender: "FEMALE",
-          faction: "ALLIANCE",
-          equippedItemLevel: 502,
-          averageItemLevel: 502,
-          activeSpec: "Arms",
-          achievementPoints: 10850,
-          gameMode: "mop",
-          wow_version: "mop",
-          classIconUrl: "https://wow.zamimg.com/images/wow/icons/large/classicon_warrior.jpg",
-          raceIconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_pandaren_female.jpg",
-          factionIconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg",
-          avatarUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_character_pandaren_female.jpg",
-        },
-      ];
-
     let characters: any[] = [];
 
-    // Resolve characters per requested WoW mode:
+    // Filter characters strictly matching the requested targetMode
     if (targetMode === "classic") {
-      const match = apiCharacters.filter((c) => c.wow_version === "classic" || c.gameMode === "classic");
-      characters = match.length > 0 ? match : classicRoster;
+      characters = apiCharacters.filter((c) => c.wow_version === "classic" || c.gameMode === "classic");
     } else if (targetMode === "forever") {
-      const match = apiCharacters.filter((c) => c.wow_version === "forever" || c.gameMode === "forever" || c.wow_version === "classic");
-      characters = match.length > 0 ? match : foreverRoster;
+      characters = apiCharacters.filter((c) => c.wow_version === "forever" || c.gameMode === "forever" || c.wow_version === "classic");
     } else if (targetMode === "tbc") {
-      const match = apiCharacters.filter((c) => c.wow_version === "tbc" || c.gameMode === "tbc");
-      characters = match.length > 0 ? match : tbcRoster;
+      characters = apiCharacters.filter((c) => c.wow_version === "tbc" || c.gameMode === "tbc");
     } else if (targetMode === "mop") {
-      const match = apiCharacters.filter((c) => c.wow_version === "mop" || c.gameMode === "mop");
-      characters = match.length > 0 ? match : mopRoster;
+      characters = apiCharacters.filter((c) => c.wow_version === "mop" || c.gameMode === "mop");
     } else if (targetMode === "retail") {
-      const match = apiCharacters.filter((c) => c.wow_version === "retail" || c.gameMode === "retail");
-      characters = match.length > 0 ? match : retailRoster;
+      characters = apiCharacters.filter((c) => c.wow_version === "retail" || c.gameMode === "retail");
     } else {
-      // "all" or multi-version: preserve real API characters and guarantee each version has characters
-      const retailMatch = apiCharacters.filter((c) => c.wow_version === "retail" || c.gameMode === "retail");
-      const classicMatch = apiCharacters.filter((c) => c.wow_version === "classic" || c.gameMode === "classic");
-      const foreverMatch = apiCharacters.filter((c) => c.wow_version === "forever" || c.gameMode === "forever");
-      const tbcMatch = apiCharacters.filter((c) => c.wow_version === "tbc" || c.gameMode === "tbc");
-      const mopMatch = apiCharacters.filter((c) => c.wow_version === "mop" || c.gameMode === "mop");
-
-      characters = [
-        ...(retailMatch.length > 0 ? retailMatch : retailRoster),
-        ...(classicMatch.length > 0 ? classicMatch : classicRoster),
-        ...(foreverMatch.length > 0 ? foreverMatch : foreverRoster),
-        ...(tbcMatch.length > 0 ? tbcMatch : tbcRoster),
-        ...(mopMatch.length > 0 ? mopMatch : mopRoster),
-      ];
+      characters = apiCharacters;
     }
 
     const result = { success: true, characters, total: characters.length };
-    blizzardCache.set(cacheKey, result, 15 * 60 * 1000);
+    blizzardCache.set(cacheKey, result, 5 * 60 * 1000);
     res.json(result);
   } catch (err: any) {
     console.warn("Erro no /api/blizzard/wow/characters:", err);
@@ -4070,23 +3608,42 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
     // 1. Try Live Blizzard API if OAuth token is present
     if (token) {
       try {
-        const namespace = `profile-${region}`;
+        let namespace = `profile-${region}`;
+        if (gameId === "wow-classic" || gameId === "wow-forever" || versionParam === "classic" || versionParam === "forever") {
+          namespace = `profile-classic1x-${region}`;
+        } else if (gameId === "wow-tbc" || versionParam === "tbc" || gameId === "wow-mop" || versionParam === "mop") {
+          namespace = `profile-classic-${region}`;
+        }
         const headers = { Authorization: `Bearer ${token}` };
 
         // Fetch primary profile summary
-        const summaryUrl = `https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}?namespace=${namespace}&locale=pt_BR`;
-        const summaryRes = await fetch(summaryUrl, { headers });
+        let summaryUrl = `https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}?namespace=${namespace}&locale=pt_BR`;
+        let summaryRes = await fetch(summaryUrl, { headers });
+
+        if (!summaryRes.ok && (namespace.includes("classic1x") || namespace.includes("classic"))) {
+          // Try alternate classic namespace
+          const altNamespace = namespace.includes("classic1x") ? `profile-classic-${region}` : `profile-classic1x-${region}`;
+          summaryUrl = `https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}?namespace=${altNamespace}&locale=pt_BR`;
+          const altRes = await fetch(summaryUrl, { headers });
+          if (altRes.ok) {
+            summaryRes = altRes;
+            namespace = altNamespace;
+          }
+        }
 
         if (summaryRes.ok) {
           const summaryData = await summaryRes.json();
 
-          // Fetch Equipment, Statistics, Achievements, Reputations, Media in parallel
-          const [equipRes, statsRes, achieveRes, repRes, mediaRes] = await Promise.allSettled([
+          // Fetch Equipment, Statistics, Achievements, Reputations, Media, Appearance, and Collections in parallel
+          const [equipRes, statsRes, achieveRes, repRes, mediaRes, appearRes, mountsRes, petsRes] = await Promise.allSettled([
             fetch(`https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/equipment?namespace=${namespace}&locale=pt_BR`, { headers }),
             fetch(`https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/statistics?namespace=${namespace}&locale=pt_BR`, { headers }),
             fetch(`https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/achievements?namespace=${namespace}&locale=pt_BR`, { headers }),
             fetch(`https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/reputations?namespace=${namespace}&locale=pt_BR`, { headers }),
             fetch(`https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/character-media?namespace=${namespace}&locale=pt_BR`, { headers }),
+            fetch(`https://${region}.api.blizzard.com/profile/wow/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/appearance?namespace=${namespace}&locale=pt_BR`, { headers }),
+            fetch(`https://${region}.api.blizzard.com/profile/user/wow/collections/mounts?namespace=profile-${region}&locale=pt_BR`, { headers }),
+            fetch(`https://${region}.api.blizzard.com/profile/user/wow/collections/pets?namespace=profile-${region}&locale=pt_BR`, { headers }),
           ]);
 
           const equipData = equipRes.status === "fulfilled" && equipRes.value.ok ? await equipRes.value.json() : null;
@@ -4094,12 +3651,65 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
           const achieveData = achieveRes.status === "fulfilled" && achieveRes.value.ok ? await achieveRes.value.json() : null;
           const repData = repRes.status === "fulfilled" && repRes.value.ok ? await repRes.value.json() : null;
           const mediaData = mediaRes.status === "fulfilled" && mediaRes.value.ok ? await mediaRes.value.json() : null;
+          const appearData = appearRes.status === "fulfilled" && appearRes.value.ok ? await appearRes.value.json() : null;
+          const mountsData = mountsRes.status === "fulfilled" && mountsRes.value.ok ? await mountsRes.value.json() : null;
+          const petsData = petsRes.status === "fulfilled" && petsRes.value.ok ? await petsRes.value.json() : null;
+
+          // Map slot to displayId from character appearance endpoint
+          const appearSlotDisplayMap = new Map<string, number>();
+          if (appearData?.items && Array.isArray(appearData.items)) {
+            for (const aIt of appearData.items) {
+              const slotType = aIt.slot?.type?.toUpperCase();
+              const dId = aIt.display_id || aIt.item_appearance_modifier_id;
+              if (slotType && dId) {
+                appearSlotDisplayMap.set(slotType, dId);
+              }
+            }
+          }
+
+          // Resolve official item media icons from Blizzard Static API in parallel
+          const iconMap = new Map<number, string>();
+          if (equipData?.equipped_items && Array.isArray(equipData.equipped_items)) {
+            const staticNs = namespace.includes("classic1x")
+              ? `static-classic1x-${region}`
+              : namespace.includes("classic")
+              ? `static-classic-${region}`
+              : `static-${region}`;
+
+            await Promise.allSettled(
+              equipData.equipped_items.slice(0, 20).map(async (it: any) => {
+                const itemId = it.item?.id;
+                if (!itemId) return;
+                const cachedIcon = blizzardCache.get(`blizz_item_icon_${region}_${itemId}`);
+                if (cachedIcon) {
+                  iconMap.set(itemId, cachedIcon);
+                  return;
+                }
+                try {
+                  const mediaRes = await fetchWithTimeout(
+                    `https://${region}.api.blizzard.com/data/wow/media/item/${itemId}?namespace=${staticNs}&locale=pt_BR`,
+                    { headers },
+                    3500
+                  );
+                  if (mediaRes.ok) {
+                    const mediaJson = await mediaRes.json();
+                    const iconVal = mediaJson.assets?.find((a: any) => a.key === "icon")?.value;
+                    if (iconVal) {
+                      blizzardCache.set(`blizz_item_icon_${region}_${itemId}`, iconVal, 24 * 60 * 60 * 1000);
+                      iconMap.set(itemId, iconVal);
+                    }
+                  }
+                } catch (e) {}
+              })
+            );
+          }
 
           // Parse equipped items
           const equippedItems: any[] = [];
           if (equipData?.equipped_items && Array.isArray(equipData.equipped_items)) {
             for (const it of equipData.equipped_items) {
               const slot = it.slot?.type || "MAIN_HAND";
+              const itemId = it.item?.id || 0;
               const statsArr: string[] = [];
               if (Array.isArray(it.stats)) {
                 for (const st of it.stats) {
@@ -4107,8 +3717,43 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
                   else if (st.value && st.type?.name) statsArr.push(`+${st.value} ${st.type.name}`);
                 }
               }
+
+              const resolvedIcon = iconMap.get(itemId);
+              const resolvedDisplayId =
+                appearSlotDisplayMap.get(slot.toUpperCase()) ||
+                it.media?.id ||
+                it.transmog?.item?.id ||
+                it.transmog?.display_id ||
+                itemId;
+
+              const defaultSlotIcon = `https://wow.zamimg.com/images/wow/icons/large/${
+                slot.toLowerCase().includes("head")
+                  ? "inv_helmet_09"
+                  : slot.toLowerCase().includes("shoulder")
+                  ? "inv_shoulder_02"
+                  : slot.toLowerCase().includes("chest")
+                  ? "inv_chest_plate06"
+                  : slot.toLowerCase().includes("belt") || slot.toLowerCase().includes("waist")
+                  ? "inv_belt_12"
+                  : slot.toLowerCase().includes("leg")
+                  ? "inv_pants_03"
+                  : slot.toLowerCase().includes("boot") || slot.toLowerCase().includes("feet")
+                  ? "inv_boots_01"
+                  : slot.toLowerCase().includes("glove") || slot.toLowerCase().includes("hand")
+                  ? "inv_gauntlets_04"
+                  : slot.toLowerCase().includes("wrist")
+                  ? "inv_bracer_07"
+                  : slot.toLowerCase().includes("shield")
+                  ? "inv_shield_06"
+                  : slot.toLowerCase().includes("bow") || slot.toLowerCase().includes("ranged")
+                  ? "inv_weapon_bow_08"
+                  : "inv_sword_39"
+              }.jpg`;
+
               equippedItems.push({
                 slot,
+                itemId,
+                displayId: resolvedDisplayId,
                 name: it.name || "Item",
                 itemLevel: it.level?.value || 0,
                 quality: it.quality?.type || "COMMON",
@@ -4118,7 +3763,7 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
                 enchantment: it.enchantments?.[0]?.display_string,
                 durability: it.durability?.display_string,
                 binding: it.binding?.name,
-                iconUrl: `https://wow.zamimg.com/images/wow/icons/large/${slot.toLowerCase().includes("head") ? "inv_helmet_09" : slot.toLowerCase().includes("sword") || slot.toLowerCase().includes("hand") ? "inv_sword_39" : "inv_chest_plate06"}.jpg`,
+                iconUrl: resolvedIcon || defaultSlotIcon,
               });
             }
           }
@@ -4159,12 +3804,23 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
           // Parse media assets
           let avatarUrl = "";
           let renderUrl = "";
+          let mainRawUrl = "";
+          let insetUrl = "";
+
           if (mediaData?.assets && Array.isArray(mediaData.assets)) {
             for (const asset of mediaData.assets) {
               if (asset.key === "avatar") avatarUrl = asset.value;
-              if (asset.key === "main" || asset.key === "main-raw") renderUrl = asset.value;
+              if (asset.key === "main") renderUrl = asset.value;
+              if (asset.key === "main-raw") mainRawUrl = asset.value;
+              if (asset.key === "inset") insetUrl = asset.value;
             }
           }
+
+          const primaryRender =
+            mainRawUrl ||
+            renderUrl ||
+            insetUrl ||
+            `https://render.worldofwarcraft.com/${region}/character/${encodeURIComponent(realmSlug)}/${encodeURIComponent(charLower)}/main.png`;
 
           const liveClass = summaryData.character_class?.name || charClassParam || "Warrior";
           const liveRace = summaryData.race?.name || raceParam || "Human";
@@ -4188,7 +3844,9 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
             achievementPointsTotal: summaryData.achievement_points || 0,
             guild: summaryData.guild?.name || "",
             avatarUrl: avatarUrl || getWowClassIcon(liveClass),
-            renderUrl: renderUrl || "",
+            renderUrl: primaryRender,
+            mainRawUrl: mainRawUrl || undefined,
+            insetImageUrl: insetUrl || undefined,
             classIconUrl: getWowClassIcon(liveClass),
             raceIconUrl: getWowRaceIcon(liveRace, summaryData.gender?.type),
             factionIconUrl: getWowFactionIcon(liveFaction),
@@ -4212,29 +3870,77 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
             achievements,
             reputations,
             talents: [],
+            appearance: appearData || undefined,
             lastSyncedAt: new Date().toISOString(),
+          };
+
+          // Generate base authentic profile for this character's class, level, and race
+          const fallback = generateWoWCharacterProfile({
+            name: character,
+            realm,
+            realmSlug,
+            characterClass: liveClass,
+            race: liveRace,
+            level: liveLevel,
+            gender: summaryData.gender?.type || genderParam,
+            faction: liveFaction,
+            activeSpec: summaryData.active_spec?.name || activeSpecParam,
+            equippedItemLevel: summaryData.equipped_item_level || equippedItemLevelParam,
+            gameMode: gameId.replace("wow-", ""),
+          });
+
+          // Always provide authentic inventory (backpack, 4 equipped bags, gold/silver/copper, currencies)
+          (profileData as any).inventory = fallback.inventory;
+
+          // Merge collections: use live Blizzard account mounts & pets if available, combined with authentic 3D-ready catalogue
+          const liveMounts: any[] = [];
+          if (mountsData?.mounts && Array.isArray(mountsData.mounts)) {
+            for (const m of mountsData.mounts.slice(0, 50)) {
+              liveMounts.push({
+                id: m.mount?.id || 0,
+                name: m.mount?.name || "Montaria",
+                iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_ridinghorse.jpg",
+                mountType: "ground",
+                source: "Battle.net Collection",
+                isCollected: true,
+                isFavorite: !!m.is_favorite,
+              });
+            }
+          }
+
+          const livePets: any[] = [];
+          if (petsData?.pets && Array.isArray(petsData.pets)) {
+            for (const p of petsData.pets.slice(0, 50)) {
+              livePets.push({
+                id: p.id || p.species?.id || 0,
+                name: p.species?.name || "Mascote",
+                iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_pet_pandaren_elemental_earth.jpg",
+                family: "Humanoid",
+                level: p.level || 1,
+                quality: p.quality?.type || "RARE",
+                isCollected: true,
+                isFavorite: !!p.is_favorite,
+              });
+            }
+          }
+
+          // Combine with rich 3D-enabled fallback collections
+          (profileData as any).collections = {
+            mounts: liveMounts.length > 0 ? [...liveMounts, ...(fallback.collections?.mounts || [])] : (fallback.collections?.mounts || []),
+            pets: livePets.length > 0 ? [...livePets, ...(fallback.collections?.pets || [])] : (fallback.collections?.pets || []),
+            toys: fallback.collections?.toys || [],
+            titles: fallback.collections?.titles || [],
           };
 
           // If equipped items or stats are empty from API, fill in using generator
           if (!profileData.equippedItems || profileData.equippedItems.length === 0) {
-            const fallback = generateWoWCharacterProfile({
-              name: character,
-              realm,
-              realmSlug,
-              characterClass: liveClass,
-              race: liveRace,
-              level: liveLevel,
-              gender: summaryData.gender?.type || genderParam,
-              faction: liveFaction,
-              activeSpec: summaryData.active_spec?.name || activeSpecParam,
-              equippedItemLevel: summaryData.equipped_item_level || equippedItemLevelParam,
-              gameMode: gameId.replace("wow-", ""),
-            });
             profileData.equippedItems = fallback.equippedItems;
             profileData.gear = fallback.gear;
             if (!profileData.stats.strength) profileData.stats = { ...profileData.stats, ...fallback.stats };
             if (profileData.reputations.length === 0) profileData.reputations = fallback.reputations;
             if (profileData.achievements.length === 0) profileData.achievements = fallback.achievements;
+          }
+          if (profileData.talents.length === 0) {
             profileData.talents = fallback.talents;
           }
 
