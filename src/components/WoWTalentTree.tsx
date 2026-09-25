@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Sparkles,
   Layers,
@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { BlizzardProfileData } from "../types";
 import { getWoWClassInfo } from "../utils/blizzardIcons";
+import { resolveWowheadUrl, getWowheadSpellUrl, WowheadBadgeLink } from "../utils/wowheadUrls";
 import {
   WoWTalentNode,
   WoWTalentTreeData,
@@ -73,6 +74,29 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
   const [hoveredNode, setHoveredNode] = useState<{ node: WoWTalentNode; treeTitle?: string } | null>(null);
   const [tooltipPos, setTooltipPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [copiedBuild, setCopiedBuild] = useState(false);
+  const nodeLeaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (nodeLeaveTimeoutRef.current) clearTimeout(nodeLeaveTimeoutRef.current);
+    };
+  }, []);
+
+  const handleNodeMouseEnter = (node: WoWTalentNode, treeTitle: string | undefined, e: React.MouseEvent) => {
+    if (nodeLeaveTimeoutRef.current) {
+      clearTimeout(nodeLeaveTimeoutRef.current);
+      nodeLeaveTimeoutRef.current = null;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    setHoveredNode({ node, treeTitle });
+    setTooltipPos({ x: rect.right + 10, y: rect.top });
+  };
+
+  const handleNodeMouseLeave = () => {
+    nodeLeaveTimeoutRef.current = setTimeout(() => {
+      setHoveredNode(null);
+    }, 300);
+  };
 
   // 1. Classic Era & Forever Data State (51 points, 3 specs)
   const [classicTrees, setClassicTrees] = useState<WoWTalentTreeData[]>(() =>
@@ -332,12 +356,8 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                       <div
                         key={talent.id}
                         onClick={() => handleSelectMoPTalent(tierIdx, talent.id)}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setHoveredNode({ node: talent, treeTitle: `Level ${tierRow.level} Talent` });
-                          setTooltipPos({ x: rect.right + 10, y: rect.top });
-                        }}
-                        onMouseLeave={() => setHoveredNode(null)}
+                        onMouseEnter={(e) => handleNodeMouseEnter(talent, `Level ${tierRow.level} Talent`, e)}
+                        onMouseLeave={handleNodeMouseLeave}
                         className={`p-2 rounded-xl border transition-all flex items-center gap-2.5 ${
                           talentMode === "calculator" ? "cursor-pointer" : ""
                         } ${
@@ -441,12 +461,8 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                             61
                           )
                         }}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setHoveredNode({ node, treeTitle: tree.name });
-                          setTooltipPos({ x: rect.right + 10, y: rect.top });
-                        }}
-                        onMouseLeave={() => setHoveredNode(null)}
+                        onMouseEnter={(e) => handleNodeMouseEnter(node, tree.name, e)}
+                        onMouseLeave={handleNodeMouseLeave}
                         className={`relative p-1.5 rounded-xl border transition-all flex flex-col items-center justify-center ${
                           talentMode === "calculator" ? "cursor-pointer hover:scale-105" : ""
                         } ${
@@ -546,12 +562,8 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                             51
                           )
                         }}
-                        onMouseEnter={(e) => {
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setHoveredNode({ node, treeTitle: tree.name });
-                          setTooltipPos({ x: rect.right + 10, y: rect.top });
-                        }}
-                        onMouseLeave={() => setHoveredNode(null)}
+                        onMouseEnter={(e) => handleNodeMouseEnter(node, tree.name, e)}
+                        onMouseLeave={handleNodeMouseLeave}
                         className={`relative p-1.5 rounded-xl border transition-all flex flex-col items-center justify-center ${
                           talentMode === "calculator" ? "cursor-pointer hover:scale-105" : ""
                         } ${
@@ -614,12 +626,8 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                 {retailTrees.classTree.nodes.map((node) => (
                   <div
                     key={node.id}
-                    onMouseEnter={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setHoveredNode({ node, treeTitle: retailTrees.classTree.title });
-                      setTooltipPos({ x: rect.right + 10, y: rect.top });
-                    }}
-                    onMouseLeave={() => setHoveredNode(null)}
+                    onMouseEnter={(e) => handleNodeMouseEnter(node, retailTrees.classTree.title, e)}
+                    onMouseLeave={handleNodeMouseLeave}
                     className="p-2 rounded-xl bg-zinc-950/70 border border-cyan-500/50 flex items-center gap-2"
                   >
                     <img src={node.icon} alt="" className="w-8 h-8 rounded-lg object-cover border border-cyan-400" />
@@ -645,12 +653,8 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                 {retailTrees.specTree.nodes.map((node) => (
                   <div
                     key={node.id}
-                    onMouseEnter={(e) => {
-                      const rect = e.currentTarget.getBoundingClientRect();
-                      setHoveredNode({ node, treeTitle: retailTrees.specTree.title });
-                      setTooltipPos({ x: rect.right + 10, y: rect.top });
-                    }}
-                    onMouseLeave={() => setHoveredNode(null)}
+                    onMouseEnter={(e) => handleNodeMouseEnter(node, retailTrees.specTree.title, e)}
+                    onMouseLeave={handleNodeMouseLeave}
                     className="p-2 rounded-xl bg-zinc-950/70 border border-amber-500/50 flex items-center gap-2"
                   >
                     <img src={node.icon} alt="" className="w-8 h-8 rounded-lg object-cover border border-amber-400" />
@@ -682,12 +686,8 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                   {retailTrees.heroTree.nodes.map((node) => (
                     <div
                       key={node.id}
-                      onMouseEnter={(e) => {
-                        const rect = e.currentTarget.getBoundingClientRect();
-                        setHoveredNode({ node, treeTitle: retailTrees.heroTree?.heroTreeName });
-                        setTooltipPos({ x: rect.right + 10, y: rect.top });
-                      }}
-                      onMouseLeave={() => setHoveredNode(null)}
+                      onMouseEnter={(e) => handleNodeMouseEnter(node, retailTrees.heroTree?.heroTreeName, e)}
+                      onMouseLeave={handleNodeMouseLeave}
                       className="p-2 rounded-xl bg-purple-950/40 border border-purple-500/50 flex items-center gap-2"
                     >
                       <img src={node.icon} alt="" className="w-8 h-8 rounded-lg object-cover border border-purple-400" />
@@ -707,10 +707,21 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
       {/* 3. Floating WoW-Authentic Talent Tooltip */}
       {hoveredNode && (
         <div
-          className="fixed z-50 pointer-events-none p-3 rounded-xl bg-zinc-950/95 border-2 border-zinc-700 shadow-2xl text-xs max-w-xs space-y-1.5 backdrop-blur-md"
+          className="fixed z-50 pointer-events-auto p-3 rounded-xl bg-zinc-950/95 border-2 border-zinc-700 shadow-2xl text-xs max-w-xs space-y-1.5 backdrop-blur-md"
           style={{
             left: `${Math.min(tooltipPos.x, window.innerWidth - 320)}px`,
             top: `${Math.min(tooltipPos.y, window.innerHeight - 200)}px`,
+          }}
+          onMouseEnter={() => {
+            if (nodeLeaveTimeoutRef.current) {
+              clearTimeout(nodeLeaveTimeoutRef.current);
+              nodeLeaveTimeoutRef.current = null;
+            }
+          }}
+          onMouseLeave={() => {
+            nodeLeaveTimeoutRef.current = setTimeout(() => {
+              setHoveredNode(null);
+            }, 250);
           }}
         >
           <div className="flex items-center gap-2">
@@ -754,6 +765,21 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
               {hoveredNode.node.nextRankDescription}
             </div>
           )}
+
+          {/* Wowhead Shortcut Link */}
+          <div className="pt-1.5 border-t border-zinc-800/80 flex items-center justify-between text-[10px] text-zinc-400">
+            <span className="font-mono text-[9px] text-zinc-500">Spell ID #{hoveredNode.node.id}</span>
+            <WowheadBadgeLink
+              url={resolveWowheadUrl({
+                kind: "spell",
+                id: hoveredNode.node.id,
+                version: activeVersion || profile.wow_version || profile.gameMode,
+                name: hoveredNode.node.name,
+              })}
+              label="Ver no Wowhead"
+              compact
+            />
+          </div>
         </div>
       )}
     </div>

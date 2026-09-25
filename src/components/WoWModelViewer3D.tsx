@@ -26,7 +26,10 @@ import {
   getGenderId,
   ZamViewerInstance,
   Character3DConfig,
+  setBlizzardCurrentGear,
 } from "../utils/wowModelEngine";
+import { resolveCharacterGearItems } from "../utils/blizzardAssetCache";
+import { getWowheadBaseUrl } from "../utils/wowheadUrls";
 
 interface WoWModelViewer3DProps {
   profile: BlizzardProfileData;
@@ -35,122 +38,132 @@ interface WoWModelViewer3DProps {
   aspect?: number;
 }
 
-// Typical classic / retail tier gear display IDs for stunning visualization
+// Typical classic / retail tier gear display IDs for stunning 3D visualization
+// Slot keys: 1=Helm, 3=Shoulders, 4=Shirt, 5=Chest, 6=Waist, 7=Legs, 8=Boots, 9=Bracers, 10=Gloves, 16=Cloak, 19=Tabard, 21=Main Hand, 22=Offhand
 const CLASS_ICONIC_DISPLAYS: Record<string, Record<number, number>> = {
   Warrior: {
-    1: 30424, // Helm (Dreadnaught / Wrath)
-    3: 30420, // Shoulder
-    5: 30419, // Chest
-    6: 30422, // Belt
-    7: 30423, // Legs
-    8: 30421, // Boots
-    9: 30425, // Bracers
-    10: 30418, // Gloves
-    15: 25412, // Cloak
-    21: 32375, // Main Hand (Ashbringer / Thunderfury)
-    22: 32420, // Shield / Offhand
+    1: 28414, // Helm
+    3: 32369, // Shoulders
+    5: 30422, // Dreadnaught Chest
+    6: 30425, // Dreadnaught Belt
+    7: 30424, // Dreadnaught Legs
+    8: 27540, // Boots
+    10: 30418, // Dreadnaught Gloves
+    16: 27549, // Cloak
+    19: 11440, // Tabard
+    21: 45233, // Warglaive / Greatsword
+    22: 27532, // Shield / Offhand
   },
   Paladin: {
-    1: 27539, // Judgment Crown
-    3: 27538, // Judgment Spaulders
-    5: 27535, // Judgment Breastplate
-    6: 27537, // Judgment Belt
-    7: 27536, // Judgment Leggings
-    8: 27534, // Judgment Sabatons
-    10: 27540, // Judgment Gauntlets
-    15: 25412,
+    1: 28414, // Judgment Crown
+    3: 32369, // Judgment Spaulders
+    5: 30422, // Judgment Breastplate
+    6: 30425, // Judgment Belt
+    7: 30424, // Judgment Leggings
+    8: 27540, // Judgment Sabatons
+    10: 32367, // Judgment Gauntlets
+    16: 27549, // Cloak
+    19: 11440,
     21: 27531, // Sulfuras / Ashbringer
-    22: 27532,
+    22: 27532, // Bulwark Shield
   },
   Druid: {
-    1: 29774, // Stormrage Cover
-    3: 29775, // Stormrage Pauldrons
-    5: 29776, // Stormrage Chestguard
-    6: 29777, // Stormrage Belt
-    7: 29778, // Stormrage Legguards
-    8: 29779, // Stormrage Boots
-    10: 29780, // Stormrage Handguards
-    15: 25412,
-    21: 31038, // Staff of the Forest
+    1: 28414, // Stormrage Cover
+    3: 32369, // Stormrage Pauldrons
+    5: 28417, // Stormrage Chestguard
+    6: 27515, // Stormrage Belt
+    7: 30424, // Stormrage Legguards
+    8: 27540, // Stormrage Boots
+    10: 30418, // Stormrage Handguards
+    16: 27549,
+    19: 11440,
+    21: 45233, // Staff / Fangs
   },
   Rogue: {
     1: 28414, // Bloodfang Hood
-    3: 28413, // Bloodfang Spaulders
-    5: 28411, // Bloodfang Chestpiece
-    6: 28415, // Bloodfang Belt
-    7: 28412, // Bloodfang Pants
-    8: 28416, // Bloodfang Boots
-    10: 28417, // Bloodfang Gloves
-    15: 25412,
-    21: 28418, // Perdition's Blade
-    22: 28419, // Core Hound Tooth
+    3: 32369, // Bloodfang Spaulders
+    5: 28417, // Bloodfang Chestpiece
+    6: 30425, // Bloodfang Belt
+    7: 30424, // Bloodfang Pants
+    8: 27540, // Bloodfang Boots
+    10: 30418, // Bloodfang Gloves
+    16: 27549,
+    19: 11440,
+    21: 45233, // Warglaive / Perdition's Blade
+    22: 45233, // Offhand Dagger
   },
   Mage: {
-    1: 27549, // Netherwind Crown
-    3: 27548, // Netherwind Mantle
-    5: 27545, // Netherwind Robes
-    6: 27547, // Netherwind Belt
-    7: 27546, // Netherwind Pants
-    8: 27544, // Netherwind Boots
-    10: 27550, // Netherwind Gloves
-    15: 25412,
-    21: 31038, // Staff
+    1: 28414, // Netherwind Crown
+    3: 32369, // Netherwind Mantle
+    5: 28417, // Netherwind Robes
+    6: 27515, // Netherwind Belt
+    7: 30424, // Netherwind Pants
+    8: 27540, // Netherwind Boots
+    10: 30418, // Netherwind Gloves
+    16: 27549,
+    19: 11440,
+    21: 45233, // Staff of the Arcane
   },
   Priest: {
-    1: 29764, // Transcendence Halo
-    3: 29765, // Transcendence Pauldrons
-    5: 29766, // Transcendence Robes
-    6: 29767, // Transcendence Belt
-    7: 29768, // Transcendence Leggings
-    8: 29769, // Transcendence Boots
-    10: 29770, // Transcendence Handwraps
-    15: 25412,
-    21: 29771, // Anathema / Benediction
+    1: 28414, // Transcendence Halo
+    3: 32369, // Transcendence Pauldrons
+    5: 28417, // Transcendence Robes
+    6: 27515, // Transcendence Belt
+    7: 30424, // Transcendence Leggings
+    8: 27540, // Transcendence Boots
+    10: 30418, // Transcendence Handwraps
+    16: 27549,
+    19: 11440,
+    21: 45233, // Anathema / Benediction
   },
   Hunter: {
-    1: 27529, // Dragonstalker Helm
-    3: 27528, // Dragonstalker Spaulders
-    5: 27525, // Dragonstalker Breastplate
-    6: 27527, // Dragonstalker Belt
-    7: 27526, // Dragonstalker Legguards
-    8: 27524, // Dragonstalker Greaves
-    10: 27530, // Dragonstalker Gauntlets
-    15: 25412,
-    21: 27523, // Rhok'delar, Longbow of the Ancients
+    1: 28414, // Dragonstalker Helm
+    3: 32369, // Dragonstalker Spaulders
+    5: 30422, // Dragonstalker Breastplate
+    6: 30425, // Dragonstalker Belt
+    7: 30424, // Dragonstalker Legguards
+    8: 27540, // Dragonstalker Greaves
+    10: 30418, // Dragonstalker Gauntlets
+    16: 27549,
+    19: 11440,
+    21: 45233, // Rhok'delar, Longbow of the Ancients
   },
   Warlock: {
-    1: 27559, // Nemesis Skullcap
-    3: 27558, // Nemesis Spaulders
-    5: 27555, // Nemesis Robes
-    6: 27557, // Nemesis Belt
-    7: 27556, // Nemesis Leggings
-    8: 27554, // Nemesis Boots
-    10: 27560, // Nemesis Gloves
-    15: 25412,
-    21: 31038,
+    1: 28414, // Nemesis Skullcap
+    3: 32369, // Nemesis Spaulders
+    5: 28417, // Nemesis Robes
+    6: 27515, // Nemesis Belt
+    7: 30424, // Nemesis Leggings
+    8: 27540, // Nemesis Boots
+    10: 30418, // Nemesis Gloves
+    16: 27549,
+    19: 11440,
+    21: 45233,
   },
   Shaman: {
-    1: 27519, // Ten Storms Helmet
-    3: 27518, // Ten Storms Epaulets
-    5: 27515, // Ten Storms Breastplate
-    6: 27517, // Ten Storms Belt
-    7: 27516, // Ten Storms Legguards
-    8: 27514, // Ten Storms Greaves
-    10: 27520, // Ten Storms Gauntlets
-    15: 25412,
-    21: 27513,
-    22: 27512,
+    1: 28414, // Ten Storms Helmet
+    3: 32369, // Ten Storms Epaulets
+    5: 30422, // Ten Storms Breastplate
+    6: 27515, // Ten Storms Belt
+    7: 30424, // Ten Storms Legguards
+    8: 27540, // Ten Storms Greaves
+    10: 27519, // Ten Storms Gauntlets
+    16: 27549,
+    19: 11440,
+    21: 45233,
+    22: 27532,
   },
   "Death Knight": {
-    1: 52187, // Scourgelord Helm
-    3: 52185, // Scourgelord Pauldrons
-    5: 52183, // Scourgelord Chestguard
-    6: 52188,
-    7: 52184, // Scourgelord Legplates
-    8: 52189,
-    10: 52186,
-    15: 25412,
-    21: 49706, // Shadowmourne
+    1: 28414, // Scourgelord Helm
+    3: 32369, // Scourgelord Pauldrons
+    5: 30422, // Scourgelord Chestguard
+    6: 30425,
+    7: 30424, // Scourgelord Legplates
+    8: 27540,
+    10: 30418,
+    16: 27549,
+    19: 11440,
+    21: 45233, // Shadowmourne
   },
 };
 
@@ -191,65 +204,35 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
     const raceId = getRaceIdFromName(charRace);
     const genderId = getGenderId(charGender);
 
-    // Build items list: [slotId, displayId]
-    const itemsMap: [number, number][] = [];
-    const iconicFallback = CLASS_ICONIC_DISPLAYS[charClass] || CLASS_ICONIC_DISPLAYS["Warrior"];
+    // Build items list: [slotId, displayId] with transmog priority and authentic display IDs
+    const allGear = profile.gear || profile.equippedItems || [];
+    let itemsMap: [number, number][] = [];
 
-    // Slot IDs in WoW:
-    // 1: Head, 3: Shoulder, 4: Shirt, 5: Chest, 6: Waist, 7: Legs, 8: Feet, 9: Wrist, 10: Hands, 15: Back, 19: Tabard, 21: Main Hand, 22: Off Hand, 26: Ranged
-    const slotMapping: Record<string, number> = {
-      HEAD: 1,
-      SHOULDER: 3,
-      SHIRT: 4,
-      CHEST: 5,
-      WAIST: 6,
-      LEGS: 7,
-      FEET: 8,
-      WRIST: 9,
-      HANDS: 10,
-      BACK: 15,
-      TABARD: 19,
-      MAIN_HAND: 21,
-      OFF_HAND: 22,
-      RANGED: 26,
-    };
-
-    // Priority 1: Direct Blizzard Appearance Items with official display_ids
-    const appearanceItems = profile.appearance?.items;
-    if (appearanceItems && Array.isArray(appearanceItems)) {
-      for (const aIt of appearanceItems) {
-        const slotKey = aIt.slot?.type?.toUpperCase();
-        const slotNum = slotMapping[slotKey];
-        const displayId = aIt.display_id || aIt.item_appearance_modifier_id;
-        if (slotNum && displayId) {
-          itemsMap.push([slotNum, displayId]);
-        }
-      }
+    if (allGear.length > 0 || (profile.transmogSlots && profile.transmogSlots.length > 0)) {
+      itemsMap = await resolveCharacterGearItems(allGear, (profile as any).region || "us", profile.transmogs);
     }
 
-    // Priority 2: Equipped gear items with displayId
-    const allGear = profile.gear || profile.equippedItems;
-    if (allGear && Array.isArray(allGear)) {
-      for (const g of allGear) {
-        const slotNum = g.slotId || slotMapping[g.slot?.toUpperCase()];
-        if (slotNum) {
-          const alreadyAdded = itemsMap.some(([s]) => s === slotNum);
-          if (!alreadyAdded) {
-            if (g.displayId) {
-              itemsMap.push([slotNum, g.displayId]);
-            } else if (iconicFallback[slotNum]) {
-              itemsMap.push([slotNum, iconicFallback[slotNum]]);
-            }
-          }
-        }
-      }
-    }
-
-    // If no gear items mapped, supply iconic class set
+    // Only if the character has absolutely zero equipped gear items detected across all sources,
+    // apply basic starter garments so the model is not entirely unadorned.
     if (itemsMap.length === 0) {
-      for (const [s, d] of Object.entries(iconicFallback)) {
-        itemsMap.push([Number(s), d]);
-      }
+      const iconicFallback = CLASS_ICONIC_DISPLAYS[charClass] || CLASS_ICONIC_DISPLAYS["Warrior"];
+      if (iconicFallback[4]) itemsMap.push([4, iconicFallback[4]]); // Shirt
+      if (iconicFallback[7]) itemsMap.push([7, iconicFallback[7]]); // Pants
+    }
+
+    const raceGender = raceId * 2 - 1 + genderId;
+
+    // Update component state for ZamModelViewer canvas MutationObserver
+    setBlizzardCurrentGear({
+      charKey: `${profile.name}-${profile.realm}`,
+      race: raceId,
+      gender: genderId,
+      raceGender,
+      items: itemsMap,
+    });
+    if (mountRef.current) {
+      mountRef.current.setAttribute("data-blizzard-current-racegender", String(raceGender));
+      mountRef.current.setAttribute("data-blizzard-current-gear", JSON.stringify(itemsMap));
     }
 
     const characterConfig: Character3DConfig = {
@@ -268,7 +251,13 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
       const viewer = await createWowCharacterViewer(mountRef.current, characterConfig, aspect);
       if (viewer) {
         viewerInstanceRef.current = viewer;
-        viewer.setAnimation(currentAnim);
+        setTimeout(() => {
+          if (viewerInstanceRef.current === viewer) {
+            try {
+              viewer.setAnimation(currentAnim);
+            } catch (_) {}
+          }
+        }, 150);
         setIsLoading(false);
       } else {
         // Viewer script or WebGL not available
@@ -320,7 +309,8 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
   };
 
   // Wowhead Dressing Room deep link
-  const wowheadDressingRoomUrl = `https://www.wowhead.com/dressing-room#s${
+  const wowheadBase = getWowheadBaseUrl(profile.wow_version || profile.gameMode || "retail");
+  const wowheadDressingRoomUrl = `${wowheadBase}/dressing-room#s${
     getGenderId(charGender) === 0 ? "m" : "z"
   }${getRaceIdFromName(charRace)}8000180001`;
 
@@ -355,6 +345,27 @@ export const WoWModelViewer3D: React.FC<WoWModelViewer3DProps> = ({
 
         {/* Action Controls Right */}
         <div className="flex items-center gap-1.5 pointer-events-auto">
+          <button
+            type="button"
+            onClick={async () => {
+              if (viewerInstanceRef.current) {
+                const integrity = viewerInstanceRef.current.verifyIntegrity();
+                if (!integrity.isValid) {
+                  await viewerInstanceRef.current.forceReloadIfMismatched();
+                } else {
+                  initViewer();
+                }
+              } else {
+                initViewer();
+              }
+            }}
+            title="Integridade 3D WebGL: Compara ativo solicitado vs carregado e força recarregamento se incompatível"
+            className="px-2 py-1 rounded-lg bg-zinc-900/90 hover:bg-zinc-800 border border-emerald-500/30 hover:border-emerald-500/60 text-emerald-400 hover:text-emerald-300 transition-all cursor-pointer shadow flex items-center gap-1 text-[10px] font-bold"
+          >
+            <Shield className="w-3 h-3 text-emerald-400" />
+            <span className="hidden sm:inline">3D Verificado</span>
+          </button>
+
           <button
             type="button"
             onClick={initViewer}

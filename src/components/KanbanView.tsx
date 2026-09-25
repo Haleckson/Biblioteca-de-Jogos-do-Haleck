@@ -806,7 +806,7 @@ export default function KanbanView({
                                     {game.rating > 0 && (
                                       <div className="flex items-center gap-1">
                                         {renderStars(game.rating, `kanban-${game.id}`, "w-3 h-3")}
-                                        <span className="text-[10px] font-bold text-amber-400">{game.rating.toFixed(1)}</span>
+                                        <span className="text-[10px] font-bold text-amber-400">{Number(game.rating || 0).toFixed(1)}</span>
                                       </div>
                                     )}
 

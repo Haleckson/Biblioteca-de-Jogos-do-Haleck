@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, update } from "firebase/database";
 import { getAuth } from "firebase/auth";
+import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
 import { Game } from "../types";
 import { summarizeError } from "./logger";
 
@@ -8,6 +9,7 @@ import { summarizeError } from "./logger";
 const env = (import.meta as any).env || {};
 
 const defaultProjectId = "biblioteca-jogos-haleck";
+const defaultFirestoreDbId = "ai-studio-catlogodevideojo-04422a0f-88da-4c05-958f-0eb7d1c78b7b";
 
 const firebaseConfig = {
   apiKey: env.VITE_FIREBASE_API_KEY || "AIzaSyC9Vk57pe-lUDx5b12NpLKY9x8PEZDEzYA",
@@ -16,7 +18,8 @@ const firebaseConfig = {
   projectId: env.VITE_FIREBASE_PROJECT_ID || defaultProjectId,
   storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || "biblioteca-jogos-haleck.firebasestorage.app",
   messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || "445497025355",
-  appId: env.VITE_FIREBASE_APP_ID || "1:445497025355:web:b716b48336ca59ebcbfece",
+  appId: env.VITE_FIREBASE_APP_ID || "1:445497025355:web:d80608f08aaad338cbfece",
+  firestoreDatabaseId: env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || defaultFirestoreDbId,
 };
 
 // Check if Firebase is configured
@@ -29,12 +32,22 @@ export const isFirebaseConfigured = (): boolean => {
 
 export let db: any = null;
 export let auth: any = null;
+export let firestoreDb: any = null;
 
 if (isFirebaseConfigured()) {
   try {
     const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     db = getDatabase(app);
     auth = getAuth(app);
+    try {
+      firestoreDb = getFirestore(app, firebaseConfig.firestoreDatabaseId);
+      // Validate connection to Firestore on boot as specified by Firebase Skill
+      getDocFromServer(doc(firestoreDb, "test", "connection")).catch(() => {
+        // Non-blocking test
+      });
+    } catch (fsErr) {
+      console.warn("Aviso ao conectar ao Firestore:", summarizeError(fsErr));
+    }
   } catch (error) {
     console.error("Erro ao inicializar o Firebase:", error);
   }

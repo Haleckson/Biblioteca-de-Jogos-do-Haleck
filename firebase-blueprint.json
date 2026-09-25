@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "Game": {
+      "title": "Game",
+      "description": "Video game library item with metadata, playtime, ratings and diary",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "platform": { "type": "string" },
+        "status": { "type": "array" }
+      },
+      "required": ["id", "name"]
+    },
+    "LibraryData": {
+      "title": "LibraryData",
+      "description": "User game library data container",
+      "type": "object",
+      "properties": {
+        "games": { "type": "array" },
+        "globalTags": { "type": "array" },
+        "globalGenres": { "type": "array" },
+        "lastUpdated": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "/library/{docId}": {
+      "schema": "LibraryData",
+      "description": "Global game library and user games data"
+    },
+    "/games/{gameId}": {
+      "schema": "Game",
+      "description": "Individual game records"
+    },
+    "/test/{testId}": {
+      "schema": "LibraryData",
+      "description": "Connection test documents"
+    }
+  }
+}

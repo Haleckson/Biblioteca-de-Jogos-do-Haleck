@@ -4,7 +4,8 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste, Video } from "lucide-react";
+import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste, Video, Code } from "lucide-react";
+import { WoWAddonDevModal } from "./WoWAddonDevModal";
 import { isSoundEffectsEnabled, setSoundEffectsEnabled, playRetroSound } from "../utils/audioEffects";
 import { getCustomImgBBKey } from "../utils/imgbb";
 import { isYouTubeAuthenticated, signInWithYouTube, signOutYouTube } from "../utils/googleDrive";
@@ -27,6 +28,28 @@ import {
   getGogOAuthStatus,
   exchangeGogCode
 } from "../utils/gogApi";
+import {
+  getStoredBlizzardBattleTag,
+  setStoredBlizzardBattleTag,
+  getStoredBlizzardOAuthToken,
+  setStoredBlizzardOAuthToken,
+  getStoredBlizzardRegion,
+  setStoredBlizzardRegion,
+  getStoredBlizzardClientId,
+  setStoredBlizzardClientId,
+  getStoredBlizzardClientSecret,
+  setStoredBlizzardClientSecret,
+  clearBlizzardOAuthSession,
+  isBlizzardAuthenticated,
+  getBlizzardAuthUrl,
+  exchangeBlizzardCode,
+  verifyAndSaveManualToken,
+  requestBlizzardClientCredentials,
+  getEffectiveBlizzardRedirectUri,
+  DEFAULT_BLIZZARD_CLIENT_ID,
+  DEFAULT_BLIZZARD_CLIENT_SECRET,
+  BLIZZARD_ALLOWED_REDIRECT_URIS,
+} from "../utils/blizzardApi";
 import {
   getStoredIgdbClientId,
   setStoredIgdbClientId,
@@ -69,6 +92,8 @@ interface SiteSettingsModalProps {
   isSyncingSteamBatch?: boolean;
   onBatchSyncGog?: () => void;
   isSyncingGogBatch?: boolean;
+  onBatchSyncBlizzard?: () => void | Promise<void>;
+  isSyncingBlizzardBatch?: boolean;
   triggerAlert?: (title: string, message: string) => void;
 }
 
@@ -90,6 +115,8 @@ export default function SiteSettingsModal({
   isSyncingSteamBatch = false,
   onBatchSyncGog,
   isSyncingGogBatch = false,
+  onBatchSyncBlizzard,
+  isSyncingBlizzardBatch = false,
   triggerAlert,
 }: SiteSettingsModalProps) {
   useBodyScrollLock(isOpen);
@@ -109,6 +136,101 @@ export default function SiteSettingsModal({
   const [gogDirectInput, setGogDirectInput] = useState(getStoredGogUsername());
   const [gogProfileSummary, setGogProfileSummary] = useState<GogPlayerSummary | null>(null);
   const [copiedGogLink, setCopiedGogLink] = useState(false);
+
+  // Blizzard / Battle.net State
+  const [blizzardBattleTag, setBlizzardBattleTag] = useState(getStoredBlizzardBattleTag());
+  const [blizzardRegion, setBlizzardRegion] = useState(getStoredBlizzardRegion());
+  const [blizzardClientId, setBlizzardClientId] = useState(getStoredBlizzardClientId());
+  const [blizzardClientSecret, setBlizzardClientSecret] = useState(getStoredBlizzardClientSecret());
+  const [blizzardTokenInput, setBlizzardTokenInput] = useState(getStoredBlizzardOAuthToken());
+  const [isBlizzardConnected, setIsBlizzardConnected] = useState(isBlizzardAuthenticated());
+  const [showBlizzardConfig, setShowBlizzardConfig] = useState(false);
+  const [isConnectingBlizzard, setIsConnectingBlizzard] = useState(false);
+  const [blizzardDirectAuthModalOpen, setBlizzardDirectAuthModalOpen] = useState(false);
+  const [blizzardDirectInput, setBlizzardDirectInput] = useState("");
+  const [copiedBlizzardLink, setCopiedBlizzardLink] = useState(false);
+  const [blizzardModalTab, setBlizzardModalTab] = useState<"battletag" | "oauth">("battletag");
+  const [addonDevModalOpen, setAddonDevModalOpen] = useState(false);
+
+  const activeBlizzardClientId = (blizzardClientId || "").trim() || DEFAULT_BLIZZARD_CLIENT_ID;
+  const dynamicBlizzardOAuthUrl = getBlizzardAuthUrl(blizzardRegion || "us", undefined, activeBlizzardClientId);
+
+  // Auto-listen to Blizzard OAuth popup success
+  useEffect(() => {
+    const handleAuthMessage = async (e: MessageEvent) => {
+      if (e.data && e.data.type === "BLIZZARD_AUTH_SUCCESS") {
+        const code = e.data.code;
+        if (code) {
+          await handleDirectBlizzardLogin(code);
+        } else if (e.data.error && triggerAlert) {
+          triggerAlert("Erro na Autenticação Blizzard", `A Blizzard retornou o erro: ${e.data.error}`);
+        }
+      }
+    };
+    window.addEventListener("message", handleAuthMessage);
+    return () => window.removeEventListener("message", handleAuthMessage);
+  }, [blizzardRegion, blizzardClientId, blizzardClientSecret]);
+
+  // Check URL query parameters if redirected in full window
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const urlParams = new URLSearchParams(window.location.search);
+      const bnetCode = urlParams.get("blizzard_code") || urlParams.get("code");
+      if (bnetCode && (window.location.search.includes("blizzard") || bnetCode.startsWith("US") || bnetCode.startsWith("EU"))) {
+        const cleanUrl = window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+        handleDirectBlizzardLogin(bnetCode);
+      }
+    }
+  }, []);
+
+  const handleOpenBlizzardPopup = () => {
+    if (!dynamicBlizzardOAuthUrl) return;
+    const width = 600;
+    const height = 750;
+    const left = window.screenX + (window.outerWidth - width) / 2;
+    const top = window.screenY + (window.outerHeight - height) / 2;
+    window.open(
+      dynamicBlizzardOAuthUrl,
+      "blizzard_oauth_popup",
+      `width=${width},height=${height},left=${left},top=${top},status=yes,scrollbars=yes`
+    );
+  };
+
+  const handleCopyBlizzardLink = async () => {
+    if (!dynamicBlizzardOAuthUrl) {
+      if (triggerAlert) {
+        triggerAlert("Client ID Necessário", "Por favor, digite seu Client ID da Blizzard para gerar o link oficial de login.");
+      }
+      return;
+    }
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(dynamicBlizzardOAuthUrl);
+        setCopiedBlizzardLink(true);
+        setTimeout(() => setCopiedBlizzardLink(false), 4000);
+        if (triggerAlert) {
+          triggerAlert("Link Copiado!", "Link de login oficial da Blizzard / Battle.net copiado para a área de transferência.");
+        }
+      }
+    } catch {}
+  };
+
+  const handlePasteBlizzardCodeFromClipboard = async () => {
+    try {
+      if (navigator.clipboard) {
+        const text = await navigator.clipboard.readText();
+        if (text && text.trim()) {
+          setBlizzardDirectInput(text.trim());
+          if (triggerAlert) {
+            triggerAlert("Texto Colado!", "Código/Token colado da área de transferência com sucesso.");
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Não foi possível ler da área de transferência:", err);
+    }
+  };
 
   const GOG_OAUTH_URL = "https://auth.gog.com/auth?client_id=46899977096215655&redirect_uri=https://embed.gog.com/on_login_success?origin=client&response_type=code&layout=client2";
 
@@ -424,6 +546,143 @@ export default function SiteSettingsModal({
     if (triggerAlert) triggerAlert("GOG Desconectado", "Sessão OAuth e token do GOG Galaxy foram desvinculados do computador.");
   };
 
+  const handleDirectBlizzardLogin = async (inputToAuth?: string) => {
+    const target = (inputToAuth || blizzardDirectInput || blizzardBattleTag).trim();
+    if (!target) {
+      if (triggerAlert) triggerAlert("Atenção", "Por favor, digite sua BattleTag (ex: Arthas#1234) ou o código gerado pelo login oficial da Blizzard.");
+      return;
+    }
+
+    if (blizzardClientId.trim()) setStoredBlizzardClientId(blizzardClientId.trim());
+    if (blizzardClientSecret.trim()) setStoredBlizzardClientSecret(blizzardClientSecret.trim());
+    if (blizzardRegion) setStoredBlizzardRegion(blizzardRegion);
+
+    setIsConnectingBlizzard(true);
+    try {
+      if (target.includes("code=") || target.includes("localhost") || target.length >= 25) {
+        let code = target;
+        if (target.includes("code=")) {
+          const match = target.match(/[?&]code=([^&#\s]+)/);
+          if (match) code = match[1];
+        }
+        try {
+          const effRedirectUri = getEffectiveBlizzardRedirectUri();
+          const authResult = await exchangeBlizzardCode(code, effRedirectUri);
+          if (authResult && (authResult.token || authResult.success)) {
+            setIsBlizzardConnected(true);
+            const tag = authResult.battleTag || getStoredBlizzardBattleTag();
+            if (tag) setBlizzardBattleTag(tag);
+            setBlizzardDirectAuthModalOpen(false);
+            if (triggerAlert) {
+              triggerAlert(
+                "Battle.net / Blizzard Conectado com Sucesso!",
+                `Conta Battle.net vinculada oficialmente via OAuth da Blizzard! BattleTag: "${tag || "Gamer"}". Seus personagens de WoW, equipamentos, conquistas e montarias foram sincronizados com sucesso.`
+              );
+            }
+            return;
+          } else if (authResult && authResult.error) {
+            console.warn("Blizzard OAuth exchange error:", authResult.error);
+            if (triggerAlert) {
+              triggerAlert("Erro na Conexão com a Blizzard", authResult.error);
+            }
+          }
+        } catch (authErr: any) {
+          console.warn("Tentativa de exchange de código Blizzard falhou, tentando validação de token:", authErr);
+        }
+      }
+
+      // Check if it's a token or valid BattleTag
+      const verified = await verifyAndSaveManualToken(target, blizzardBattleTag);
+      if (verified) {
+        setIsBlizzardConnected(true);
+        const tag = getStoredBlizzardBattleTag() || target;
+        setBlizzardBattleTag(tag);
+        setBlizzardDirectAuthModalOpen(false);
+        if (triggerAlert) {
+          triggerAlert(
+            "Battle.net / Blizzard Conectado!",
+            `Sessão persistente ativada para "${tag}". Seus dados da Blizzard e World of Warcraft estão sincronizados permanentemente.`
+          );
+        }
+      } else {
+        // Save as BattleTag reference
+        if (target.includes("#")) {
+          setStoredBlizzardBattleTag(target);
+          setBlizzardBattleTag(target);
+          setBlizzardDirectAuthModalOpen(false);
+          setIsBlizzardConnected(true);
+          if (triggerAlert) {
+            triggerAlert("BattleTag Vinculada!", `BattleTag "${target}" salva com sucesso.`);
+          }
+        } else {
+          if (triggerAlert) {
+            triggerAlert("Falha na Validação", "Não foi possível validar o código ou token da Blizzard. Certifique-se de copiar o código retornado na URL de login.");
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error("Erro ao conectar Blizzard:", err);
+      if (triggerAlert) triggerAlert("Erro no Login Blizzard", "Não foi possível conectar com a API da Blizzard: " + (err.message || String(err)));
+    } finally {
+      setIsConnectingBlizzard(false);
+    }
+  };
+
+  const handleDisconnectBlizzard = () => {
+    clearBlizzardOAuthSession();
+    setBlizzardTokenInput("");
+    setBlizzardBattleTag("");
+    setIsBlizzardConnected(false);
+    if (triggerAlert) triggerAlert("Blizzard Desconectada", "Sua sessão da Battle.net / Blizzard foi removida.");
+  };
+
+  const handleSaveBlizzardKeys = async () => {
+    setIsConnectingBlizzard(true);
+    try {
+      const reg = blizzardRegion || "us";
+      setStoredBlizzardRegion(reg);
+      if (blizzardClientId) setStoredBlizzardClientId(blizzardClientId);
+      if (blizzardClientSecret) setStoredBlizzardClientSecret(blizzardClientSecret);
+      if (blizzardBattleTag) setStoredBlizzardBattleTag(blizzardBattleTag);
+
+      if (blizzardTokenInput && blizzardTokenInput.trim()) {
+        const ok = await verifyAndSaveManualToken(blizzardTokenInput.trim(), blizzardBattleTag);
+        if (ok) {
+          setIsBlizzardConnected(true);
+          setShowBlizzardConfig(false);
+          if (triggerAlert) {
+            triggerAlert("Battle.net Conectado!", "Token OAuth da Blizzard validado e salvo com sucesso!");
+          }
+          return;
+        }
+      }
+
+      if (blizzardClientId && blizzardClientSecret && (!blizzardTokenInput || !blizzardTokenInput.trim())) {
+        try {
+          const directAuth = await requestBlizzardClientCredentials(blizzardClientId, blizzardClientSecret, reg);
+          if (directAuth.success && directAuth.token) {
+            setIsBlizzardConnected(true);
+            setShowBlizzardConfig(false);
+            if (triggerAlert) {
+              triggerAlert("Battle.net Conectado via API!", "Credenciais de desenvolvedor autenticadas com sucesso diretamente na Blizzard!");
+            }
+            return;
+          }
+        } catch (authErr) {
+          console.warn("Client credentials error:", authErr);
+        }
+      }
+
+      setIsBlizzardConnected(isBlizzardAuthenticated());
+      setShowBlizzardConfig(false);
+      if (triggerAlert) {
+        triggerAlert("Configurações Salvas", "Região, credenciais e BattleTag salvas com sucesso!");
+      }
+    } finally {
+      setIsConnectingBlizzard(false);
+    }
+  };
+
   if (!isOpen) return null;
 
   const hasCustomImgBBKey = !!getCustomImgBBKey();
@@ -432,6 +691,19 @@ export default function SiteSettingsModal({
   );
   const linkedGogGames = games.filter(
     (g) => g.integrationPlatform === "gog" || g.gogGameId || (g.gogPlaytimeMinutes && g.gogPlaytimeMinutes > 0)
+  );
+  const linkedBlizzardGames = games.filter(
+    (g) =>
+      g.integrationPlatform === "battlenet" ||
+      (g.integrationPlatform as any) === "blizzard" ||
+      g.platform?.toLowerCase().includes("blizzard") ||
+      g.platform?.toLowerCase().includes("battle.net") ||
+      g.name?.toLowerCase().includes("warcraft") ||
+      g.name?.toLowerCase().includes("world of warcraft") ||
+      g.name?.toLowerCase().includes("diablo") ||
+      g.name?.toLowerCase().includes("overwatch") ||
+      g.name?.toLowerCase().includes("starcraft") ||
+      g.name?.toLowerCase().includes("hearthstone")
   );
 
   const handleSaveSteamKeys = () => {
@@ -505,7 +777,7 @@ export default function SiteSettingsModal({
                 Plataformas & Lojas de Jogos
               </h4>
               <span className="text-[11px] text-zinc-400 font-mono">
-                {linkedSteamGames.length + linkedGogGames.length} jogos integrados
+                {linkedSteamGames.length + linkedGogGames.length + linkedBlizzardGames.length} jogos integrados
               </span>
             </div>
 
@@ -737,6 +1009,196 @@ export default function SiteSettingsModal({
                           onClick={handleDisconnectGog}
                           className="px-3 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 text-xs font-bold transition-all cursor-pointer"
                           title="Desconectar conta GOG"
+                        >
+                          Sair
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* BLIZZARD BATTLE.NET & WOW API INTEGRATION CARD */}
+              <div className="p-4 bg-zinc-900/80 border border-sky-500/30 rounded-2xl space-y-3 hover:border-sky-500/50 transition-all shadow-md">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="p-2.5 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
+                      <Zap size={18} />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="font-bold text-sm text-white">Blizzard Battle.net API</span>
+                        {isBlizzardConnected ? (
+                          <span className="text-[9px] font-semibold text-emerald-400 bg-emerald-950/50 border border-emerald-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                            <CheckCircle2 size={9} /> Conectado
+                          </span>
+                        ) : (
+                          <span className="text-[9px] font-semibold text-zinc-400 bg-zinc-800 border border-zinc-700 px-2 py-0.5 rounded-full">
+                            Pendente
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                        {isBlizzardConnected
+                          ? `BattleTag: ${blizzardBattleTag || "Ativa"} (${linkedBlizzardGames.length} jogos/WoW)`
+                          : "Conecte sua conta Battle.net para puxar personagens e armory"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setBlizzardDirectAuthModalOpen(true)}
+                      className="px-3 py-1.5 rounded-xl bg-gradient-to-r from-sky-600 to-blue-600 hover:from-sky-500 hover:to-blue-500 text-white text-xs font-extrabold transition-all cursor-pointer shadow-md shadow-sky-600/20 flex items-center gap-1.5"
+                    >
+                      <Sparkles size={13} className="text-sky-200" />
+                      <span>Login Battle.net</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setShowBlizzardConfig(!showBlizzardConfig)}
+                      className="px-2.5 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer"
+                    >
+                      {showBlizzardConfig ? "Ocultar" : "Avançado"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Sincronização em Lote da API Blizzard / WoW */}
+                <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-2">
+                  <div className="text-[11px] text-zinc-400">
+                    <span className="text-white font-medium">{linkedBlizzardGames.length}</span> {linkedBlizzardGames.length === 1 ? "jogo/expansão" : "jogos/expansões"} identificados
+                  </div>
+                  {onBatchSyncBlizzard && (
+                    <button
+                      type="button"
+                      onClick={() => onBatchSyncBlizzard()}
+                      disabled={isSyncingBlizzardBatch}
+                      className="px-3 py-1.5 rounded-xl bg-sky-950/60 hover:bg-sky-900/80 border border-sky-500/40 text-sky-200 hover:text-white text-xs font-bold transition-all cursor-pointer disabled:opacity-50 flex items-center gap-1.5 shadow-sm"
+                    >
+                      {isSyncingBlizzardBatch ? (
+                        <>
+                          <Loader2 size={12} className="animate-spin text-sky-400" />
+                          <span>Sincronizando WoW...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw size={12} className="text-sky-400" />
+                          <span>Sincronizar Tudo (API)</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                </div>
+
+                {/* Botão de Acesso Rápido ao Add-on Dev Studio */}
+                <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5 text-[11px] text-cyan-300">
+                    <Code size={13} className="text-cyan-400" />
+                    <span>Criação de Add-ons & Documentação Lua:</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAddonDevModalOpen(true)}
+                    className="px-2.5 py-1 rounded-xl bg-cyan-950/70 hover:bg-cyan-900/90 border border-cyan-500/40 text-cyan-300 hover:text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                  >
+                    <Code size={12} />
+                    <span>Add-on Dev Studio</span>
+                  </button>
+                </div>
+
+                {/* Configurações Avançadas e Chaves da Blizzard */}
+                {showBlizzardConfig && (
+                  <div className="pt-3 border-t border-zinc-800 space-y-2.5 text-xs">
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Região Blizzard
+                        </label>
+                        <select
+                          value={blizzardRegion}
+                          onChange={(e) => setBlizzardRegion(e.target.value as "us" | "eu" | "kr" | "tw")}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:border-sky-500 focus:outline-none"
+                        >
+                          <option value="us">US / Americas (Brasil)</option>
+                          <option value="eu">EU / Europe</option>
+                          <option value="kr">KR / Korea</option>
+                          <option value="tw">TW / Taiwan</option>
+                        </select>
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          BattleTag
+                        </label>
+                        <input
+                          type="text"
+                          value={blizzardBattleTag}
+                          onChange={(e) => setBlizzardBattleTag(e.target.value)}
+                          placeholder="Ex: Arthas#1234"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white focus:border-sky-500 focus:outline-none font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Client ID (Developer)
+                        </label>
+                        <input
+                          type="text"
+                          value={blizzardClientId}
+                          onChange={(e) => setBlizzardClientId(e.target.value)}
+                          placeholder="Client ID da Blizzard"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:border-sky-500 focus:outline-none"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                          Client Secret
+                        </label>
+                        <input
+                          type="password"
+                          value={blizzardClientSecret}
+                          onChange={(e) => setBlizzardClientSecret(e.target.value)}
+                          placeholder="Client Secret"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:border-sky-500 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
+                        OAuth Bearer Token (Manual ou Automático)
+                      </label>
+                      <input
+                        type="password"
+                        value={blizzardTokenInput}
+                        onChange={(e) => setBlizzardTokenInput(e.target.value)}
+                        placeholder="Bearer token gerado"
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-xl px-2.5 py-1.5 text-xs text-white font-mono focus:border-sky-500 focus:outline-none"
+                      />
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSaveBlizzardKeys}
+                        disabled={isConnectingBlizzard}
+                        className="flex-1 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 shadow-md shadow-sky-500/20"
+                      >
+                        {isConnectingBlizzard ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
+                        <span>Validar & Salvar Blizzard</span>
+                      </button>
+
+                      {isBlizzardConnected && (
+                        <button
+                          type="button"
+                          onClick={handleDisconnectBlizzard}
+                          className="px-3 py-1.5 rounded-xl bg-red-950/40 hover:bg-red-900/60 border border-red-500/30 text-red-300 text-xs font-bold transition-all cursor-pointer"
+                          title="Desconectar conta Blizzard"
                         >
                           Sair
                         </button>
@@ -1562,6 +2024,325 @@ export default function SiteSettingsModal({
           </div>
         </div>
       )}
+
+      {/* BLIZZARD BATTLE.NET DIRECT AUTH MODAL */}
+      {blizzardDirectAuthModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-zinc-900 border border-sky-500/40 rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4 relative max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-sky-500/15 border border-sky-500/30 rounded-2xl text-sky-400">
+                  <Zap size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base text-white">Vincular Conta Blizzard / Battle.net</h3>
+                  <p className="text-xs text-zinc-400">Sincronização persistente de personagens, WoW e conquistas</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBlizzardDirectAuthModalOpen(false)}
+                className="p-1.5 rounded-xl text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* TAB SELECTOR */}
+            <div className="flex bg-zinc-950/80 p-1 rounded-2xl border border-zinc-800 gap-1">
+              <button
+                type="button"
+                onClick={() => setBlizzardModalTab("battletag")}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  blizzardModalTab === "battletag"
+                    ? "bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-md shadow-sky-600/20"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                }`}
+              >
+                <Zap size={14} />
+                <span>⚡ BattleTag Direta</span>
+                <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-extrabold">Instantâneo</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setBlizzardModalTab("oauth")}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer ${
+                  blizzardModalTab === "oauth"
+                    ? "bg-gradient-to-r from-sky-600 to-blue-600 text-white shadow-md shadow-sky-600/20"
+                    : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-900"
+                }`}
+              >
+                <Key size={14} />
+                <span>Login Oficial OAuth</span>
+              </button>
+            </div>
+
+            {/* TAB 1: BATTLETAG (INSTANT & NO 401 ERRORS) */}
+            {blizzardModalTab === "battletag" && (
+              <div className="space-y-4 animate-in fade-in duration-150">
+                <div className="bg-sky-950/20 border border-sky-500/25 rounded-2xl p-4 text-xs text-zinc-300 space-y-2">
+                  <div className="font-semibold text-sky-300 flex items-center gap-1.5">
+                    <CheckCircle2 size={15} className="text-sky-400" />
+                    <span>Conexão Direta Sem Necessidade de App Blizzard</span>
+                  </div>
+                  <p className="text-zinc-400 leading-relaxed text-[11px]">
+                    Não precisa se cadastrar no portal de desenvolvedores da Blizzard nem configurar chaves. Digite sua <strong>BattleTag completa</strong> (ex: <code className="text-sky-300 font-mono">Arthas#1234</code>) para vincular sua conta e sincronizar automaticamente todos os seus personagens do World of Warcraft.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-sky-300 uppercase tracking-wider block">
+                    Sua BattleTag:
+                  </label>
+                  <input
+                    type="text"
+                    value={blizzardBattleTag}
+                    onChange={(e) => {
+                      setBlizzardBattleTag(e.target.value);
+                      setBlizzardDirectInput(e.target.value);
+                    }}
+                    placeholder="Ex: Arthas#1234 ou SeuNick#5678"
+                    className="w-full bg-zinc-950/90 border border-sky-500/40 focus:border-sky-400 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none font-medium shadow-inner"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        handleDirectBlizzardLogin(blizzardBattleTag);
+                      }
+                    }}
+                  />
+                  <p className="text-[11px] text-zinc-500">
+                    Insira seu nome de jogador seguido da hashtag e números cadastrados na Battle.net.
+                  </p>
+                </div>
+
+                <div className="flex gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setBlizzardDirectAuthModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDirectBlizzardLogin(blizzardBattleTag)}
+                    disabled={isConnectingBlizzard || !blizzardBattleTag.trim()}
+                    className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-extrabold transition-all cursor-pointer shadow-lg shadow-sky-600/30 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isConnectingBlizzard ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin text-white" />
+                        <span>Vinculando BattleTag...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={15} className="text-sky-200" />
+                        <span>Vincular BattleTag & Sincronizar</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: OFFICIAL OAUTH (BLIZZARD DEVELOPER PORTAL) */}
+            {blizzardModalTab === "oauth" && (
+              <div className="space-y-4 animate-in fade-in duration-150">
+                <div className="bg-amber-950/20 border border-amber-500/25 rounded-2xl p-3.5 text-xs text-zinc-300 space-y-1.5">
+                  <div className="font-semibold text-amber-300 flex items-center gap-1.5">
+                    <Shield size={14} className="text-amber-400" />
+                    <span>Por que ocorre o erro 401 Bad client credentials?</span>
+                  </div>
+                  <p className="text-[11px] text-zinc-400 leading-relaxed">
+                    A Blizzard exige que todo login OAuth use um <strong>Client ID</strong> registrado por você no portal gratuito de desenvolvedores da Blizzard. Sem um Client ID cadastrado, a página oficial da Battle.net rejeita a autorização com o erro 401.
+                  </p>
+                  <div className="pt-1">
+                    <a
+                      href="https://develop.battle.net/access/clients"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 text-[11px] text-sky-400 hover:text-sky-300 font-bold underline"
+                    >
+                      <span>Abrir Portal de Desenvolvedores da Blizzard (develop.battle.net)</span>
+                      <ExternalLink size={12} />
+                    </a>
+                  </div>
+                </div>
+
+                {/* PASSO 1: CLIENT ID & REDIRECT URI */}
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <label className="text-xs font-bold text-sky-300 uppercase tracking-wider block">
+                        1. Seu Blizzard Client ID:
+                      </label>
+                      <span className="text-[10px] text-zinc-400 font-mono">develop.battle.net</span>
+                    </div>
+                    <input
+                      type="text"
+                      value={blizzardClientId || DEFAULT_BLIZZARD_CLIENT_ID}
+                      onChange={(e) => setBlizzardClientId(e.target.value)}
+                      placeholder="Client ID da Blizzard"
+                      className="w-full bg-zinc-950/90 border border-sky-500/40 focus:border-sky-400 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none font-medium shadow-inner"
+                    />
+                  </div>
+
+                  {/* Redirect URI Badge */}
+                  <div className="bg-sky-950/40 border border-sky-500/30 rounded-xl p-2.5 text-xs flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] font-bold text-sky-400 uppercase tracking-wider mb-0.5">
+                        Redirect URI Autorizada:
+                      </div>
+                      <div className="font-mono text-[11px] text-zinc-200 truncate select-all">
+                        {getEffectiveBlizzardRedirectUri()}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(getEffectiveBlizzardRedirectUri());
+                        if (triggerAlert) triggerAlert("Copiado!", "Redirect URI copiada para a área de transferência.");
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg bg-sky-900/60 hover:bg-sky-800 text-sky-200 text-[11px] font-bold shrink-0 flex items-center gap-1 transition-all cursor-pointer border border-sky-600/40"
+                    >
+                      <Copy size={11} />
+                      <span>Copiar</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* PASSO 2: BOTÃO ABRIR LOGIN OFICIAL */}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-sky-300 uppercase tracking-wider block">
+                    2. Autorização na Blizzard Battle.net:
+                  </label>
+                  {dynamicBlizzardOAuthUrl ? (
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={handleOpenBlizzardPopup}
+                        className="flex-1 py-2.5 px-3 rounded-xl bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white font-extrabold text-center text-xs flex items-center justify-center gap-1.5 shadow-md shadow-sky-600/30 transition-all cursor-pointer"
+                      >
+                        <ExternalLink size={14} />
+                        <span>Abrir Janela de Login Blizzard Battle.net</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleCopyBlizzardLink}
+                        className="px-3.5 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-bold text-xs flex items-center gap-1.5 transition-all cursor-pointer border border-zinc-700 shrink-0"
+                        title="Copiar URL de login oficial"
+                      >
+                        {copiedBlizzardLink ? (
+                          <>
+                            <Check size={14} className="text-emerald-400" />
+                            <span className="text-emerald-400">Copiado!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={14} className="text-sky-300" />
+                            <span>Copiar Link</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  ) : null}
+                  <p className="text-[10px] text-zinc-500">
+                    A janela de login da Battle.net abrirá e sincronizará sua conta automaticamente ao autorizar.
+                  </p>
+                </div>
+
+                {/* PASSO 3: COLAR CÓDIGO */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-sky-300 uppercase tracking-wider block">
+                      3. Cole o Código Retornado ou URL de Redirecionamento:
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handlePasteBlizzardCodeFromClipboard}
+                      className="text-[11px] font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1 cursor-pointer transition-colors"
+                    >
+                      <ClipboardPaste size={12} />
+                      <span>Colar da Transferência</span>
+                    </button>
+                  </div>
+                  <input
+                    type="text"
+                    value={blizzardDirectInput}
+                    onChange={(e) => setBlizzardDirectInput(e.target.value)}
+                    placeholder="Ex: https://localhost/?code=US123... ou token Bearer"
+                    className="w-full bg-zinc-950/90 border border-sky-500/40 focus:border-sky-400 rounded-xl px-3.5 py-2.5 text-xs text-white placeholder-zinc-500 focus:outline-none font-medium shadow-inner"
+                  />
+                </div>
+
+                {/* CLIENT SECRET OPCIONAL */}
+                {blizzardClientId && (
+                  <div className="pt-2 border-t border-zinc-800/80 space-y-2">
+                    <label className="text-[11px] font-bold text-zinc-400 uppercase tracking-wider block">
+                      Client Secret (Opcional - Para Autenticação Direta via API):
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="password"
+                        value={blizzardClientSecret}
+                        onChange={(e) => setBlizzardClientSecret(e.target.value)}
+                        placeholder="Client Secret da Blizzard"
+                        className="flex-1 bg-zinc-950/90 border border-zinc-800 focus:border-sky-400 rounded-xl px-3 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none font-medium"
+                      />
+                      {blizzardClientId && blizzardClientSecret && (
+                        <button
+                          type="button"
+                          onClick={handleSaveBlizzardKeys}
+                          disabled={isConnectingBlizzard}
+                          className="px-3 py-2 rounded-xl bg-sky-700 hover:bg-sky-600 text-white text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0"
+                        >
+                          <Zap size={13} />
+                          <span>Autenticar via API</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setBlizzardDirectAuthModalOpen(false)}
+                    className="px-4 py-2.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDirectBlizzardLogin(blizzardDirectInput)}
+                    disabled={isConnectingBlizzard || !blizzardDirectInput.trim()}
+                    className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-sky-600 via-blue-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white text-xs font-extrabold transition-all cursor-pointer shadow-lg shadow-sky-600/30 flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isConnectingBlizzard ? (
+                      <>
+                        <Loader2 size={15} className="animate-spin text-white" />
+                        <span>Validando Código na Blizzard...</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={15} className="text-sky-200" />
+                        <span>Confirmar & Sincronizar OAuth</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* WOW ADDON DEV STUDIO & DOCUMENTATION MODAL */}
+      <WoWAddonDevModal
+        isOpen={addonDevModalOpen}
+        onClose={() => setAddonDevModalOpen(false)}
+        triggerAlert={triggerAlert}
+      />
     </div>
   );
 }

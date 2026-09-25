@@ -4,7 +4,7 @@
  */
 
 // Official Blizzard and Wowhead Asset CDNs
-const WOW_ICON_BASE = "https://wow.zamimg.com/images/wow/icons/large";
+const WOW_ICON_BASE = "https://render.worldofwarcraft.com/us/icons/56";
 
 export interface WoWClassInfo {
   id: string;
@@ -193,12 +193,13 @@ export const WOW_CLASSES: Record<string, WoWClassInfo> = {
 
 // 3. OFFICIAL RACES (Official Zamimg icon mapping verified for 100% HTTP 200 uptime)
 export const WOW_RACES: Record<string, WoWRaceInfo> = {
+  // Horde Races
   orc: {
     id: "orc",
     name: "Orc",
     ptBR: "Orc",
     faction: "HORDE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_orc_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_orc_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   undead: {
@@ -206,7 +207,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Undead",
     ptBR: "Morto-vivo",
     faction: "HORDE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_undead_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_scourge_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   tauren: {
@@ -214,7 +215,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Tauren",
     ptBR: "Tauren",
     faction: "HORDE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_tauren_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_tauren_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   troll: {
@@ -222,7 +223,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Troll",
     ptBR: "Troll",
     faction: "HORDE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_troll_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_troll_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   bloodelf: {
@@ -238,15 +239,57 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Goblin",
     ptBR: "Goblin",
     faction: "HORDE",
-    iconUrl: `${WOW_ICON_BASE}/ability_racial_rocketjump.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_goblin_male.jpg`,
     availableIn: ["retail", "forever"],
   },
+  nightborne: {
+    id: "nightborne",
+    name: "Nightborne",
+    ptBR: "Filho da Noite",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_nightborne.jpg`,
+    availableIn: ["retail"],
+  },
+  highmountaintauren: {
+    id: "highmountaintauren",
+    name: "Highmountain Tauren",
+    ptBR: "Tauren Altamontês",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_highmountaintauren.jpg`,
+    availableIn: ["retail"],
+  },
+  magharorc: {
+    id: "magharorc",
+    name: "Mag'har Orc",
+    ptBR: "Orc Mag'har",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_magharorc.jpg`,
+    availableIn: ["retail"],
+  },
+  zandalaritroll: {
+    id: "zandalaritroll",
+    name: "Zandalari Troll",
+    ptBR: "Troll Zandalari",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_zandalaritroll.jpg`,
+    availableIn: ["retail"],
+  },
+  vulpera: {
+    id: "vulpera",
+    name: "Vulpera",
+    ptBR: "Vulpera",
+    faction: "HORDE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_vulpera.jpg`,
+    availableIn: ["retail"],
+  },
+
+  // Alliance Races
   human: {
     id: "human",
     name: "Human",
     ptBR: "Humano",
     faction: "ALLIANCE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_human_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_human_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   dwarf: {
@@ -254,7 +297,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Dwarf",
     ptBR: "Anão",
     faction: "ALLIANCE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_dwarf_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_dwarf_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   nightelf: {
@@ -270,7 +313,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Gnome",
     ptBR: "Gnomo",
     faction: "ALLIANCE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_gnome_male.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_gnome_male.jpg`,
     availableIn: ["retail", "classic", "forever", "tbc"],
   },
   draenei: {
@@ -278,7 +321,7 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Draenei",
     ptBR: "Draenei",
     faction: "ALLIANCE",
-    iconUrl: `${WOW_ICON_BASE}/achievement_character_draenei_female.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_draenei_female.jpg`,
     availableIn: ["retail", "tbc"],
   },
   worgen: {
@@ -286,9 +329,51 @@ export const WOW_RACES: Record<string, WoWRaceInfo> = {
     name: "Worgen",
     ptBR: "Worgen",
     faction: "ALLIANCE",
-    iconUrl: `${WOW_ICON_BASE}/ability_racial_darkflight.jpg`,
+    iconUrl: `${WOW_ICON_BASE}/race_worgen_male.jpg`,
     availableIn: ["retail"],
   },
+  voidelf: {
+    id: "voidelf",
+    name: "Void Elf",
+    ptBR: "Elfo Caótico",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_voidelf.jpg`,
+    availableIn: ["retail"],
+  },
+  lightforgeddraenei: {
+    id: "lightforgeddraenei",
+    name: "Lightforged Draenei",
+    ptBR: "Draenei Forjado a Luz",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_lightforgeddraenei.jpg`,
+    availableIn: ["retail"],
+  },
+  darkirondwarf: {
+    id: "darkirondwarf",
+    name: "Dark Iron Dwarf",
+    ptBR: "Anão Ferro Negro",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_darkirondwarf.jpg`,
+    availableIn: ["retail"],
+  },
+  kultiran: {
+    id: "kultiran",
+    name: "Kul Tiran",
+    ptBR: "Kultireno",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_kultiranhuman.jpg`,
+    availableIn: ["retail"],
+  },
+  mechagnome: {
+    id: "mechagnome",
+    name: "Mechagnome",
+    ptBR: "Mecagnomo",
+    faction: "ALLIANCE",
+    iconUrl: `${WOW_ICON_BASE}/achievement_alliedrace_mechagnome.jpg`,
+    availableIn: ["retail"],
+  },
+
+  // Neutral / Dual Races
   pandaren: {
     id: "pandaren",
     name: "Pandaren",
@@ -436,6 +521,74 @@ export function getWoWClassInfo(className?: string): WoWClassInfo {
   return WOW_CLASSES.warrior;
 }
 
+// HELPER: Accurately resolve faction from race name
+export function getWoWFactionForRace(raceName?: string): "HORDE" | "ALLIANCE" | "NEUTRAL" {
+  if (!raceName) return "HORDE";
+  const r = raceName.toLowerCase().replace(/[\s-_]/g, "");
+
+  // Explicit Horde Races
+  if (
+    r.includes("nightborne") ||
+    r.includes("filhodanoite") ||
+    r.includes("filhadanoite") ||
+    r.includes("highmountain") ||
+    r.includes("altamont") ||
+    r.includes("maghar") ||
+    r.includes("zandalari") ||
+    r.includes("vulpera") ||
+    r.includes("orc") ||
+    r.includes("tauren") ||
+    r.includes("troll") ||
+    r.includes("undead") ||
+    r.includes("morto") ||
+    r.includes("forsaken") ||
+    r.includes("renegado") ||
+    r.includes("scourge") ||
+    r.includes("bloodelf") ||
+    r.includes("sangrento") ||
+    r.includes("belf") ||
+    r.includes("goblin")
+  ) {
+    return "HORDE";
+  }
+
+  // Explicit Alliance Races
+  if (
+    r.includes("human") ||
+    r.includes("humano") ||
+    r.includes("humana") ||
+    r.includes("dwarf") ||
+    r.includes("anao") ||
+    r.includes("anão") ||
+    r.includes("voidelf") ||
+    r.includes("elfocaotico") ||
+    r.includes("lightforged") ||
+    r.includes("forjadoaluz") ||
+    r.includes("darkiron") ||
+    r.includes("ferronegro") ||
+    r.includes("kultiran") ||
+    r.includes("kultireno") ||
+    r.includes("mechagnome") ||
+    r.includes("mecagnomo") ||
+    r.includes("gnome") ||
+    r.includes("gnomo") ||
+    r.includes("draenei") ||
+    r.includes("worgen") ||
+    r.includes("nightelf") ||
+    r.includes("elfonoturno") ||
+    (r.includes("night") && !r.includes("borne"))
+  ) {
+    return "ALLIANCE";
+  }
+
+  // Neutral / Dual
+  if (r.includes("pandaren") || r.includes("dracthyr") || r.includes("earthen") || r.includes("terrano")) {
+    return "NEUTRAL";
+  }
+
+  return "ALLIANCE";
+}
+
 // HELPER: Normalize race name and return WoWRaceInfo
 export function getWoWRaceInfo(raceName?: string, gender?: string): WoWRaceInfo {
   if (!raceName) return WOW_RACES.human;
@@ -443,15 +596,27 @@ export function getWoWRaceInfo(raceName?: string, gender?: string): WoWRaceInfo 
   const isFemale = (gender || "").toLowerCase().includes("female") || (gender || "").toLowerCase().includes("feminino");
 
   let info: WoWRaceInfo = WOW_RACES.human;
-  if (raw.includes("orc")) info = { ...WOW_RACES.orc };
-  else if (raw.includes("undead") || raw.includes("forsaken") || raw.includes("morto") || raw.includes("renegado")) info = { ...WOW_RACES.undead };
+  // Specific Allied Races First
+  if (raw.includes("nightborne") || raw.includes("filhodanoite") || raw.includes("filhadanoite")) info = { ...WOW_RACES.nightborne };
+  else if (raw.includes("highmountain") || raw.includes("altamont")) info = { ...WOW_RACES.highmountaintauren };
+  else if (raw.includes("maghar")) info = { ...WOW_RACES.magharorc };
+  else if (raw.includes("zandalari")) info = { ...WOW_RACES.zandalaritroll };
+  else if (raw.includes("vulpera")) info = { ...WOW_RACES.vulpera };
+  else if (raw.includes("voidelf") || raw.includes("elfocaotico")) info = { ...WOW_RACES.voidelf };
+  else if (raw.includes("lightforged") || raw.includes("forjadoaluz")) info = { ...WOW_RACES.lightforgeddraenei };
+  else if (raw.includes("darkiron") || raw.includes("ferronegro")) info = { ...WOW_RACES.darkirondwarf };
+  else if (raw.includes("kultiran") || raw.includes("kultireno")) info = { ...WOW_RACES.kultiran };
+  else if (raw.includes("mechagnome") || raw.includes("mecagnomo")) info = { ...WOW_RACES.mechagnome };
+  // Core Races
+  else if (raw.includes("orc")) info = { ...WOW_RACES.orc };
+  else if (raw.includes("undead") || raw.includes("forsaken") || raw.includes("morto") || raw.includes("renegado") || raw.includes("scourge")) info = { ...WOW_RACES.undead };
   else if (raw.includes("tauren")) info = { ...WOW_RACES.tauren };
   else if (raw.includes("troll")) info = { ...WOW_RACES.troll };
   else if (raw.includes("bloodelf") || raw.includes("sangrento") || raw.includes("belf")) info = { ...WOW_RACES.bloodelf };
   else if (raw.includes("goblin")) info = { ...WOW_RACES.goblin };
   else if (raw.includes("human") || raw.includes("humano")) info = { ...WOW_RACES.human };
   else if (raw.includes("dwarf") || raw.includes("anao") || raw.includes("anão")) info = { ...WOW_RACES.dwarf };
-  else if (raw.includes("nightelf") || raw.includes("noturno") || raw.includes("nelf")) info = { ...WOW_RACES.nightelf };
+  else if (raw.includes("nightelf") || raw.includes("noturno") || raw.includes("nelf") || raw.includes("night")) info = { ...WOW_RACES.nightelf };
   else if (raw.includes("gnome") || raw.includes("gnomo")) info = { ...WOW_RACES.gnome };
   else if (raw.includes("draenei")) info = { ...WOW_RACES.draenei };
   else if (raw.includes("worgen")) info = { ...WOW_RACES.worgen };
@@ -508,20 +673,30 @@ export const WOW_CLASS_ICONS: Record<string, string> = {
 
 export const WOW_RACE_ICONS: Record<string, { male: string; female: string }> = {
   orc: { male: `${WOW_ICON_BASE}/race_orc_male.jpg`, female: `${WOW_ICON_BASE}/race_orc_female.jpg` },
-  undead: { male: `${WOW_ICON_BASE}/race_undead_male.jpg`, female: `${WOW_ICON_BASE}/race_undead_female.jpg` },
+  undead: { male: `${WOW_ICON_BASE}/race_scourge_male.jpg`, female: `${WOW_ICON_BASE}/race_scourge_female.jpg` },
   tauren: { male: `${WOW_ICON_BASE}/race_tauren_male.jpg`, female: `${WOW_ICON_BASE}/race_tauren_female.jpg` },
   troll: { male: `${WOW_ICON_BASE}/race_troll_male.jpg`, female: `${WOW_ICON_BASE}/race_troll_female.jpg` },
-  bloodelf: { male: `${WOW_ICON_BASE}/race_bloodelf_male.jpg`, female: `${WOW_ICON_BASE}/race_bloodelf_female.jpg` },
+  bloodelf: { male: `${WOW_ICON_BASE}/achievement_character_bloodelf_male.jpg`, female: `${WOW_ICON_BASE}/achievement_character_bloodelf_female.jpg` },
   goblin: { male: `${WOW_ICON_BASE}/race_goblin_male.jpg`, female: `${WOW_ICON_BASE}/race_goblin_female.jpg` },
+  nightborne: { male: `${WOW_ICON_BASE}/achievement_alliedrace_nightborne.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_nightborne.jpg` },
+  highmountaintauren: { male: `${WOW_ICON_BASE}/achievement_alliedrace_highmountaintauren.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_highmountaintauren.jpg` },
+  magharorc: { male: `${WOW_ICON_BASE}/achievement_alliedrace_magharorc.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_magharorc.jpg` },
+  zandalaritroll: { male: `${WOW_ICON_BASE}/achievement_alliedrace_zandalaritroll.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_zandalaritroll.jpg` },
+  vulpera: { male: `${WOW_ICON_BASE}/achievement_alliedrace_vulpera.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_vulpera.jpg` },
   human: { male: `${WOW_ICON_BASE}/race_human_male.jpg`, female: `${WOW_ICON_BASE}/race_human_female.jpg` },
   dwarf: { male: `${WOW_ICON_BASE}/race_dwarf_male.jpg`, female: `${WOW_ICON_BASE}/race_dwarf_female.jpg` },
-  nightelf: { male: `${WOW_ICON_BASE}/race_nightelf_male.jpg`, female: `${WOW_ICON_BASE}/race_nightelf_female.jpg` },
+  nightelf: { male: `${WOW_ICON_BASE}/achievement_character_nightelf_male.jpg`, female: `${WOW_ICON_BASE}/achievement_character_nightelf_female.jpg` },
   gnome: { male: `${WOW_ICON_BASE}/race_gnome_male.jpg`, female: `${WOW_ICON_BASE}/race_gnome_female.jpg` },
   draenei: { male: `${WOW_ICON_BASE}/race_draenei_male.jpg`, female: `${WOW_ICON_BASE}/race_draenei_female.jpg` },
   worgen: { male: `${WOW_ICON_BASE}/race_worgen_male.jpg`, female: `${WOW_ICON_BASE}/race_worgen_female.jpg` },
-  pandaren: { male: `${WOW_ICON_BASE}/race_pandaren_male.jpg`, female: `${WOW_ICON_BASE}/race_pandaren_female.jpg` },
-  dracthyr: { male: `${WOW_ICON_BASE}/race_dracthyr.jpg`, female: `${WOW_ICON_BASE}/race_dracthyr.jpg` },
-  earthen: { male: `${WOW_ICON_BASE}/race_earthen_male.jpg`, female: `${WOW_ICON_BASE}/race_earthen_female.jpg` },
+  voidelf: { male: `${WOW_ICON_BASE}/achievement_alliedrace_voidelf.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_voidelf.jpg` },
+  lightforgeddraenei: { male: `${WOW_ICON_BASE}/achievement_alliedrace_lightforgeddraenei.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_lightforgeddraenei.jpg` },
+  darkirondwarf: { male: `${WOW_ICON_BASE}/achievement_alliedrace_darkirondwarf.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_darkirondwarf.jpg` },
+  kultiran: { male: `${WOW_ICON_BASE}/achievement_alliedrace_kultiranhuman.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_kultiranhuman.jpg` },
+  mechagnome: { male: `${WOW_ICON_BASE}/achievement_alliedrace_mechagnome.jpg`, female: `${WOW_ICON_BASE}/achievement_alliedrace_mechagnome.jpg` },
+  pandaren: { male: `${WOW_ICON_BASE}/achievement_character_pandaren_female.jpg`, female: `${WOW_ICON_BASE}/achievement_character_pandaren_female.jpg` },
+  dracthyr: { male: `${WOW_ICON_BASE}/classicon_evoker.jpg`, female: `${WOW_ICON_BASE}/classicon_evoker.jpg` },
+  earthen: { male: `${WOW_ICON_BASE}/achievement_character_dwarf_male.jpg`, female: `${WOW_ICON_BASE}/achievement_character_dwarf_male.jpg` },
 };
 
 // HELPER: Direct URLs
@@ -698,7 +873,7 @@ export function getWoWGameModeInfo(gameId?: string): {
   };
 }
 
-// HELPER: Strict character filtering so characters never leak into other modes
+// HELPER: Accurate character filtering matching the WoW game mode
 export function filterCharactersByGameMode<T extends {
   name?: string;
   realm?: string;
@@ -717,61 +892,58 @@ export function filterCharactersByGameMode<T extends {
   characters: T[],
   gameId: string
 ): T[] {
+  if (!characters || characters.length === 0) return [];
   const modeInfo = getWoWGameModeInfo(gameId);
 
-  return characters.filter((char) => {
+  const filtered = characters.filter((char) => {
     const rawVersion = (char.wow_version || char.gameMode || "").toLowerCase();
+    const lvl = typeof char.level === "number" && char.level > 0 ? char.level : 1;
 
-    // 1. If character has an explicit gameMode/wow_version tag, match strictly
-    if (rawVersion) {
-      if (modeInfo.id === "wow-retail") return rawVersion === "retail" || rawVersion.includes("midnight");
-      if (modeInfo.id === "wow-classic") return rawVersion === "classic" || rawVersion.includes("era");
-      if (modeInfo.id === "wow-forever") return rawVersion === "forever";
-      if (modeInfo.id === "wow-tbc") return rawVersion === "tbc";
-      if (modeInfo.id === "wow-mop") return rawVersion === "mop";
-    }
-
-    const lvl = char.level || 1;
-
-    // 2. Retail Mode:
+    // 1. Retail Mode
     if (modeInfo.id === "wow-retail") {
+      if (rawVersion) {
+        return rawVersion === "retail" || rawVersion.includes("retail") || rawVersion.includes("midnight") || rawVersion.includes("tww");
+      }
       const classInfo = getWoWClassInfo(char.characterClass);
-      if (["evoker", "demonhunter"].includes(classInfo.id)) return true;
-      return lvl > 70 || !char.realm?.toLowerCase().includes("forever");
+      if (["evoker", "demonhunter", "monk"].includes(classInfo.id)) return true;
+      return lvl > 60 || !char.realm?.toLowerCase().includes("era");
     }
 
-    // 3. Classic Era Mode (Max level 60):
+    // 2. Classic Era Mode (Vanilla 60 / SoD / Hardcore)
     if (modeInfo.id === "wow-classic") {
-      if (lvl > 60) return false;
-      const classInfo = getWoWClassInfo(char.characterClass);
-      if (!classInfo.availableIn.includes("classic")) return false;
-      const raceInfo = getWoWRaceInfo(char.race);
-      if (!raceInfo.availableIn.includes("classic")) return false;
-      return true;
+      if (rawVersion) {
+        return rawVersion === "classic" || rawVersion === "forever" || rawVersion.includes("era") || rawVersion.includes("vanilla");
+      }
+      return lvl <= 60;
     }
 
-    // 4. Forever Mode (Vanilla+ Max level 60):
+    // 3. Forever Mode (Vanilla+ / Classic Era)
     if (modeInfo.id === "wow-forever") {
-      if (lvl > 60) return false;
-      const classInfo = getWoWClassInfo(char.characterClass);
-      if (!classInfo.availableIn.includes("forever")) return false;
-      return true;
+      if (rawVersion) {
+        return rawVersion === "forever" || rawVersion === "classic" || rawVersion.includes("forever") || rawVersion.includes("era");
+      }
+      return lvl <= 60;
     }
 
-    // 5. TBC Progression Mode (Max level 70):
-    if (modeInfo.id === "wow-tbc") {
-      if (lvl > 70) return false;
-      const classInfo = getWoWClassInfo(char.characterClass);
-      if (!classInfo.availableIn.includes("tbc")) return false;
-      return true;
-    }
-
-    // 6. MoP Classic Mode (Max level 90):
+    // 4. Progression Classic: MoP (Pandaria / Cataclysm)
     if (modeInfo.id === "wow-mop") {
-      if (lvl > 90) return false;
+      if (rawVersion) {
+        return rawVersion === "mop" || rawVersion === "tbc" || rawVersion.includes("mop") || rawVersion.includes("cata") || rawVersion.includes("progression");
+      }
       return true;
+    }
+
+    // 5. Progression Classic: TBC
+    if (modeInfo.id === "wow-tbc") {
+      if (rawVersion) {
+        return rawVersion === "tbc" || rawVersion === "mop" || rawVersion.includes("tbc") || rawVersion.includes("burning");
+      }
+      return lvl <= 70;
     }
 
     return true;
   });
+
+  // If the strict filter left 0 characters, fallback to returning all characters so user is never left without choices
+  return filtered.length > 0 ? filtered : characters;
 }

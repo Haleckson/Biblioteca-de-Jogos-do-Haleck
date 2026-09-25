@@ -16,7 +16,13 @@ import {
   BlizzardCollectionPet,
   BlizzardCollectionTitle,
 } from "../types";
-import { getWoWClassInfo, getWoWRaceInfo } from "./blizzardIcons";
+import { getWoWClassInfo, getWoWRaceInfo, getWoWFactionForRace } from "./blizzardIcons";
+import {
+  OFFICIAL_MOUNTS_CATALOG,
+  OFFICIAL_PETS_CATALOG,
+  OFFICIAL_TOYS_CATALOG,
+  OFFICIAL_TITLES_CATALOG,
+} from "./blizzardCollectionsCatalog";
 
 export interface GenerateProfileOptions {
   name: string;
@@ -43,17 +49,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
   const realmSlug = options.realmSlug || realm.toLowerCase().replace(/['\s]+/g, "-");
   const rawClass = (options.characterClass || "Druid").toLowerCase();
   const rawRace = (options.race || "Night Elf").toLowerCase();
-  const rawFaction = (
-    options.faction ||
-    (rawRace.includes("night") ||
-    rawRace.includes("human") ||
-    rawRace.includes("dwarf") ||
-    rawRace.includes("gnome") ||
-    rawRace.includes("draenei") ||
-    rawRace.includes("worgen")
-      ? "ALLIANCE"
-      : "HORDE")
-  ).toUpperCase();
+  const rawFaction = (options.faction || getWoWFactionForRace(options.race || rawRace)).toUpperCase();
   const level = Math.max(1, options.level !== undefined ? options.level : 18);
   const gender = (options.gender || "MALE").toUpperCase() as "MALE" | "FEMALE";
   const gameMode =
@@ -265,8 +261,27 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       ? "of the Shadowstalker"
       : "of the Champion";
 
+  const classGearDisplays: Record<string, number> = {
+    HEAD: 28414,
+    SHOULDER: 32369,
+    CHEST: normalizedClass === "Warrior" || normalizedClass === "Paladin" || normalizedClass === "DeathKnight" ? 30422 : 28417,
+    SHIRT: 11440,
+    TABARD: rawFaction === "ALLIANCE" ? 11440 : 11441,
+    WRIST: 28415,
+    HANDS: normalizedClass === "Paladin" ? 32367 : 30418,
+    WAIST: normalizedClass === "Mage" || normalizedClass === "Priest" || normalizedClass === "Warlock" ? 27515 : 30425,
+    LEGS: 30424,
+    FEET: 27540,
+    BACK: 27549,
+    MAIN_HAND: normalizedClass === "Hunter" ? 45233 : normalizedClass === "Paladin" ? 27531 : 45233,
+    OFF_HAND: normalizedClass === "Warrior" || normalizedClass === "Paladin" ? 27532 : normalizedClass === "Rogue" ? 45233 : 27532,
+    RANGED: 28772,
+  };
+
   gear.push({
     slot: "HEAD",
+    slotId: 1,
+    displayId: classGearDisplays.HEAD,
     name: isLowLevel ? `Headband ${classItemNamePrefix}` : isHighLevel ? `Crown ${classItemNamePrefix}` : `Helmet ${classItemNamePrefix}`,
     itemLevel: itemLevelBase,
     quality: isLowLevel ? "RARE" : qualityDefault,
@@ -276,22 +291,25 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: `${isLowLevel ? "60 / 60" : "100 / 100"}`,
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_helmet_09.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_helmet_09.jpg",
   });
 
   gear.push({
     slot: "NECK",
+    slotId: 2,
     name: isLowLevel ? `Elune's Amulet ${classItemNamePrefix}` : `Gemmed Pendant ${classItemNamePrefix}`,
     itemLevel: Math.max(1, itemLevelBase - 1),
     quality: isLowLevel ? "UNCOMMON" : qualityDefault,
     stats: [`+${statBonus(1.0)} ${primaryStat}`, `+${statBonus(1.1)} Stamina`],
     binding: "Binds when picked up",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_jewelry_necklace_07.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_jewelry_necklace_07.jpg",
   });
 
   gear.push({
     slot: "SHOULDER",
+    slotId: 3,
+    displayId: classGearDisplays.SHOULDER,
     name: isLowLevel ? `Mantle of Leaves ${classItemNamePrefix}` : `Pauldrons ${classItemNamePrefix}`,
     itemLevel: itemLevelBase,
     quality: qualityDefault,
@@ -301,11 +319,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: `${isLowLevel ? "55 / 55" : "90 / 90"}`,
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_shoulder_02.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_shoulder_02.jpg",
   });
 
   gear.push({
     slot: "BACK",
+    slotId: 16,
+    displayId: classGearDisplays.BACK,
     name: isLowLevel ? `Ashenvale Cloak ${classItemNamePrefix}` : `Drape of Twilight ${classItemNamePrefix}`,
     itemLevel: Math.max(1, itemLevelBase - 2),
     quality: "UNCOMMON",
@@ -315,11 +335,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when equipped",
     durability: "45 / 45",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_cape_16.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_cape_16.jpg",
   });
 
   gear.push({
     slot: "CHEST",
+    slotId: 5,
+    displayId: classGearDisplays.CHEST,
     name: isLowLevel ? `Reinforced Vest ${classItemNamePrefix}` : `Breastplate of Conquest ${classItemNamePrefix}`,
     itemLevel: itemLevelBase + 1,
     quality: isLowLevel ? "RARE" : qualityDefault,
@@ -330,16 +352,18 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: `${isLowLevel ? "85 / 85" : "140 / 140"}`,
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_chest_plate06.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_chest_plate06.jpg",
   });
 
   gear.push({
     slot: "SHIRT",
+    slotId: 4,
+    displayId: classGearDisplays.SHIRT,
     name: "White Linen Shirt",
     itemLevel: 1,
     quality: "COMMON",
     binding: "Binds when equipped",
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_shirt_white_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_shirt_white_01.jpg",
   });
 
   gear.push({
@@ -350,11 +374,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     slotId: 19,
     displayId: rawFaction === "ALLIANCE" ? 11440 : 11441,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_shirt_guildtabard_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_shirt_guildtabard_01.jpg",
   });
 
   gear.push({
     slot: "WRIST",
+    slotId: 9,
+    displayId: classGearDisplays.WRIST,
     name: isLowLevel ? `Pathfinder Wristguards ${classItemNamePrefix}` : `Bracers ${classItemNamePrefix}`,
     itemLevel: Math.max(1, itemLevelBase - 2),
     quality: "UNCOMMON",
@@ -364,11 +390,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: "40 / 40",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_bracer_07.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_bracer_07.jpg",
   });
 
   gear.push({
     slot: "HANDS",
+    slotId: 10,
+    displayId: classGearDisplays.HANDS,
     name: isLowLevel ? `Claw Gloves ${classItemNamePrefix}` : `Gauntlets ${classItemNamePrefix}`,
     itemLevel: itemLevelBase,
     quality: qualityDefault,
@@ -378,11 +406,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: "50 / 50",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_gauntlets_04.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_gauntlets_04.jpg",
   });
 
   gear.push({
     slot: "WAIST",
+    slotId: 6,
+    displayId: classGearDisplays.WAIST,
     name: isLowLevel ? `Root Belt ${classItemNamePrefix}` : `War Girdle ${classItemNamePrefix}`,
     itemLevel: itemLevelBase,
     quality: qualityDefault,
@@ -392,11 +422,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: "45 / 45",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_belt_12.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_belt_12.jpg",
   });
 
   gear.push({
     slot: "LEGS",
+    slotId: 7,
+    displayId: classGearDisplays.LEGS,
     name: isLowLevel ? `Wild Pants ${classItemNamePrefix}` : `Legplates ${classItemNamePrefix}`,
     itemLevel: itemLevelBase + 1,
     quality: isLowLevel ? "RARE" : qualityDefault,
@@ -406,11 +438,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: "75 / 75",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_pants_03.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_pants_03.jpg",
   });
 
   gear.push({
     slot: "FEET",
+    slotId: 8,
+    displayId: classGearDisplays.FEET,
     name: isLowLevel ? `Trail Boots ${classItemNamePrefix}` : `Sabatons ${classItemNamePrefix}`,
     itemLevel: itemLevelBase,
     quality: qualityDefault,
@@ -420,7 +454,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: "55 / 55",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_boots_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_boots_01.jpg",
   });
 
   gear.push({
@@ -431,7 +465,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     stats: [`+${statBonus(0.9)} ${primaryStat}`, `+${statBonus(1.0)} Stamina`],
     binding: "Binds when picked up",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_jewelry_ring_03.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_jewelry_ring_03.jpg",
   });
 
   gear.push({
@@ -442,7 +476,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     stats: [`+${statBonus(0.8)} ${primaryStat}`, `+${statBonus(0.9)} Stamina`],
     binding: "Binds when picked up",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_jewelry_ring_07.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_jewelry_ring_07.jpg",
   });
 
   gear.push({
@@ -454,7 +488,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     useEffect: isLowLevel ? "Use: Increases attack and casting speed by 10% for 15 sec." : "Equip: Your attacks have a chance to grant 850 Mastery for 12 sec.",
     binding: "Binds when picked up",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_jewelry_talisman_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_jewelry_talisman_01.jpg",
   });
 
   gear.push({
@@ -466,7 +500,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     equipEffect: "Equip: Increases resource regeneration by 5%.",
     binding: "Binds when picked up",
     requiredLevel: level,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_bloodstone_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_gem_bloodstone_01.jpg",
   });
 
   // Weapon
@@ -476,6 +510,8 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
 
   gear.push({
     slot: "MAIN_HAND",
+    slotId: 21,
+    displayId: classGearDisplays.MAIN_HAND,
     name: isLowLevel ? `Staff of Natural Harmony` : `Blade of Eternal Glory`,
     itemLevel: itemLevelBase + 2,
     quality: isLowLevel ? "RARE" : qualityDefault,
@@ -488,8 +524,37 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: `${isLowLevel ? "80 / 80" : "120 / 120"}`,
     requiredLevel: level,
-    iconUrl: normalizedClass === "Druid" ? "https://wow.zamimg.com/images/wow/icons/large/inv_staff_08.jpg" : "https://wow.zamimg.com/images/wow/icons/large/inv_sword_39.jpg",
+    iconUrl: normalizedClass === "Druid" ? "https://render.worldofwarcraft.com/us/icons/56/inv_staff_08.jpg" : "https://render.worldofwarcraft.com/us/icons/56/inv_sword_39.jpg",
   });
+
+  // Authentic gear attributes for specific characters such as Hedwing (Area 52 Priest)
+  if (name.toLowerCase() === "hedwing") {
+    const weaponIdx = gear.findIndex((g) => g.slot === "MAIN_HAND");
+    if (weaponIdx >= 0) {
+      gear[weaponIdx] = {
+        ...gear[weaponIdx],
+        name: "Staff of Interwoven Power",
+        id: 157632,
+        itemId: 157632,
+        displayId: 127184,
+        slotId: 21,
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_staff_2h_artifactstaffofelune_d_05.jpg",
+      };
+    }
+    const chestIdx = gear.findIndex((g) => g.slot === "CHEST");
+    if (chestIdx >= 0) {
+      gear[chestIdx] = {
+        ...gear[chestIdx],
+        name: "Curate's Robe",
+        id: 157710,
+        itemId: 157710,
+        displayId: 117298,
+        slotId: 20,
+        inventoryType: "ROBE",
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_chest_cloth_03.jpg",
+      };
+    }
+  }
 
   // Authentic Inventory Generation (Backpack + 4 Bags + Currencies + Gold/Silver/Copper)
   const backpackItems: (BlizzardInventoryItem | null)[] = [
@@ -497,7 +562,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 6948,
       name: "Hearthstone",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_rune_01.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_rune_01.jpg",
       stackCount: 1,
       bagIndex: 0,
       slotIndex: 0,
@@ -510,7 +575,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 118,
       name: "Minor Healing Potion",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_51.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_potion_51.jpg",
       stackCount: 5,
       maxStack: 20,
       bagIndex: 0,
@@ -523,7 +588,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 2455,
       name: "Minor Mana Potion",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_76.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_potion_76.jpg",
       stackCount: 4,
       maxStack: 20,
       bagIndex: 0,
@@ -536,7 +601,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 4540,
       name: "Tough Jerky",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_food_03.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_food_03.jpg",
       stackCount: 12,
       maxStack: 20,
       bagIndex: 0,
@@ -549,7 +614,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 159,
       name: "Refreshing Spring Water",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_drink_07.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_drink_07.jpg",
       stackCount: 8,
       maxStack: 20,
       bagIndex: 0,
@@ -562,7 +627,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 2592,
       name: "Wool Cloth",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_fabric_wool_01.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_fabric_wool_01.jpg",
       stackCount: 20,
       maxStack: 20,
       bagIndex: 0,
@@ -574,7 +639,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 7005,
       name: "Skinning Knife",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_weapon_shortblade_01.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_weapon_shortblade_01.jpg",
       stackCount: 1,
       bagIndex: 0,
       slotIndex: 6,
@@ -585,7 +650,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 2901,
       name: "Mining Pick",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_pick_02.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_pick_02.jpg",
       stackCount: 1,
       bagIndex: 0,
       slotIndex: 7,
@@ -607,7 +672,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 1708,
       name: "Sweet Nectar",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_drink_10.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_drink_10.jpg",
       stackCount: 15,
       maxStack: 20,
       bagIndex: 1,
@@ -619,7 +684,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 4541,
       name: "Haunch of Meat",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_food_14.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_food_14.jpg",
       stackCount: 10,
       maxStack: 20,
       bagIndex: 1,
@@ -630,7 +695,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 2770,
       name: "Copper Ore",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_ore_copper_01.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_ore_copper_01.jpg",
       stackCount: 18,
       maxStack: 20,
       bagIndex: 1,
@@ -641,7 +706,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 7971,
       name: "Black Pearl",
       quality: "UNCOMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_pearl_01.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_gem_pearl_01.jpg",
       stackCount: 2,
       maxStack: 20,
       bagIndex: 1,
@@ -666,7 +731,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 3827,
       name: "Mana Potion",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_76.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_potion_76.jpg",
       stackCount: 10,
       maxStack: 20,
       bagIndex: 2,
@@ -677,7 +742,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 3928,
       name: "Superior Healing Potion",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_53.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_potion_53.jpg",
       stackCount: 5,
       maxStack: 20,
       bagIndex: 2,
@@ -688,7 +753,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 8170,
       name: "Rugged Leather",
       quality: "COMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_leatherscrap_02.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_leatherscrap_02.jpg",
       stackCount: 20,
       maxStack: 20,
       bagIndex: 2,
@@ -715,7 +780,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 13468,
       name: "Black Lotus",
       quality: "RARE",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_herb_blacklotus.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_herb_blacklotus.jpg",
       stackCount: 3,
       maxStack: 20,
       bagIndex: 3,
@@ -727,7 +792,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 12808,
       name: "Essence of Undeath",
       quality: "UNCOMMON",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/spell_shadow_requiem.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/spell_shadow_requiem.jpg",
       stackCount: 4,
       maxStack: 20,
       bagIndex: 3,
@@ -755,7 +820,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       id: 19019,
       name: "Thunderfury, Blessed Blade of the Windseeker",
       quality: "LEGENDARY",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_sword_39.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_sword_39.jpg",
       stackCount: 1,
       bagIndex: 4,
       slotIndex: 0,
@@ -786,7 +851,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     {
       id: 10001,
       name: "Traveler's Backpack",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_08.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_bag_08.jpg",
       slotCount: 14,
       bagSlotIndex: 1,
       items: bag1Items,
@@ -794,7 +859,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     {
       id: 10002,
       name: "Mageweave Bag",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_10_blue.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_bag_10_blue.jpg",
       slotCount: 16,
       bagSlotIndex: 2,
       items: bag2Items,
@@ -802,7 +867,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     {
       id: 10003,
       name: "Mooncloth Bag",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_10_red.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_bag_10_red.jpg",
       slotCount: 16,
       bagSlotIndex: 3,
       items: bag3Items,
@@ -810,7 +875,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     {
       id: 10004,
       name: "Netherweave Bag",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_20.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_bag_20.jpg",
       slotCount: 18,
       bagSlotIndex: 4,
       items: bag4Items,
@@ -821,7 +886,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     backpack: {
       id: 0,
       name: "Backpack",
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_08.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_bag_08.jpg",
       slotCount: 16,
       bagSlotIndex: 0,
       items: backpackItems,
@@ -833,7 +898,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
         name: "Justice Points",
         count: 1450,
         max: 4000,
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/pvecurrency-justice.jpg",
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/pvecurrency-justice.jpg",
         category: "Dungeon & Raid",
       },
       {
@@ -842,8 +907,8 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
         count: 780,
         max: 1800,
         iconUrl: rawFaction === "ALLIANCE" 
-          ? "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-conquest-alliance.jpg"
-          : "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-conquest-horde.jpg",
+          ? "https://render.worldofwarcraft.com/us/icons/56/pvpcurrency-conquest-alliance.jpg"
+          : "https://render.worldofwarcraft.com/us/icons/56/pvpcurrency-conquest-horde.jpg",
         category: "Player vs. Player",
       },
       {
@@ -852,22 +917,22 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
         count: 3250,
         max: 4000,
         iconUrl: rawFaction === "ALLIANCE"
-          ? "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-alliance.jpg"
-          : "https://wow.zamimg.com/images/wow/icons/large/pvpcurrency-honor-horde.jpg",
+          ? "https://render.worldofwarcraft.com/us/icons/56/pvpcurrency-honor-alliance.jpg"
+          : "https://render.worldofwarcraft.com/us/icons/56/pvpcurrency-honor-horde.jpg",
         category: "Player vs. Player",
       },
       {
         id: 1166,
         name: "Timewarped Badge",
         count: 620,
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/timelesscoin.jpg",
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/timelesscoin.jpg",
         category: "Timewalking",
       },
       {
         id: 515,
         name: "Darkmoon Prize Ticket",
         count: 45,
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_ticket_darkmoon_01.jpg",
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_ticket_darkmoon_01.jpg",
         category: "Events",
       },
     ],
@@ -879,297 +944,13 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
   // Authentic Collections Generation (Mounts, Toys, Pets, Titles)
   // Differentiates Unlocked (Collected) vs Locked (Not Collected)
   const collections: BlizzardCharacterCollections = {
-    mounts: [
-      {
-        id: 54811,
-        name: "Invincible's Reins",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_pegasus.jpg",
-        creatureDisplayId: 31505,
-        mountType: "flying",
-        source: "Drop: The Lich King (Heroic 25-man Icecrown Citadel)",
-        description: "The beloved steed of Prince Arthas Menethil, resurrected in undeath.",
-        isCollected: true,
-        isFavorite: true,
-        speedBonus: "+310% Flight Speed",
-      },
-      {
-        id: 32458,
-        name: "Ashes of Al'ar",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_summerfest_braziergreen.jpg",
-        creatureDisplayId: 21108,
-        mountType: "flying",
-        source: "Drop: Kael'thas Sunstrider (The Eye - Tempest Keep)",
-        description: "Reborn from the holy fire of the Sun King.",
-        isCollected: true,
-        isFavorite: true,
-        speedBonus: "+310% Flight Speed",
-      },
-      {
-        id: 49284,
-        name: "Swift Spectral Tiger",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_spectraltiger.jpg",
-        creatureDisplayId: 21974,
-        mountType: "ground",
-        source: "TCG: Fires of Outland / World Event",
-        description: "A translucent feline stalker bound to the astral planes.",
-        isCollected: true,
-        isFavorite: true,
-        speedBonus: "+100% Ground Speed",
-      },
-      {
-        id: 45693,
-        name: "Mimiron's Head",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_enggizmos_03.jpg",
-        creatureDisplayId: 28887,
-        mountType: "flying",
-        source: "Drop: Yogg-Saron (Alone in the Darkness 25-man Ulduar)",
-        description: "The mechanical aerial marvel engineered by the Grand Architect.",
-        isCollected: false,
-        isFavorite: false,
-        speedBonus: "+310% Flight Speed",
-      },
-      {
-        id: 32768,
-        name: "Reins of the Raven Lord",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_cockatricemountelite_black.jpg",
-        creatureDisplayId: 23149,
-        mountType: "ground",
-        source: "Drop: Anzu (Heroic Sethekk Halls)",
-        description: "Tamed from the shadowy clutches of Terokk's inner sanctum.",
-        isCollected: true,
-        speedBonus: "+100% Ground Speed",
-      },
-      {
-        id: 44151,
-        name: "Time-Lost Proto-Drake",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_drake_proto.jpg",
-        creatureDisplayId: 26738,
-        mountType: "flying",
-        source: "Rare Spawn: Time-Lost Proto-Drake (The Storm Peaks)",
-        description: "A beast displaced from time itself, soaring through Northrend.",
-        isCollected: false,
-        speedBonus: "+280% Flight Speed",
-      },
-      {
-        id: 33809,
-        name: "Amani War Bear",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_polarbear_black.jpg",
-        creatureDisplayId: 23537,
-        mountType: "ground",
-        source: "Timed Quest Reward: Zul'Aman (Level 70 Classic)",
-        description: "A fierce battle bear adorned in the ceremonial armor of the forest trolls.",
-        isCollected: true,
-        speedBonus: "+100% Ground Speed",
-      },
-      {
-        id: 35513,
-        name: "Swift White Hawkstrider",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_cockatricemountelite_white.jpg",
-        creatureDisplayId: 25412,
-        mountType: "ground",
-        source: "Drop: Kael'thas Sunstrider (Magisters' Terrace)",
-        description: "The pristine personal mount bred in the Sunstrider grounds.",
-        isCollected: false,
-        speedBonus: "+100% Ground Speed",
-      },
-      {
-        id: 87771,
-        name: "Reins of the Onyx Cloud Serpent",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_pandarenserpentmount_blue.jpg",
-        creatureDisplayId: 44249,
-        mountType: "flying",
-        source: "Quest: Surprise Attack! (Shado-Pan Exalted - Pandaria)",
-        description: "Trained under the watchful discipline of the Shado-Pan masters.",
-        isCollected: true,
-        speedBonus: "+310% Flight Speed",
-      },
-      {
-        id: 196883,
-        name: "Highland Drake",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_drakemount_red.jpg",
-        creatureDisplayId: 104231,
-        mountType: "dragonriding",
-        source: "Dragon Isles: Ohn'ahran Plains",
-        description: "A stalwart companion adapted for dynamic Dragonriding aerial maneuvers.",
-        isCollected: false,
-        speedBonus: "+830% Dragonriding Speed",
-      },
-    ],
-    toys: [
-      {
-        id: 19970,
-        name: "Super Simian Sphere",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_monsterclaw_04.jpg",
-        source: "World Drop: Northrend",
-        description: "Encase yourself in a glowing purple bubble as an armored gorilla.",
-        cooldown: "1 hr cooldown",
-        isCollected: true,
-        isFavorite: true,
-      },
-      {
-        id: 35275,
-        name: "Orb of the Sin'dorei",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_bloodstone_02.jpg",
-        source: "Drop: Magisters' Terrace Bosses",
-        description: "Transforms the user into a Blood Elf for 5 min.",
-        cooldown: "30 min cooldown",
-        isCollected: true,
-        isFavorite: true,
-      },
-      {
-        id: 43499,
-        name: "Iron Boot Flask",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_14.jpg",
-        source: "Vendor: Olrun the Scribe (Storm Peaks)",
-        description: "Transforms you into an Iron Dwarf for 10 min.",
-        cooldown: "1 hr cooldown",
-        isCollected: true,
-      },
-      {
-        id: 65357,
-        name: "Rainbow Generator",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_opal_03.jpg",
-        source: "Quest: Open Their Eyes (Felwood)",
-        description: "Shoot a vibrant beam of pure rainbow light toward your target.",
-        cooldown: "10 min cooldown",
-        isCollected: false,
-      },
-      {
-        id: 119215,
-        name: "Hearthstone Game Board",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_rune_01.jpg",
-        source: "Promotion: Hearthstone",
-        description: "Place an interactive wooden tavern gaming board on the ground.",
-        cooldown: "15 min cooldown",
-        isCollected: false,
-      },
-    ],
-    pets: [
-      {
-        id: 844,
-        name: "Lil' Ragnaros",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_head_dragon_bronze.jpg",
-        family: "Elemental",
-        level: 25,
-        quality: "RARE",
-        source: "Blizzard Pet Store",
-        abilities: ["Magma Wave", "Conflagrate", "Sons of the Flame"],
-        isCollected: true,
-        isFavorite: true,
-        creatureDisplayId: 35122,
-      },
-      {
-        id: 722,
-        name: "Celestial Dragon",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/ability_mount_celestialhorse.jpg",
-        family: "Dragonkin",
-        level: 25,
-        quality: "RARE",
-        source: "Achievement: Menagerie Mogul",
-        abilities: ["Flamethrower", "Roar", "Ancient Blessing"],
-        isCollected: false,
-        isFavorite: true,
-        creatureDisplayId: 30880,
-      },
-      {
-        id: 1152,
-        name: "Anubisath Idol",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_idol_01.jpg",
-        family: "Humanoid",
-        level: 25,
-        quality: "RARE",
-        source: "Drop: Twin Emperors (Temple of Ahn'Qiraj)",
-        abilities: ["Crush", "Sandstorm", "Deflection"],
-        isCollected: true,
-        isFavorite: true,
-        creatureDisplayId: 21975,
-      },
-      {
-        id: 1153,
-        name: "Chrominius",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_head_dragon_black.jpg",
-        family: "Dragonkin",
-        level: 25,
-        quality: "RARE",
-        source: "Drop: Chromaggus (Blackwing Lair)",
-        abilities: ["Bite", "Howl", "Surge of Power"],
-        isCollected: false,
-        creatureDisplayId: 19445,
-      },
-      {
-        id: 345,
-        name: "Phoenix Hatchling",
-        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_egg_03.jpg",
-        family: "Flying",
-        level: 25,
-        quality: "RARE",
-        source: "Drop: Kael'thas Sunstrider (Magisters' Terrace)",
-        abilities: ["Peck", "Immolate", "Cauterize"],
-        isCollected: false,
-        creatureDisplayId: 23146,
-      },
-    ],
-    titles: [
-      {
-        id: 144,
-        name: "the Kingslayer",
-        titleFormat: "%s the Kingslayer",
-        source: "Achievement: The Frozen Throne (Defeat the Lich King)",
-        isCurrent: true,
-        isCollected: true,
-      },
-      {
-        id: 53,
-        name: "Champion of the Naaru",
-        titleFormat: "Champion of the Naaru %s",
-        source: "Legacy Quest: The Key to the Tempest Keep (Burning Crusade)",
-        isCollected: true,
-      },
-      {
-        id: 64,
-        name: "Hand of A'dal",
-        titleFormat: "Hand of A'dal %s",
-        source: "Legacy Quest: The Vials of Eternity (Black Temple Attunement)",
-        isCollected: true,
-      },
-      {
-        id: 140,
-        name: "the Undying",
-        titleFormat: "%s the Undying",
-        source: "Achievement: The Undying (Naxxramas without a single death)",
-        isCollected: false,
-      },
-      {
-        id: 141,
-        name: "the Lightbringer",
-        titleFormat: "%s the Lightbringer",
-        source: "Order Hall / Argent Crusade",
-        isCollected: false,
-      },
-      {
-        id: 168,
-        name: "Herald of the Titans",
-        titleFormat: "Herald of the Titans %s",
-        source: "Achievement: Defeat Algalon the Observer in era gear",
-        isCollected: false,
-      },
-      {
-        id: 133,
-        name: "Starcaller",
-        titleFormat: "Starcaller %s",
-        source: "Achievement: Defeat Algalon in 10-player Ulduar",
-        isCollected: false,
-      },
-      {
-        id: 169,
-        name: "Grand Crusader",
-        titleFormat: "Grand Crusader %s",
-        source: "Achievement: Trial of the Grand Crusader 50 attempts remaining",
-      },
-    ],
-    totalMountsCount: 382,
-    totalToysCount: 164,
-    totalPetsCount: 512,
+    mounts: OFFICIAL_MOUNTS_CATALOG,
+    toys: OFFICIAL_TOYS_CATALOG,
+    pets: OFFICIAL_PETS_CATALOG,
+    titles: OFFICIAL_TITLES_CATALOG,
+    totalMountsCount: OFFICIAL_MOUNTS_CATALOG.length,
+    totalToysCount: OFFICIAL_TOYS_CATALOG.length,
+    totalPetsCount: OFFICIAL_PETS_CATALOG.length,
   };
 
   // Talents tailored to Class in English
@@ -1232,7 +1013,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       description: "Reach level 10 through dedication and valor in battle.",
       points: 10,
       completedTimestamp: nowSec - 86400 * 12,
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_level_10.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_level_10.jpg",
     });
   }
 
@@ -1243,7 +1024,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       description: "Reach level 60 and triumph over the ancient trials of Azeroth.",
       points: 10,
       completedTimestamp: nowSec - 86400 * 45,
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_level_60.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_level_60.jpg",
     });
   }
 
@@ -1254,7 +1035,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       description: "Reach level 70 amid the shattered lands of Outland.",
       points: 10,
       completedTimestamp: nowSec - 86400 * 60,
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_level_70.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_level_70.jpg",
     });
   }
 
@@ -1265,7 +1046,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       description: "Reach level 90 across the mists of Pandaria.",
       points: 10,
       completedTimestamp: nowSec - 86400 * 80,
-      iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_level_90.jpg",
+      iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_level_90.jpg",
     });
   }
 
@@ -1275,7 +1056,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     description: "Complete the classic dungeons of Azeroth.",
     points: 15,
     completedTimestamp: nowSec - 86400 * 8,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_dungeon_classicdungeonmaster.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_dungeon_classicdungeonmaster.jpg",
   });
 
   achievements.push({
@@ -1284,7 +1065,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     description: "Explore all areas and outposts of your race's starting lands.",
     points: 10,
     completedTimestamp: nowSec - 86400 * 20,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_zone_kalimdor_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_zone_kalimdor_01.jpg",
   });
 
   achievements.push({
@@ -1293,7 +1074,7 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     description: "Complete 50 quests aiding the people of Azeroth.",
     points: 10,
     completedTimestamp: nowSec - 86400 * 3,
-    iconUrl: "https://wow.zamimg.com/images/wow/icons/large/achievement_quests_completed_01.jpg",
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/achievement_quests_completed_01.jpg",
   });
 
   const totalAchievePts =
@@ -1304,6 +1085,114 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
   const classInfo = getWoWClassInfo(normalizedClass);
   const finalAvatar = options.avatarUrl || options.characterSummary?.avatarUrl || raceInfo.iconUrl || classInfo.iconUrl;
   const finalRender = options.renderUrl || options.characterSummary?.renderUrl || "";
+
+  const isForeverOrClassic =
+    gameMode === "forever" ||
+    gameMode === "forever_beta" ||
+    gameMode === "classic" ||
+    gameMode === "wow-forever" ||
+    gameMode === "wow-classic";
+
+  // Build authentic bank data respecting version rules (Warband ONLY for Retail)
+  const bankData = isForeverOrClassic
+    ? {
+        mainBank: [
+          { id: 13512, name: "Flask of Supreme Power", itemLevel: 60, quality: "EPIC", stackCount: 5, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_41.jpg", location: "Main Bank", slotIndex: 1 },
+          { id: 13454, name: "Greater Fire Protection Potion", itemLevel: 55, quality: "COMMON", stackCount: 20, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_24.jpg", location: "Main Bank", slotIndex: 2 },
+          { id: 13452, name: "Elixir of the Mongoose", itemLevel: 56, quality: "COMMON", stackCount: 15, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_32.jpg", location: "Main Bank", slotIndex: 3 },
+          { id: 13444, name: "Major Mana Potion", itemLevel: 59, quality: "COMMON", stackCount: 20, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_potion_76.jpg", location: "Main Bank", slotIndex: 4 },
+          { id: 12360, name: "Arcane Crystal", itemLevel: 55, quality: "RARE", stackCount: 12, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_crystal_02.jpg", location: "Main Bank", slotIndex: 5 },
+          { id: 12359, name: "Thorium Bar", itemLevel: 50, quality: "COMMON", stackCount: 80, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_ingot_07.jpg", location: "Main Bank", slotIndex: 6 },
+          { id: 12803, name: "Righteous Orb", itemLevel: 58, quality: "UNCOMMON", stackCount: 4, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_pearl_03.jpg", location: "Main Bank", slotIndex: 7 },
+          { id: 14047, name: "Runecloth", itemLevel: 50, quality: "COMMON", stackCount: 100, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_fabric_purplefire_01.jpg", location: "Main Bank", slotIndex: 8 },
+          { id: 12662, name: "Demonic Rune", itemLevel: 55, quality: "UNCOMMON", stackCount: 8, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_rune_04.jpg", location: "Main Bank", slotIndex: 9 },
+        ],
+        reagentBank: [
+          { id: 13463, name: "Dreamfoil", itemLevel: 55, quality: "COMMON", stackCount: 40, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_herb_dreamfoil.jpg", location: "Reagent Bank", slotIndex: 1 },
+          { id: 13464, name: "Mountain Silversage", itemLevel: 56, quality: "COMMON", stackCount: 35, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_herb_mountainsilversage.jpg", location: "Reagent Bank", slotIndex: 2 },
+          { id: 13468, name: "Black Lotus", itemLevel: 60, quality: "RARE", stackCount: 3, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_herb_blacklotus.jpg", location: "Reagent Bank", slotIndex: 3 },
+          { id: 10620, name: "Thorium Ore", itemLevel: 50, quality: "COMMON", stackCount: 60, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_ore_thorium.jpg", location: "Reagent Bank", slotIndex: 4 },
+          { id: 8170, name: "Rugged Leather", itemLevel: 50, quality: "COMMON", stackCount: 80, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_leatherscraps_02.jpg", location: "Reagent Bank", slotIndex: 5 },
+        ],
+        warbandBank: undefined,
+        lastBankVisit: new Date(Date.now() - 3600000 * 2).toISOString(),
+      }
+    : {
+        mainBank: [
+          { id: 212265, name: "Flask of Tempered Aggression", itemLevel: 80, quality: "EPIC", stackCount: 5, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_10_alchemy_flask_bottle01_color6.jpg", location: "Main Bank", slotIndex: 1 },
+          { id: 211880, name: "Algari Healing Potion", itemLevel: 80, quality: "COMMON", stackCount: 20, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_10_alchemy_potion_bottle01_color1.jpg", location: "Main Bank", slotIndex: 2 },
+          { id: 211296, name: "Spark of Omens", itemLevel: 80, quality: "EPIC", stackCount: 2, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_sparkofcreation.jpg", location: "Main Bank", slotIndex: 3 },
+          { id: 211297, name: "Valorstones", itemLevel: 80, quality: "RARE", stackCount: 850, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_gem_crystal_01.jpg", location: "Main Bank", slotIndex: 4 },
+        ],
+        reagentBank: [
+          { id: 210796, name: "Bismuth", itemLevel: 80, quality: "COMMON", stackCount: 160, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_ore_bismuth.jpg", location: "Reagent Bank", slotIndex: 1 },
+          { id: 210797, name: "Null Lotus", itemLevel: 80, quality: "RARE", stackCount: 25, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_herb_lotus.jpg", location: "Reagent Bank", slotIndex: 2 },
+          { id: 210800, name: "Mycobloom", itemLevel: 80, quality: "COMMON", stackCount: 120, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_10_alchemy_mushroom_01.jpg", location: "Reagent Bank", slotIndex: 3 },
+        ],
+        warbandBank: [
+          { id: 219944, name: "Warbound Algari Plate Helm", itemLevel: 584, quality: "RARE", stackCount: 1, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_helm_plate_raidpaladin_t_01.jpg", location: "Warband Bank", tabIndex: 1, slotIndex: 1 },
+          { id: 219945, name: "Warbound Algari Mail Greaves", itemLevel: 580, quality: "RARE", stackCount: 1, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_pant_mail_raidhunter_t_01.jpg", location: "Warband Bank", tabIndex: 1, slotIndex: 2 },
+          { id: 210796, name: "Bismuth", itemLevel: 80, quality: "COMMON", stackCount: 200, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_ore_bismuth.jpg", location: "Warband Bank", tabIndex: 2, slotIndex: 1 },
+          { id: 210797, name: "Null Lotus", itemLevel: 80, quality: "RARE", stackCount: 40, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_herb_lotus.jpg", location: "Warband Bank", tabIndex: 2, slotIndex: 2 },
+        ],
+        lastBankVisit: new Date(Date.now() - 3600000 * 1).toISOString(),
+      };
+
+  // Build authentic account-wide economy data
+  const accountEconomyData = isForeverOrClassic
+    ? {
+        totalGold: 1850,
+        charactersGold: [
+          { characterName: name, realm, gold: 1240, faction: rawFaction, class: normalizedClass, level },
+          { characterName: rawFaction === "ALLIANCE" ? "Ironbeard" : "Bloodfang", realm, gold: 420, faction: rawFaction, class: "Warrior", level: 52 },
+          { characterName: rawFaction === "ALLIANCE" ? "Starweaver" : "Shadowstrike", realm, gold: 190, faction: rawFaction, class: "Mage", level: 38 },
+        ],
+        sessionDeltaGold: 45,
+      }
+    : {
+        totalGold: 425800,
+        charactersGold: [
+          { characterName: name, realm, gold: 284500, faction: rawFaction, class: normalizedClass, level },
+          { characterName: rawFaction === "ALLIANCE" ? "Valyria" : "Gorgar", realm, gold: 98300, faction: rawFaction, class: "Death Knight", level: 80 },
+          { characterName: rawFaction === "ALLIANCE" ? "Stormseeker" : "Kazrak", realm, gold: 43000, faction: rawFaction, class: "Hunter", level: 78 },
+        ],
+        sessionDeltaGold: 3200,
+      };
+
+  // Build Mythic+ and Great Vault (Retail exclusive)
+  const mythicPlusData = !isForeverOrClassic
+    ? {
+        rating: 2450,
+        currentKeystone: { name: "The Stonevault", level: 10, mapId: 501, iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_relics_hourglass.jpg" },
+        runHistory: [
+          { mapName: "The Stonevault", level: 10, completed: true, score: 310 },
+          { mapName: "City of Threads", level: 9, completed: true, score: 295 },
+          { mapName: "Grim Batol", level: 9, completed: true, score: 290 },
+          { mapName: "Ara-Kara, City of Echoes", level: 8, completed: true, score: 275 },
+          { mapName: "The Dawnbreaker", level: 8, completed: true, score: 270 },
+          { mapName: "Mists of Tirna Scithe", level: 8, completed: true, score: 265 },
+        ],
+        greatVault: [
+          { type: "raid", category: "Raid", progress: 4, threshold: 4, unlocked: true, rewardItemLevel: 610 },
+          { type: "raid", category: "Raid", progress: 6, threshold: 6, unlocked: true, rewardItemLevel: 610 },
+          { type: "dungeon", category: "Dungeon", progress: 4, threshold: 4, unlocked: true, rewardItemLevel: 623 },
+          { type: "dungeon", category: "Dungeon", progress: 8, threshold: 8, unlocked: true, rewardItemLevel: 619 },
+          { type: "world", category: "World/Delves", progress: 6, threshold: 6, unlocked: true, rewardItemLevel: 616 },
+        ],
+      }
+    : undefined;
+
+  // Build World Bosses (Classic & WoW Forever exclusive)
+  const worldBossesData = isForeverOrClassic
+    ? [
+        { name: "Lord Kazzak", zone: "Blasted Lands (Tainted Scar)", status: "Available" as const, respawnEstimate: "Janela aberta (2-4 dias)", lastKilled: new Date(Date.now() - 86400000 * 3.5).toISOString() },
+        { name: "Azuregos", zone: "Azshara", status: "Spawning Soon" as const, respawnEstimate: "~6 horas", lastKilled: new Date(Date.now() - 86400000 * 4.2).toISOString() },
+        { name: "Taerar (Dragão do Pesadelo)", zone: "Ashenvale (Bough Shadow)", status: "Defeated" as const, respawnEstimate: "1-2 dias", lastKilled: new Date(Date.now() - 86400000 * 1.5).toISOString() },
+        { name: "Ysondre (Dragão do Pesadelo)", zone: "Feralas (Dream Bough)", status: "Available" as const, respawnEstimate: "Janela ativa", lastKilled: new Date(Date.now() - 86400000 * 5).toISOString() },
+        { name: "Lethon (Dragão do Pesadelo)", zone: "Duskwood (Twilight Grove)", status: "Available" as const, respawnEstimate: "Janela ativa", lastKilled: new Date(Date.now() - 86400000 * 4).toISOString() },
+        { name: "Emeriss (Dragão do Pesadelo)", zone: "The Hinterlands (Seradane)", status: "Defeated" as const, respawnEstimate: "2-3 dias", lastKilled: new Date(Date.now() - 86400000 * 2).toISOString() },
+      ]
+    : undefined;
 
   return {
     battleTag: options.battleTag || "Player#1234",
@@ -1343,6 +1232,29 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     },
     equippedItems: gear,
     gear,
+    transmogs: gear.reduce((acc: Record<string, any>, item: any) => {
+      if (item.transmog) {
+        acc[item.slot.toUpperCase()] = {
+          slot: item.slot,
+          slotId: item.slotId,
+          itemId: item.transmog.itemId,
+          displayId: item.transmog.displayId || item.displayId,
+          name: item.transmog.name,
+          displayString: item.transmog.displayString,
+        };
+      }
+      return acc;
+    }, {}),
+    transmogSlots: gear
+      .filter((item: any) => Boolean(item.transmog))
+      .map((item: any) => ({
+        slot: item.slot,
+        slotId: item.slotId,
+        itemId: item.transmog.itemId,
+        displayId: item.transmog.displayId || item.displayId,
+        name: item.transmog.name,
+        displayString: item.transmog.displayString,
+      })),
     talents: talentsObj,
     reputations,
     achievements,
@@ -1355,6 +1267,10 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     })),
     inventory,
     collections,
+    bank: bankData,
+    accountEconomy: accountEconomyData,
+    mythicPlus: mythicPlusData,
+    worldBosses: worldBossesData,
     lastSyncedAt: new Date().toISOString(),
   };
 }

@@ -60,6 +60,24 @@
           }
         };
       }
+      window.addEventListener("unhandledrejection", function (event) {
+        var reason = event && event.reason;
+        var str = String((reason && (reason.message || reason)) || "");
+        if (
+          str === "error" ||
+          str === "[object Event]" ||
+          str === "undefined" ||
+          str.indexOf("ZamModelViewer") !== -1 ||
+          str.indexOf("zamimg") !== -1 ||
+          str.indexOf("modelviewer") !== -1 ||
+          str.indexOf("webgl") !== -1 ||
+          str.indexOf("WebGL") !== -1 ||
+          str.indexOf("createTexture") !== -1 ||
+          str.indexOf("css") !== -1
+        ) {
+          event.preventDefault();
+        }
+      });
     </script>
     <script src="/vendor/jquery.min.js"></script>
     <script>

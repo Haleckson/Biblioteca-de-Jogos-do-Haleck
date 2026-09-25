@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   Package,
   Search,
@@ -23,6 +23,7 @@ import {
 } from "../types";
 import { getWoWItemQuality } from "../utils/blizzardIcons";
 import { generateWoWCharacterProfile } from "../utils/blizzardCharacterData";
+import { resolveWowheadUrl, getWowheadItemUrl, WowheadBadgeLink } from "../utils/wowheadUrls";
 
 interface WoWInventoryViewProps {
   profile: BlizzardProfileData;
@@ -38,6 +39,14 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
     x: number;
     y: number;
   } | null>(null);
+
+  const itemLeaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (itemLeaveTimeoutRef.current) clearTimeout(itemLeaveTimeoutRef.current);
+    };
+  }, []);
 
   const inventory = useMemo(() => {
     if (profile.inventory && (profile.inventory.backpack || (profile.inventory.bags && profile.inventory.bags.length > 0))) {
@@ -127,6 +136,10 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
   }, [allContainers, sortBy]);
 
   const handleMouseEnter = (item: BlizzardInventoryItem, e: React.MouseEvent) => {
+    if (itemLeaveTimeoutRef.current) {
+      clearTimeout(itemLeaveTimeoutRef.current);
+      itemLeaveTimeoutRef.current = null;
+    }
     const rect = e.currentTarget.getBoundingClientRect();
     setHoveredItem({
       item,
@@ -136,7 +149,9 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
   };
 
   const handleMouseLeave = () => {
-    setHoveredItem(null);
+    itemLeaveTimeoutRef.current = setTimeout(() => {
+      setHoveredItem(null);
+    }, 300);
   };
 
   return (
@@ -462,10 +477,21 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
       {/* 4. Hover Item Tooltip (WoW-authentic floating box) */}
       {hoveredItem && (
         <div
-          className="fixed z-50 pointer-events-none p-3 rounded-xl bg-zinc-950/95 border-2 border-zinc-700 shadow-2xl text-xs max-w-xs space-y-1.5 backdrop-blur-md"
+          className="fixed z-50 pointer-events-auto p-3 rounded-xl bg-zinc-950/95 border-2 border-zinc-700 shadow-2xl text-xs max-w-xs space-y-1.5 backdrop-blur-md"
           style={{
             left: `${Math.min(hoveredItem.x, window.innerWidth - 320)}px`,
             top: `${Math.min(hoveredItem.y, window.innerHeight - 260)}px`,
+          }}
+          onMouseEnter={() => {
+            if (itemLeaveTimeoutRef.current) {
+              clearTimeout(itemLeaveTimeoutRef.current);
+              itemLeaveTimeoutRef.current = null;
+            }
+          }}
+          onMouseLeave={() => {
+            itemLeaveTimeoutRef.current = setTimeout(() => {
+              setHoveredItem(null);
+            }, 250);
           }}
         >
           <div className="flex items-center gap-2">
@@ -540,6 +566,16 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
               </span>
             </div>
           )}
+
+          {/* Wowhead Shortcut Link */}
+          <div className="pt-1.5 border-t border-zinc-800/80 flex items-center justify-between text-[10px] text-zinc-400">
+            <span className="font-mono text-[9px] text-zinc-500">ID #{hoveredItem.item.id}</span>
+            <WowheadBadgeLink
+              url={resolveWowheadUrl({ kind: "item", id: hoveredItem.item.id, version: profile.wow_version || profile.gameMode })}
+              label="Ver no Wowhead"
+              compact
+            />
+          </div>
         </div>
       )}
     </div>

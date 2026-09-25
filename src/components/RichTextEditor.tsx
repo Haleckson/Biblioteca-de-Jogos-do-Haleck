@@ -1224,7 +1224,7 @@ export default function RichTextEditor({
         onKeyUp={saveSelection}
         onPaste={handlePaste}
         className="w-full px-4 py-3 min-h-[140px] text-white text-sm outline-none focus:outline-none prose prose-invert max-w-none prose-sm overflow-y-auto transition-all"
-        placeholder={placeholder}
+        data-placeholder={placeholder}
         style={{
           WebkitUserModify: "read-write",
           lineHeight: LINE_SPACING_MAP[lineSpacing] || "1.5",

@@ -3,10 +3,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { Game, DiaryEntry, MediaItem, splitEntities, getDlcMode, formatDateDisplay, getGameTrophies, getGameTrophyItems, parseProConTopic, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Calendar, Clock, Star, Edit, FileText, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move, Layers, Maximize2, ThumbsUp, ThumbsDown, Download, Play, Infinity, CheckSquare, Square, HardDrive, GripVertical, Gamepad2, Trophy, Search, Unlink, Sparkles, PartyPopper, DollarSign, Tag, Info, MoreHorizontal, Calculator } from "lucide-react";
+import { X, Calendar, Clock, Star, Edit, FileText, Trash2, Plus, Film, Image as ImageIcon, ChevronDown, ChevronUp, Upload, Link2, BookOpen, RefreshCw, Loader2, Globe, ExternalLink, ZoomIn, ZoomOut, RotateCcw, ChevronLeft, ChevronRight, Mail, ArrowLeft, ArrowRight, Shield, Check, Move, Layers, Maximize2, ThumbsUp, ThumbsDown, Download, Play, Infinity as InfinityIcon, CheckSquare, Square, HardDrive, GripVertical, Gamepad2, Trophy, Search, Unlink, Sparkles, PartyPopper, DollarSign, Tag, Info, MoreHorizontal, Calculator, Lock, Users } from "lucide-react";
 import ImageZoomLightbox from "./ImageZoomLightbox";
 import { chipClass, renderStars, renderIcon, getPlatformBadgeStyle } from "./GameCard";
 import { uploadToImgBB, getAllCachedImgBBUrls } from "../utils/imgbb";
@@ -42,7 +42,9 @@ import {
   getStoredBlizzardRegion,
   getStoredBlizzardBattleTag,
   BLIZZARD_OFFICIAL_GAMES,
-  WoWVersionType
+  WoWVersionType,
+  getCharacterCompositeKey,
+  matchCharacterComposite,
 } from "../utils/blizzardApi";
 import WoWCharacterGrid from "./WoWCharacterGrid";
 import { WoWArmoryView } from "./WoWArmoryView";
@@ -56,6 +58,10 @@ import {
 } from "../utils/blizzardIcons";
 import { generateWoWCharacterProfile } from "../utils/blizzardCharacterData";
 import { BlizzardCharacterSummary, BlizzardProfileData, BlizzardEquipmentItem } from "../types";
+import { downloadWoWAddonZip, syncAddonDataToPersistentEndpoint } from "../utils/addonExportService";
+import { WoWAddonSyncModal } from "./WoWAddonSyncModal";
+import { AddonExportModal } from "./AddonExportModal";
+import { ParsedAddonResult } from "../utils/wowAddonParser";
 import { showToast } from "../utils/toast";
 import { moveToTrash } from "../utils/trashService";
 import { exportGameDiaryToMarkdown, exportGameDiaryToPrintPDF } from "../utils/exportService";
@@ -557,83 +563,7 @@ export default function GameDetailDrawer({
     return images;
   }, [sortedDiary, game]);
 
-  const handleNextImage = () => {
-    if (allImages.length <= 1 || !zoomedImage) return;
-    const currentIndex = allImages.indexOf(zoomedImage);
-    if (currentIndex === -1) return;
-    const nextIndex = (currentIndex + 1) % allImages.length;
-    setZoomScale(1);
-    setZoomedImage(allImages[nextIndex]);
-  };
-
-  const handlePrevImage = () => {
-    if (allImages.length <= 1 || !zoomedImage) return;
-    const currentIndex = allImages.indexOf(zoomedImage);
-    if (currentIndex === -1) return;
-    const prevIndex = (currentIndex - 1 + allImages.length) % allImages.length;
-    setZoomScale(1);
-    setZoomedImage(allImages[prevIndex]);
-  };
-
-  useEffect(() => {
-    if (!zoomedImage) {
-      setControlsVisible(true);
-      return;
-    }
-
-    let timeoutId: NodeJS.Timeout;
-
-    const resetTimer = () => {
-      setControlsVisible(true);
-      clearTimeout(timeoutId);
-      timeoutId = setTimeout(() => {
-        setControlsVisible(false);
-      }, 6000);
-    };
-
-    resetTimer();
-
-    const handleMouseMove = () => {
-      resetTimer();
-    };
-
-    const handleMouseDown = () => {
-      resetTimer();
-    };
-
-    const handleTouchStart = () => {
-      resetTimer();
-    };
-
-    window.addEventListener("mousemove", handleMouseMove);
-    window.addEventListener("mousedown", handleMouseDown);
-    window.addEventListener("touchstart", handleTouchStart);
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      resetTimer();
-      if (e.key === "Escape") {
-        setZoomedImage(null);
-      } else if (e.key === "ArrowRight") {
-        handleNextImage();
-      } else if (e.key === "ArrowLeft") {
-        handlePrevImage();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      clearTimeout(timeoutId);
-      window.removeEventListener("mousemove", handleMouseMove);
-      window.removeEventListener("mousedown", handleMouseDown);
-      window.removeEventListener("touchstart", handleTouchStart);
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [zoomedImage, allImages]);
-
   const handleOpenZoom = (src: string) => {
-    setZoomScale(1);
-    setControlsVisible(true);
     setZoomedImage(src);
   };
 
@@ -756,6 +686,8 @@ export default function GameDetailDrawer({
   const [selectedBlizzardCharTab, setSelectedBlizzardCharTab] = useState<"overview" | "gear" | "talents" | "achievements">("overview");
   const [blizzardArmorySearch, setBlizzardArmorySearch] = useState<string>("");
   const [isBlizzardSectionExpanded, setIsBlizzardSectionExpanded] = useState<boolean>(false);
+  const [isWoWAddonModalOpen, setIsWoWAddonModalOpen] = useState<boolean>(false);
+  const [wowAddonModalTab, setWowAddonModalTab] = useState<"export" | "import" | "agent" | "docs">("export");
 
   // Process and filter GOG Achievements
   const processedGogAchievements = useMemo(() => {
@@ -1362,9 +1294,47 @@ export default function GameDetailDrawer({
           const resolvedChars = matchingChars.length > 0 ? matchingChars : chars;
           setBlizzardChars(resolvedChars);
 
-          const targetCharObj = resolvedChars.find((c) => c.name.toLowerCase() === (game.blizzardCharacterName || "").toLowerCase()) || (resolvedChars.length > 0 ? resolvedChars[0] : null);
-          const targetChar = targetCharObj ? targetCharObj.name : (game.blizzardCharacterName || "");
-          const targetRealm = targetCharObj ? (targetCharObj.realmSlug || targetCharObj.realm) : (game.blizzardRealm || "");
+          const savedCharName = (
+            game.blizzardCharacterName ||
+            (game.blizzardSelectedCharacter ? game.blizzardSelectedCharacter.split("-")[0] : null) ||
+            (game.id ? localStorage.getItem(`halo_blizzard_selected_name_${game.id}`) : null) ||
+            (gId ? localStorage.getItem(`halo_blizzard_selected_name_${gId}`) : null) ||
+            localStorage.getItem("halo_blizzard_selected_name_global") ||
+            ""
+          ).trim();
+
+          const savedCharKey = (
+            game.blizzardSelectedCharacter ||
+            (game.id ? localStorage.getItem(`halo_blizzard_selected_char_${game.id}`) : null) ||
+            (gId ? localStorage.getItem(`halo_blizzard_selected_char_${gId}`) : null) ||
+            localStorage.getItem("halo_blizzard_selected_char_global") ||
+            ""
+          ).trim();
+
+          const savedCharRealm = (
+            game.blizzardRealm ||
+            (savedCharKey ? savedCharKey.split("-").slice(1).join("-") : null) ||
+            (game.id ? localStorage.getItem(`halo_blizzard_selected_realm_${game.id}`) : null) ||
+            (gId ? localStorage.getItem(`halo_blizzard_selected_realm_${gId}`) : null) ||
+            localStorage.getItem("halo_blizzard_selected_realm_global") ||
+            ""
+          ).trim();
+
+          // Prioritize finding the user's chosen character strictly by key first (to differentiate same-name characters on different realms or versions)
+          const targetCharObj = (savedCharKey
+            ? (chars.find((c) => matchCharacterComposite(c, savedCharKey)) ||
+               resolvedChars.find((c) => matchCharacterComposite(c, savedCharKey)))
+            : null) ||
+            (savedCharName
+              ? (chars.find((c) => matchCharacterComposite(c, savedCharName, savedCharRealm, targetWoWVersion)) ||
+                 resolvedChars.find((c) => matchCharacterComposite(c, savedCharName, savedCharRealm, targetWoWVersion)) ||
+                 chars.find((c) => c.name.toLowerCase() === savedCharName.toLowerCase()))
+              : null) ||
+            (!savedCharName && resolvedChars.length > 0 ? resolvedChars[0] : null);
+
+          // If the user already had a saved character, NEVER overwrite it with resolvedChars[0]!
+          const targetChar = targetCharObj ? targetCharObj.name : (savedCharName || game.blizzardCharacterName || "");
+          const targetRealm = targetCharObj ? (targetCharObj.realmSlug || targetCharObj.realm) : (game.blizzardRealm || (savedCharKey ? savedCharKey.split("-").slice(1).join("-") : ""));
           if (targetChar && targetRealm) {
             fetchBlizzardCharacterProfile(targetChar, targetRealm, {
               region,
@@ -1382,6 +1352,22 @@ export default function GameDetailDrawer({
               .then((prof) => {
                 if (prof) {
                   setBlizzardActiveProfile(prof);
+                  const isMatchingTarget = !savedCharName || prof.name.toLowerCase() === savedCharName.toLowerCase();
+                  if (isMatchingTarget && onUpdateGame && (game.blizzardCharacterName !== prof.name || !game.blizzardProfileData)) {
+                    const compKey = getCharacterCompositeKey({
+                      name: prof.name,
+                      realmSlug: prof.realmSlug || prof.realm,
+                      wow_version: prof.wow_version || targetCharObj?.wow_version || targetWoWVersion || "retail",
+                    });
+                    onUpdateGame({
+                      ...game,
+                      blizzardCharacterName: prof.name,
+                      blizzardRealm: prof.realmSlug || prof.realm,
+                      blizzardSelectedCharacter: compKey,
+                      blizzardProfileData: prof,
+                      wowVersion: prof.wow_version || targetCharObj?.wow_version || targetWoWVersion || "retail",
+                    });
+                  }
                 }
               })
               .catch(() => {});
@@ -1393,6 +1379,178 @@ export default function GameDetailDrawer({
         });
     }
   }, [isOpen, game?.id, game?.integrationPlatform, game?.blizzardGameId, game?.wowVersion, game?.blizzardCharacterName, isBlizzardSectionExpanded]);
+
+  const handleSelectBlizzardCharacter = useCallback(
+    async (c: BlizzardCharacterSummary) => {
+      if (!game) return;
+      try {
+        const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
+        const gId =
+          c.wow_version === "classic"
+            ? "wow-classic"
+            : c.wow_version === "forever"
+            ? "wow-forever"
+            : c.wow_version === "tbc"
+            ? "wow-tbc"
+            : c.wow_version === "mop"
+            ? "wow-mop"
+            : "wow-retail";
+
+        const charKey = getCharacterCompositeKey(c);
+
+        try {
+          if (game.id) {
+            localStorage.setItem(`halo_blizzard_selected_char_${game.id}`, charKey);
+            localStorage.setItem(`halo_blizzard_selected_name_${game.id}`, c.name);
+            localStorage.setItem(`halo_blizzard_selected_realm_${game.id}`, c.realmSlug || c.realm);
+          }
+          if (gId) {
+            localStorage.setItem(`halo_blizzard_selected_char_${gId}`, charKey);
+            localStorage.setItem(`halo_blizzard_selected_name_${gId}`, c.name);
+            localStorage.setItem(`halo_blizzard_selected_realm_${gId}`, c.realmSlug || c.realm);
+          }
+          localStorage.setItem("halo_blizzard_selected_char_global", charKey);
+          localStorage.setItem("halo_blizzard_selected_name_global", c.name);
+          localStorage.setItem("halo_blizzard_selected_realm_global", c.realmSlug || c.realm);
+        } catch {}
+
+        const optProfile = generateWoWCharacterProfile({
+          name: c.name,
+          realm: c.realm,
+          realmSlug: c.realmSlug || c.realm,
+          characterClass: c.characterClass,
+          race: c.race,
+          level: c.level,
+          gender: c.gender || "MALE",
+          faction: c.faction,
+          activeSpec: c.activeSpec || (c.characterClass?.toLowerCase().includes("druid") ? "Feral" : "Specialization"),
+          equippedItemLevel: c.equippedItemLevel,
+          gameMode: c.wow_version || c.gameMode || "retail",
+          characterSummary: c,
+        });
+        setBlizzardActiveProfile(optProfile);
+        if (onUpdateGame) {
+          onUpdateGame({
+            ...game,
+            blizzardCharacterName: c.name,
+            blizzardRealm: c.realmSlug || c.realm,
+            blizzardSelectedCharacter: charKey,
+            blizzardProfileData: optProfile,
+            wowVersion: c.wow_version || game.wowVersion || "retail",
+          });
+        }
+
+        const prof = await fetchBlizzardCharacterProfile(c.name, c.realmSlug || c.realm, {
+          region,
+          gameId: gId,
+          characterSummary: c,
+          characterClass: c.characterClass,
+          race: c.race,
+          level: c.level,
+          gender: c.gender,
+          faction: c.faction,
+          activeSpec: c.activeSpec,
+          equippedItemLevel: c.equippedItemLevel,
+          version: c.wow_version || c.gameMode,
+        });
+        if (prof) {
+          setBlizzardActiveProfile(prof);
+          if (onUpdateGame) {
+            onUpdateGame({
+              ...game,
+              blizzardCharacterName: prof.name,
+              blizzardRealm: prof.realmSlug || prof.realm,
+              blizzardSelectedCharacter: charKey,
+              blizzardProfileData: prof,
+              wowVersion: prof.wow_version || c.wow_version || game.wowVersion || "retail",
+            });
+          }
+        }
+      } catch (err: any) {
+        console.warn("Erro ao selecionar personagem da Blizzard:", err);
+      }
+    },
+    [game, onUpdateGame]
+  );
+
+  const handleApplyImportedAddonData = useCallback(
+    (res: ParsedAddonResult) => {
+      if (!game) return;
+      const prof = res.activeProfile;
+      const charKey = `${prof.name}-${prof.realmSlug || prof.realm}`.toLowerCase();
+
+      // Update active profile in state
+      setBlizzardActiveProfile(prof);
+
+      // Merge or update characters list
+      setBlizzardChars((prev) => {
+        const merged = [...prev];
+        for (const newChar of res.allCharacters) {
+          const idx = merged.findIndex(
+            (c) =>
+              c.name.toLowerCase() === newChar.name.toLowerCase() &&
+              (c.realmSlug || c.realm || "").toLowerCase() === (newChar.realmSlug || newChar.realm || "").toLowerCase()
+          );
+          if (idx >= 0) {
+            merged[idx] = newChar;
+          } else {
+            merged.unshift(newChar);
+          }
+        }
+        return merged;
+      });
+
+      // Set version filter to match imported game version
+      const newVersion = res.detectedVersion;
+      setBlizzardVersionFilter(newVersion);
+      setIsBlizzardSectionExpanded(true);
+
+      // Save to localStorage
+      try {
+        if (game.id) {
+          localStorage.setItem(`halo_blizzard_selected_char_${game.id}`, charKey);
+          localStorage.setItem(`halo_blizzard_selected_name_${game.id}`, prof.name || "");
+          localStorage.setItem(`halo_blizzard_selected_realm_${game.id}`, prof.realmSlug || prof.realm || "");
+        }
+        localStorage.setItem("halo_blizzard_selected_char_global", charKey);
+        localStorage.setItem("halo_blizzard_selected_name_global", prof.name || "");
+        localStorage.setItem("halo_blizzard_selected_realm_global", prof.realmSlug || prof.realm || "");
+      } catch {}
+
+      // Update game state and persist to Firebase / local
+      if (onUpdateGame) {
+        onUpdateGame({
+          ...game,
+          blizzardCharacterName: prof.name,
+          blizzardRealm: prof.realmSlug || prof.realm,
+          blizzardSelectedCharacter: charKey,
+          blizzardProfileData: prof,
+          wowVersion: newVersion as any,
+          blizzardGameId: res.isForever ? "wow-forever" : `wow-${newVersion}`,
+        });
+      }
+
+      // Sincronizar com endpoint persistente local/servidor
+      syncAddonDataToPersistentEndpoint({
+        characterName: prof.name || "",
+        realm: prof.realm || "",
+        ruleset: res.ruleset,
+        gameVersion: newVersion,
+        profileData: prof,
+      }).catch(() => {});
+
+      const realmOrRuleset = res.isForever
+        ? `Ruleset: ${res.ruleset || prof.realm}`
+        : `Reino: ${prof.realm}`;
+
+      triggerAlert(
+        "Dados do Addon Importados!",
+        `Personagem ${prof.name} (${realmOrRuleset}) atualizado com sucesso via Addon Haleck Account Importer!\nVersão detectada: ${res.detectedVersionLabel}.\nEquipamentos: ${prof.equippedItems?.length || 0} slots • Conquistas: ${prof.achievementPoints || 0} pts • Montarias: ${prof.collections?.totalMountsCount || 0}.`
+      );
+    },
+    [game, onUpdateGame, triggerAlert]
+  );
+
 
   useEffect(() => {
     if (game && game.metacriticUrl && isOpen) {
@@ -2463,7 +2621,7 @@ export default function GameDetailDrawer({
                         transition={{ type: "spring", stiffness: 300, damping: 25 }}
                         key={m.src || idx}
                         draggable={!isFormSelectionMode}
-                        onDragStart={(e) => handleMediaDragStart(e, idx)}
+                        onDragStart={(e) => handleMediaDragStart(e as any, idx)}
                         onDragOver={(e) => handleMediaDragOver(e, idx)}
                         onDragLeave={() => {
                           if (dragOverMediaIndex === idx) setDragOverMediaIndex(null);
@@ -3551,9 +3709,9 @@ export default function GameDetailDrawer({
                           <div className="flex items-center justify-between flex-wrap gap-2 font-mono text-xs">
                             <div className="flex items-center gap-1.5">
                               <span className="text-xs sm:text-sm font-black text-emerald-300">
-                                {game.pricePaid !== undefined && game.pricePaid !== null && game.pricePaid > 0
-                                  ? `R$ ${game.pricePaid.toFixed(2).replace(".", ",")}`
-                                  : game.pricePaid === 0
+                                {game.pricePaid !== undefined && game.pricePaid !== null && Number(game.pricePaid) > 0
+                                  ? `R$ ${Number(game.pricePaid).toFixed(2).replace(".", ",")}`
+                                  : Number(game.pricePaid) === 0 && game.pricePaid !== undefined && game.pricePaid !== null
                                   ? "Gratuito (R$ 0,00)"
                                   : "Não informado"}
                               </span>
@@ -3592,7 +3750,7 @@ export default function GameDetailDrawer({
                                 data-tooltip-title="Game as a Service ♾️"
                                 data-tooltip-theme="pink"
                               >
-                                <Infinity size={14} className="stroke-[2.5] text-pink-400 animate-pulse shrink-0" />
+                                <InfinityIcon size={14} className="stroke-[2.5] text-pink-400 animate-pulse shrink-0" />
                                 <span className="text-[10px] font-black uppercase tracking-wider font-mono">GaaS</span>
                               </div>
                             )}
@@ -4510,7 +4668,7 @@ export default function GameDetailDrawer({
                                                   </div>
 
                                                   <p className="text-[11px] text-zinc-400 leading-snug line-clamp-2">
-                                                    {ach.description || (ach.hidden === 1 ? "Conquista Oculta" : "Sem descrição.")}
+                                                    {ach.description || ((ach as any).hidden === 1 ? "Conquista Oculta" : "Sem descrição.")}
                                                   </p>
 
                                                   {isUnlocked && unlockDate && (
@@ -4567,10 +4725,45 @@ export default function GameDetailDrawer({
                             </div>
 
                             <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                              {blizzardActiveProfile && (
-                                <span className="text-xs font-mono font-bold text-cyan-200 bg-cyan-950/60 px-2.5 py-1 rounded-xl border border-cyan-500/30">
-                                  {blizzardActiveProfile.name} ({blizzardActiveProfile.realm})
-                                </span>
+                              {blizzardChars && blizzardChars.length > 0 ? (
+                                <div className="flex items-center gap-1.5" title="Trocar personagem ativo da Blizzard">
+                                  <Users size={13} className="text-cyan-400 hidden sm:inline" />
+                                  <select
+                                    value={
+                                      (blizzardActiveProfile
+                                        ? `${blizzardActiveProfile.name}-${blizzardActiveProfile.realmSlug || blizzardActiveProfile.realm}`
+                                        : game.blizzardCharacterName || ""
+                                      ).toLowerCase()
+                                    }
+                                    onChange={(e) => {
+                                      const val = e.target.value.toLowerCase();
+                                      const selected = blizzardChars.find((c) => {
+                                        const key = `${c.name}-${c.realmSlug || c.realm}`.toLowerCase();
+                                        const altKey = `${c.name}#${c.realmSlug || c.realm}`.toLowerCase();
+                                        return key === val || altKey === val || c.name.toLowerCase() === val;
+                                      });
+                                      if (selected) {
+                                        handleSelectBlizzardCharacter(selected);
+                                      }
+                                    }}
+                                    className="text-xs font-bold px-2.5 py-1.5 rounded-xl bg-cyan-950/90 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-200 transition-all cursor-pointer focus:outline-none focus:border-cyan-400 max-w-[200px] truncate"
+                                  >
+                                    {blizzardChars.map((c, i) => (
+                                      <option
+                                        key={`${c.name}-${c.realm}-${i}`}
+                                        value={`${c.name}-${c.realmSlug || c.realm}`.toLowerCase()}
+                                      >
+                                        {c.name} ({c.realm}) - Lv {c.level} {c.characterClass}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                              ) : (
+                                blizzardActiveProfile && (
+                                  <span className="text-xs font-mono font-bold text-cyan-200 bg-cyan-950/60 px-2.5 py-1 rounded-xl border border-cyan-500/30">
+                                    {blizzardActiveProfile.name} ({blizzardActiveProfile.realm})
+                                  </span>
+                                )
                               )}
 
                               {isAdmin && isBlizzardSectionExpanded && (
@@ -4633,6 +4826,51 @@ export default function GameDetailDrawer({
                                   <span>Atualizar</span>
                                 </button>
                               )}
+
+                              {/* Botão de Exportar Addon Universal (.zip) */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setWowAddonModalTab("export");
+                                  setIsWoWAddonModalOpen(true);
+                                }}
+                                className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-cyan-950/70 hover:bg-cyan-900 border border-cyan-500/50 hover:border-cyan-400 text-cyan-300 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm hover:shadow-cyan-500/20"
+                                title="Exportar Addon Haleck Account Importer (.zip): Escolha a versão (WoW Forever Beta 16001 com Rulesets, Retail, Classic), personagem e reino"
+                              >
+                                <Download size={13} className="text-cyan-400 shrink-0" />
+                                <span className="hidden sm:inline">Exportar Addon</span>
+                                <span className="text-[9px] font-mono px-1 py-0.5 rounded bg-cyan-900/80 text-cyan-200 border border-cyan-500/40">.zip</span>
+                              </button>
+
+                              {/* Botão de Importar Dados do Addon */}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setWowAddonModalTab("import");
+                                  setIsWoWAddonModalOpen(true);
+                                }}
+                                className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-400/80 text-cyan-200 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm shadow-cyan-500/20"
+                                title="Importar dados de personagens, armory, coleções e conquistas selecionando a versão do WoW"
+                              >
+                                <Upload size={13} className="text-cyan-400 shrink-0" />
+                                <span>Importar Addon</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setWowAddonModalTab("docs");
+                                  setIsWoWAddonModalOpen(true);
+                                }}
+                                className="px-2.5 sm:px-3 py-1.5 rounded-xl bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-700/80 hover:border-cyan-500/50 text-zinc-300 hover:text-white text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer shadow-sm"
+                                title="Consultar fontes oficiais, manuais Lua, APIs da Blizzard, Wago, CurseForge e guia de IA para Addons"
+                              >
+                                <BookOpen size={13} className="text-cyan-400 shrink-0" />
+                                <span className="hidden md:inline">Fontes & Guia</span>
+                              </button>
 
                               <button
                                 type="button"
@@ -4704,22 +4942,64 @@ export default function GameDetailDrawer({
                               const modeInfo = getWoWGameModeInfo(activeGameId);
                               const filteredChars = filterCharactersByGameMode(blizzardChars, activeGameId);
 
-                              const charName = blizzardActiveProfile?.name || blizzardActiveProfile?.selectedCharacter?.name || game.blizzardCharacterName || (filteredChars.length > 0 ? filteredChars[0].name : "Personagem de WoW");
-                              const charRealm = blizzardActiveProfile?.realm || blizzardActiveProfile?.selectedCharacter?.realm || game.blizzardRealm || (filteredChars.length > 0 ? filteredChars[0].realm : "Reino");
-                              const charLevel = blizzardActiveProfile?.level || blizzardActiveProfile?.selectedCharacter?.level || (filteredChars.length > 0 ? filteredChars[0].level : modeInfo.maxLevel);
-                              const charRace = blizzardActiveProfile?.race || blizzardActiveProfile?.selectedCharacter?.race || (filteredChars.length > 0 ? filteredChars[0].race : "Orc");
-                              const charClass = blizzardActiveProfile?.characterClass || blizzardActiveProfile?.selectedCharacter?.characterClass || (filteredChars.length > 0 ? filteredChars[0].characterClass : "Guerreiro");
-                              const charFaction = blizzardActiveProfile?.faction || blizzardActiveProfile?.selectedCharacter?.faction || (filteredChars.length > 0 ? filteredChars[0].faction : "HORDE");
-                              const charSpec = blizzardActiveProfile?.activeSpec || blizzardActiveProfile?.selectedCharacter?.activeSpec || "Especialização Primária";
-                              const charIlvl = blizzardActiveProfile?.equippedItemLevel || blizzardActiveProfile?.selectedCharacter?.equippedItemLevel || (modeInfo.maxLevel <= 60 ? 85 : modeInfo.maxLevel <= 70 ? 141 : 625);
+                              const savedCharName = (
+                                game.blizzardCharacterName ||
+                                (game.blizzardSelectedCharacter ? game.blizzardSelectedCharacter.split("-")[0] : null) ||
+                                (game.id ? localStorage.getItem(`halo_blizzard_selected_name_${game.id}`) : null) ||
+                                (activeGameId ? localStorage.getItem(`halo_blizzard_selected_name_${activeGameId}`) : null) ||
+                                localStorage.getItem("halo_blizzard_selected_name_global") ||
+                                blizzardActiveProfile?.name ||
+                                blizzardActiveProfile?.selectedCharacter?.name ||
+                                (filteredChars.length > 0 ? filteredChars[0].name : "Personagem de WoW")
+                              ).trim();
+
+                              const savedCharKey = (
+                                game.blizzardSelectedCharacter ||
+                                (game.id ? localStorage.getItem(`halo_blizzard_selected_char_${game.id}`) : null) ||
+                                (activeGameId ? localStorage.getItem(`halo_blizzard_selected_char_${activeGameId}`) : null) ||
+                                localStorage.getItem("halo_blizzard_selected_char_global") ||
+                                ""
+                              ).trim();
+
+                              const matchedChar =
+                                (savedCharKey
+                                  ? (
+                                      blizzardChars.find((c) => {
+                                        const cKey = `${c.name}-${c.realmSlug || c.realm}`.toLowerCase();
+                                        const cKeyAlt = `${c.name}#${c.realmSlug || c.realm}`.toLowerCase();
+                                        return cKey === savedCharKey.toLowerCase() || cKeyAlt === savedCharKey.toLowerCase();
+                                      }) ||
+                                      filteredChars.find((c) => {
+                                        const cKey = `${c.name}-${c.realmSlug || c.realm}`.toLowerCase();
+                                        const cKeyAlt = `${c.name}#${c.realmSlug || c.realm}`.toLowerCase();
+                                        return cKey === savedCharKey.toLowerCase() || cKeyAlt === savedCharKey.toLowerCase();
+                                      })
+                                    )
+                                  : null) ||
+                                (savedCharName
+                                  ? (
+                                      blizzardChars.find((c) => c.name.toLowerCase() === savedCharName.toLowerCase()) ||
+                                      filteredChars.find((c) => c.name.toLowerCase() === savedCharName.toLowerCase())
+                                    )
+                                  : null) ||
+                                (filteredChars.length > 0 ? filteredChars[0] : null);
+
+                              const charName = matchedChar ? matchedChar.name : savedCharName;
+                              const charRealm = matchedChar ? (matchedChar.realmSlug || matchedChar.realm) : (game.blizzardRealm || (savedCharKey ? savedCharKey.split("-").slice(1).join("-") : (blizzardActiveProfile?.realm || "Realm")));
+                              const charLevel = matchedChar ? matchedChar.level : (blizzardActiveProfile?.level || modeInfo.maxLevel);
+                              const charRace = matchedChar ? matchedChar.race : (blizzardActiveProfile?.race || "Orc");
+                              const charClass = matchedChar ? matchedChar.characterClass : (blizzardActiveProfile?.characterClass || "Warrior");
+                              const charFaction = matchedChar ? matchedChar.faction : (blizzardActiveProfile?.faction || "HORDE");
+                              const charSpec = matchedChar?.activeSpec || blizzardActiveProfile?.activeSpec || "Arms";
+                              const charIlvl = matchedChar?.equippedItemLevel || blizzardActiveProfile?.equippedItemLevel || (modeInfo.maxLevel <= 60 ? 85 : modeInfo.maxLevel <= 70 ? 141 : 625);
                               const charAvgIlvl = blizzardActiveProfile?.averageItemLevel || blizzardActiveProfile?.selectedCharacter?.averageItemLevel;
                               const charAchievePoints = blizzardActiveProfile?.achievementPoints ?? blizzardActiveProfile?.achievementPointsTotal ?? blizzardActiveProfile?.selectedCharacter?.achievementPoints ?? (modeInfo.maxLevel <= 60 ? 2800 : 21450);
-                              const charGuild = blizzardActiveProfile?.guild || "Sem Guilda";
+                              const charGuild = blizzardActiveProfile?.guild || "No Guild";
                               const charItems = blizzardActiveProfile?.equippedItems || blizzardActiveProfile?.gear || [];
                               const charAchievements = blizzardActiveProfile?.recentAchievements || (blizzardActiveProfile?.achievements ? blizzardActiveProfile.achievements.map((a) => ({ id: a.id, name: a.title, points: a.points || 0, description: a.description || "" })) : []);
                               const charTalents = Array.isArray(blizzardActiveProfile?.talents)
                                 ? blizzardActiveProfile.talents
-                                : (blizzardActiveProfile?.talents?.talentsList ? blizzardActiveProfile.talents.talentsList.map((t: string, i: number) => ({ tierName: `Talento ${i + 1}`, spellName: t })) : []);
+                                : (blizzardActiveProfile?.talents?.talentsList ? blizzardActiveProfile.talents.talentsList.map((t: string, i: number) => ({ tierName: `Tier ${i + 1}`, spellName: t })) : []);
 
                               const classInfo = getWoWClassInfo(charClass);
                               const raceInfo = getWoWRaceInfo(charRace, blizzardActiveProfile?.gender || (filteredChars.length > 0 ? filteredChars[0].gender : "MALE"));
@@ -4755,75 +5035,11 @@ export default function GameDetailDrawer({
                                     gameVersion={blizzardVersionFilter}
                                     characters={filteredChars.length > 0 ? filteredChars : blizzardChars}
                                     activeCharacterName={charName}
+                                    activeCharacterRealm={charRealm}
+                                    activeCharacterKey={savedCharKey || (matchedChar ? `${matchedChar.name}-${matchedChar.realmSlug || matchedChar.realm}` : undefined)}
                                     filterVersion={blizzardVersionFilter}
                                     onFilterVersionChange={setBlizzardVersionFilter}
-                                    onSelectCharacter={async (c) => {
-                                      try {
-                                        const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
-                                        const gId =
-                                          c.wow_version === "classic"
-                                            ? "wow-classic"
-                                            : c.wow_version === "forever"
-                                            ? "wow-forever"
-                                            : c.wow_version === "tbc"
-                                            ? "wow-tbc"
-                                            : c.wow_version === "mop"
-                                            ? "wow-mop"
-                                            : "wow-retail";
-
-                                        // Atualização imediata e autêntica para o personagem selecionado
-                                        const optProfile = generateWoWCharacterProfile({
-                                          name: c.name,
-                                          realm: c.realm,
-                                          realmSlug: c.realmSlug || c.realm,
-                                          characterClass: c.characterClass,
-                                          race: c.race,
-                                          level: c.level,
-                                          gender: c.gender || "MALE",
-                                          faction: c.faction,
-                                          activeSpec: c.activeSpec || (c.characterClass.toLowerCase().includes("druid") ? "Feral" : "Especialização"),
-                                          equippedItemLevel: c.equippedItemLevel,
-                                          gameMode: c.wow_version || c.gameMode || "retail",
-                                          characterSummary: c,
-                                        });
-                                        setBlizzardActiveProfile(optProfile);
-                                        if (onUpdateGame) {
-                                          onUpdateGame({
-                                            ...game,
-                                            blizzardCharacterName: c.name,
-                                            blizzardRealm: c.realm,
-                                            blizzardProfileData: optProfile,
-                                          });
-                                        }
-
-                                        const prof = await fetchBlizzardCharacterProfile(c.name, c.realmSlug || c.realm, {
-                                          region,
-                                          gameId: gId,
-                                          characterSummary: c,
-                                          characterClass: c.characterClass,
-                                          race: c.race,
-                                          level: c.level,
-                                          gender: c.gender,
-                                          faction: c.faction,
-                                          activeSpec: c.activeSpec,
-                                          equippedItemLevel: c.equippedItemLevel,
-                                          version: c.wow_version || c.gameMode,
-                                        });
-                                        if (prof) {
-                                          setBlizzardActiveProfile(prof);
-                                          if (onUpdateGame) {
-                                            onUpdateGame({
-                                              ...game,
-                                              blizzardCharacterName: prof.name,
-                                              blizzardRealm: prof.realm,
-                                              blizzardProfileData: prof,
-                                            });
-                                          }
-                                        }
-                                      } catch (err: any) {
-                                        console.warn("Erro ao inspecionar personagem selecionado:", err);
-                                      }
-                                    }}
+                                    onSelectCharacter={handleSelectBlizzardCharacter}
                                     onRefresh={async () => {
                                       try {
                                         const region = (game.blizzardRegion as any) || getStoredBlizzardRegion();
@@ -5000,6 +5216,13 @@ export default function GameDetailDrawer({
                             }
 
                             // 6. DEFAULT OFFICIAL BLIZZARD GAME HUB OR GENERIC BATTLENET
+                            const activeSavedCharKey = (
+                              game.blizzardSelectedCharacter ||
+                              (game.id ? localStorage.getItem(`halo_blizzard_selected_char_${game.id}`) : null) ||
+                              localStorage.getItem("halo_blizzard_selected_char_global") ||
+                              ""
+                            ).trim();
+
                             return (
                               <div className="space-y-4">
                                 {blizzardChars.length > 0 && (
@@ -5007,6 +5230,8 @@ export default function GameDetailDrawer({
                                     <WoWCharacterGrid
                                       characters={blizzardChars}
                                       activeCharacterName={blizzardActiveProfile?.name || game.blizzardCharacterName}
+                                      activeCharacterRealm={blizzardActiveProfile?.realmSlug || blizzardActiveProfile?.realm || game.blizzardRealm}
+                                      activeCharacterKey={activeSavedCharKey || (blizzardActiveProfile ? `${blizzardActiveProfile.name}-${blizzardActiveProfile.realmSlug || blizzardActiveProfile.realm}` : undefined)}
                                       isLoading={isLoadingBlizzardChars}
                                       filterVersion={blizzardVersionFilter}
                                       onFilterVersionChange={setBlizzardVersionFilter}
@@ -5020,7 +5245,27 @@ export default function GameDetailDrawer({
                                               ? "wow-forever"
                                               : c.wow_version === "tbc"
                                               ? "wow-tbc"
+                                              : c.wow_version === "mop"
+                                              ? "wow-mop"
                                               : "wow-retail";
+
+                                          const charKey = getCharacterCompositeKey(c);
+
+                                          try {
+                                            if (game.id) {
+                                              localStorage.setItem(`halo_blizzard_selected_char_${game.id}`, charKey);
+                                              localStorage.setItem(`halo_blizzard_selected_name_${game.id}`, c.name);
+                                              localStorage.setItem(`halo_blizzard_selected_realm_${game.id}`, c.realmSlug || c.realm);
+                                            }
+                                            if (gId) {
+                                              localStorage.setItem(`halo_blizzard_selected_char_${gId}`, charKey);
+                                              localStorage.setItem(`halo_blizzard_selected_name_${gId}`, c.name);
+                                              localStorage.setItem(`halo_blizzard_selected_realm_${gId}`, c.realmSlug || c.realm);
+                                            }
+                                            localStorage.setItem("halo_blizzard_selected_char_global", charKey);
+                                            localStorage.setItem("halo_blizzard_selected_name_global", c.name);
+                                            localStorage.setItem("halo_blizzard_selected_realm_global", c.realmSlug || c.realm);
+                                          } catch {}
 
                                           const optProfile: BlizzardProfileData = {
                                             name: c.name,
@@ -5033,7 +5278,7 @@ export default function GameDetailDrawer({
                                             faction: c.faction,
                                             equippedItemLevel: c.equippedItemLevel || 0,
                                             averageItemLevel: c.averageItemLevel || c.equippedItemLevel || 0,
-                                            activeSpec: c.activeSpec || "Especialização",
+                                            activeSpec: c.activeSpec || "Specialization",
                                             achievementPoints: c.achievementPoints || 0,
                                             achievementPointsTotal: c.achievementPoints || 0,
                                             gameMode: c.wow_version || c.gameMode || "retail",
@@ -5041,6 +5286,16 @@ export default function GameDetailDrawer({
                                             selectedCharacter: c,
                                           };
                                           setBlizzardActiveProfile(optProfile);
+                                          if (onUpdateGame) {
+                                            onUpdateGame({
+                                              ...game,
+                                              blizzardCharacterName: c.name,
+                                              blizzardRealm: c.realmSlug || c.realm,
+                                              blizzardSelectedCharacter: charKey,
+                                              blizzardProfileData: optProfile,
+                                              wowVersion: c.wow_version || game.wowVersion || "retail",
+                                            });
+                                          }
 
                                           const prof = await fetchBlizzardCharacterProfile(c.name, c.realmSlug || c.realm, {
                                             region,
@@ -5061,8 +5316,10 @@ export default function GameDetailDrawer({
                                               onUpdateGame({
                                                 ...game,
                                                 blizzardCharacterName: prof.name,
-                                                blizzardRealm: prof.realm,
+                                                blizzardRealm: prof.realmSlug || prof.realm,
+                                                blizzardSelectedCharacter: charKey,
                                                 blizzardProfileData: prof,
+                                                wowVersion: prof.wow_version || c.wow_version || game.wowVersion || "retail",
                                               });
                                             }
                                           }
@@ -5207,12 +5464,12 @@ export default function GameDetailDrawer({
                               </div>
                             </div>
                           )}
-                          {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null && (
+                          {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null && !isNaN(Number(game.metacriticUserScore)) && (
                             <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-900/80 border border-cyan-500/30 shadow-sm">
                               <span className="text-xs uppercase tracking-wider text-cyan-400 font-bold font-sans">Usuários:</span>
                               <div className="flex items-center gap-1.5">
-                                <span className="font-extrabold text-cyan-300 font-mono text-sm sm:text-base">({game.metacriticUserScore.toFixed(1)})</span>
-                                {renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-drawer-user`, "w-4 h-4", "", game.metacriticUserScore >= 9.5)}
+                                <span className="font-extrabold text-cyan-300 font-mono text-sm sm:text-base">({Number(game.metacriticUserScore).toFixed(1)})</span>
+                                {renderStars(Math.round((Number(game.metacriticUserScore) / 2) * 2) / 2, `${game.id}-drawer-user`, "w-4 h-4", "", Number(game.metacriticUserScore) >= 9.5)}
                               </div>
                             </div>
                           )}
@@ -5861,6 +6118,19 @@ export default function GameDetailDrawer({
               setDiaryText(res.updatedHtml);
             }
           }}
+        />
+      )}
+
+      {/* WoW Addon Universal Exporter & Importer Modal */}
+      {game && (
+        <AddonExportModal
+          isOpen={isWoWAddonModalOpen}
+          onClose={() => setIsWoWAddonModalOpen(false)}
+          currentGame={game}
+          initialTab={wowAddonModalTab}
+          onApplyImportedData={handleApplyImportedAddonData}
+          activeCharacterName={blizzardActiveProfile?.name || game.blizzardCharacterName}
+          activeRealm={blizzardActiveProfile?.realm || game.blizzardRealm}
         />
       )}
     </>

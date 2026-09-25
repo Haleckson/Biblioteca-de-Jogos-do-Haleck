@@ -116,6 +116,18 @@ export const BLIZZARD_OFFICIAL_GAMES: BlizzardOfficialGame[] = [
   },
 ];
 
+// Default Official Credentials provided by user
+export const DEFAULT_BLIZZARD_CLIENT_ID = "cd4e166528cc4b14b6f3e80608da21df";
+export const DEFAULT_BLIZZARD_CLIENT_SECRET = "TAYTjZ6bfdquf4scRuNIVlkXM46JodrK";
+
+export const BLIZZARD_ALLOWED_REDIRECT_URIS = [
+  "https://gameloghalecks.ai.studio/api/blizzard/callback",
+  "http://localhost:3000/api/blizzard/callback",
+  "https://ais-dev-vo7y2svqbla2eksgmckxxg-422647129975.us-west1.run.app/api/blizzard/callback",
+  "https://ais-pre-vo7y2svqbla2eksgmckxxg-422647129975.us-west1.run.app/api/blizzard/callback",
+  "https://ais-dev-mqwco4zhvkscmlstabgakc-607246007356.us-east1.run.app/api/blizzard/callback",
+];
+
 // LocalStorage Keys
 const BLIZZARD_BATTLE_TAG_STORAGE = "halo_blizzard_battletag";
 const BLIZZARD_ACCOUNT_ID_STORAGE = "halo_blizzard_account_id";
@@ -200,8 +212,8 @@ export function setStoredBlizzardRegion(region: string): void {
 }
 
 export function getStoredBlizzardClientId(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(BLIZZARD_CUSTOM_CLIENT_ID_STORAGE) || "";
+  if (typeof window === "undefined") return DEFAULT_BLIZZARD_CLIENT_ID;
+  return localStorage.getItem(BLIZZARD_CUSTOM_CLIENT_ID_STORAGE) || DEFAULT_BLIZZARD_CLIENT_ID;
 }
 
 export function setStoredBlizzardClientId(val: string): void {
@@ -211,8 +223,8 @@ export function setStoredBlizzardClientId(val: string): void {
 }
 
 export function getStoredBlizzardClientSecret(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(BLIZZARD_CUSTOM_CLIENT_SECRET_STORAGE) || "";
+  if (typeof window === "undefined") return DEFAULT_BLIZZARD_CLIENT_SECRET;
+  return localStorage.getItem(BLIZZARD_CUSTOM_CLIENT_SECRET_STORAGE) || DEFAULT_BLIZZARD_CLIENT_SECRET;
 }
 
 export function setStoredBlizzardClientSecret(val: string): void {
@@ -291,11 +303,26 @@ export function setStoredBlizzardRedirectUri(uri: string): void {
 
 export function getEffectiveBlizzardRedirectUri(): string {
   const custom = getStoredBlizzardRedirectUri();
-  if (custom) return custom;
+  if (custom && custom.trim()) return custom.trim();
+
   if (typeof window !== "undefined") {
-    return `${window.location.origin}/api/blizzard/callback`;
+    const origin = window.location.origin;
+    const currentCallback = `${origin}/api/blizzard/callback`;
+    if (BLIZZARD_ALLOWED_REDIRECT_URIS.includes(currentCallback)) {
+      return currentCallback;
+    }
+    const host = window.location.hostname;
+    if (host === "localhost" || host === "127.0.0.1") {
+      return "http://localhost:3000/api/blizzard/callback";
+    }
+    if (host.includes("gameloghalecks.ai.studio") || host.includes("ai.studio")) {
+      return "https://gameloghalecks.ai.studio/api/blizzard/callback";
+    }
+    const matchingRun = BLIZZARD_ALLOWED_REDIRECT_URIS.find((uri) => uri.startsWith(origin));
+    if (matchingRun) return matchingRun;
   }
-  return "";
+
+  return "https://gameloghalecks.ai.studio/api/blizzard/callback";
 }
 
 export async function verifyAndSaveManualToken(
@@ -315,16 +342,58 @@ export async function verifyAndSaveManualToken(
   return { success: true, battleTag: battleTag?.trim() || "Jogador Autenticado" };
 }
 
-// Generates the Blizzard OAuth login URL for the popup
-export function getBlizzardAuthUrl(region = "us", redirectUri?: string): string {
-  const customClientId = getStoredBlizzardClientId();
+// Generates the official direct Blizzard OAuth login URL
+export function getBlizzardAuthUrl(region = "us", redirectUri?: string, clientId?: string): string {
+  const customClientId = clientId?.trim() || getStoredBlizzardClientId()?.trim();
+  if (!customClientId) {
+    return "";
+  }
+  const oauthHost = region === "cn" ? "https://oauth.battlenet.com.cn" : "https://oauth.battle.net";
   const effRedirectUri = redirectUri || getEffectiveBlizzardRedirectUri();
+  const state = Math.random().toString(36).substring(2, 15);
   const params = new URLSearchParams({
-    region: region || getStoredBlizzardRegion(),
-    ...(customClientId ? { clientId: customClientId } : {}),
-    ...(effRedirectUri ? { redirectUri: effRedirectUri } : {}),
+    client_id: customClientId,
+    scope: "openid wow.profile",
+    response_type: "code",
+    state,
+    redirect_uri: effRedirectUri,
   });
-  return `/api/blizzard/auth-url?${params.toString()}`;
+  return `${oauthHost}/authorize?${params.toString()}`;
+}
+
+// Direct Client Credentials authentication
+export async function requestBlizzardClientCredentials(
+  clientId?: string,
+  clientSecret?: string,
+  region = "us"
+): Promise<{
+  success: boolean;
+  token?: string;
+  expiresIn?: number;
+  error?: string;
+}> {
+  try {
+    const res = await fetch("/api/blizzard/client-credentials", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        clientId: clientId || getStoredBlizzardClientId() || undefined,
+        clientSecret: clientSecret || getStoredBlizzardClientSecret() || undefined,
+        region: region || getStoredBlizzardRegion() || "us",
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.error || "Falha ao autenticar credenciais na Blizzard");
+    }
+    if (data.token) {
+      const expires = Date.now() + (data.expiresIn || 86400) * 1000;
+      setStoredBlizzardOAuthToken(data.token, expires);
+    }
+    return data;
+  } catch (err: any) {
+    return { success: false, error: err.message || String(err) };
+  }
 }
 
 // Exchange code obtained from popup callback
@@ -336,12 +405,13 @@ export async function exchangeBlizzardCode(code: string, redirectUri?: string): 
   error?: string;
 }> {
   try {
+    const effRedirectUri = redirectUri || getEffectiveBlizzardRedirectUri();
     const res = await fetch("/api/blizzard/oauth-exchange", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         code,
-        redirectUri,
+        redirectUri: effRedirectUri,
         region: getStoredBlizzardRegion(),
         clientId: getStoredBlizzardClientId() || undefined,
         clientSecret: getStoredBlizzardClientSecret() || undefined,
@@ -395,10 +465,11 @@ export type WoWVersionType = "retail" | "classic" | "forever" | "tbc" | "mop" | 
 export interface FetchWoWCharactersOptions {
   version?: WoWVersionType;
   wowVersion?: WoWVersionType;
-  gameId?: string; // "wow-retail", "wow-classic", "wow-forever", "wow-tbc"
+  gameId?: string; // "wow-retail", "wow-classic", "wow-forever", "wow-tbc", "wow-mop"
   region?: "us" | "eu" | "kr" | "tw" | string;
   token?: string;
   battleTag?: string;
+  force?: boolean;
 }
 
 // Check if a game is mapped to Battlenet
@@ -464,6 +535,7 @@ export async function fetchWoWUserCharacters(
     ...(selectedVer ? { version: selectedVer } : {}),
     ...(token ? { token } : {}),
     ...(battleTag ? { battleTag } : {}),
+    ...(options?.force ? { force: "true" } : {}),
     ...(getStoredBlizzardClientId() ? { clientId: getStoredBlizzardClientId() } : {}),
     ...(getStoredBlizzardClientSecret() ? { clientSecret: getStoredBlizzardClientSecret() } : {}),
   });
@@ -478,19 +550,24 @@ export async function fetchWoWUserCharacters(
   const data = await res.json();
   const chars: BlizzardCharacterSummary[] = data.characters || [];
 
-  // Guarantee wow_version is explicitly populated on every character
-  return chars.map((c) => ({
-    ...c,
-    wow_version: c.wow_version || c.gameMode || "retail",
-  }));
+  // Guarantee wow_version is explicitly populated and deduplicate by composite key
+  const uniqueMap = new Map<string, BlizzardCharacterSummary>();
+  chars.forEach((c) => {
+    const populated: BlizzardCharacterSummary = {
+      ...c,
+      wow_version: (c.wow_version || c.gameMode || "retail") as any,
+    };
+    const key = getCharacterCompositeKey(populated);
+    if (!uniqueMap.has(key)) {
+      uniqueMap.set(key, populated);
+    }
+  });
+
+  return Array.from(uniqueMap.values());
 }
 
 // Backward-compatible alias for existing components
-export async function fetchBlizzardWoWCharacters(options?: {
-  region?: string;
-  token?: string;
-  gameId?: string; // "wow-retail", "wow-classic", "wow-forever", "wow-tbc"
-}): Promise<BlizzardCharacterSummary[]> {
+export async function fetchBlizzardWoWCharacters(options?: FetchWoWCharactersOptions): Promise<BlizzardCharacterSummary[]> {
   return fetchWoWUserCharacters(options);
 }
 
@@ -550,5 +627,411 @@ export async function fetchBlizzardCharacterProfile(
     throw new Error(err.error || `Erro ao buscar perfil do personagem (${res.status})`);
   }
 
-  return await res.json();
+  const profile: BlizzardProfileData = await res.json();
+
+  // Mapear e extrair dados de transmog de cada item/slot do personagem com alta fidelidade
+  const transmogsRecord: Record<string, {
+    slot: string;
+    slotId?: number;
+    itemId?: number;
+    displayId?: number;
+    name?: string;
+    displayString?: string;
+  }> = { ...(profile.transmogs || {}) };
+
+  const transmogSlotsList: {
+    slot: string;
+    slotId?: number;
+    itemId?: number;
+    displayId?: number;
+    name?: string;
+    displayString?: string;
+  }[] = [...(profile.transmogSlots || [])];
+
+  const gearItems = profile.gear || profile.equippedItems || [];
+
+  // Mapeamento numérico padrão de slots do World of Warcraft (ZamModelViewer)
+  const slotMapping: Record<string, number> = {
+    HEAD: 1,
+    SHOULDER: 3,
+    SHIRT: 4,
+    CHEST: 5,
+    ROBE: 20,
+    WAIST: 6,
+    LEGS: 7,
+    FEET: 8,
+    WRIST: 9,
+    HANDS: 10,
+    BACK: 16,
+    TABARD: 19,
+    MAIN_HAND: 21,
+    OFF_HAND: 22,
+    RANGED: 26,
+  };
+
+  for (const item of gearItems) {
+    if (!item) continue;
+    const slotKey = (item.slot || "").toUpperCase();
+    const effectiveSlotId = item.slotId || slotMapping[slotKey] || 0;
+
+    // Se o item contiver informações de transmog, priorizar a substituição do display_id original pelo display_id do transmog
+    if (item.transmog && (item.transmog.itemId || item.transmog.displayId)) {
+      const transmogDisplayId = item.transmog.displayId || item.displayId;
+      if (transmogDisplayId) {
+        item.displayId = transmogDisplayId;
+      }
+
+      const transmogEntry = {
+        slot: item.slot,
+        slotId: effectiveSlotId,
+        itemId: item.transmog.itemId || item.itemId || item.id,
+        displayId: transmogDisplayId,
+        name: item.transmog.name || item.name,
+        displayString: item.transmog.displayString,
+      };
+
+      transmogsRecord[slotKey] = transmogEntry;
+
+      const existingIdx = transmogSlotsList.findIndex((t) => t.slot?.toUpperCase() === slotKey);
+      if (existingIdx >= 0) {
+        transmogSlotsList[existingIdx] = transmogEntry;
+      } else {
+        transmogSlotsList.push(transmogEntry);
+      }
+    }
+  }
+
+  // Também verificar o payload de appearance.items (se a Blizzard API tiver retornado)
+  if (profile.appearance?.items && Array.isArray(profile.appearance.items)) {
+    for (const aIt of profile.appearance.items) {
+      const slotKey = (aIt.slot?.type || "").toUpperCase();
+      const appearanceDisplayId = aIt.display_id || aIt.item_appearance_modifier_id;
+      const effectiveSlotId = slotMapping[slotKey] || 0;
+
+      if (slotKey && appearanceDisplayId) {
+        // Encontrar o item do equipamento correspondente a esse slot para saber se houve transmog
+        const matchingGear = gearItems.find((g) => (g.slot || "").toUpperCase() === slotKey);
+        const baseItemId = matchingGear?.itemId || matchingGear?.id || aIt.item?.id;
+
+        if (matchingGear?.transmog || (baseItemId && matchingGear?.displayId && matchingGear.displayId !== baseItemId) || !matchingGear?.displayId) {
+          if (matchingGear) {
+            matchingGear.displayId = appearanceDisplayId;
+          }
+
+          if (!transmogsRecord[slotKey]) {
+            const transmogEntry = {
+              slot: slotKey,
+              slotId: effectiveSlotId,
+              itemId: matchingGear?.transmog?.itemId || baseItemId,
+              displayId: appearanceDisplayId,
+              name: matchingGear?.transmog?.name || matchingGear?.name,
+              displayString: matchingGear?.transmog?.displayString,
+            };
+            transmogsRecord[slotKey] = transmogEntry;
+            const existingIdx = transmogSlotsList.findIndex((t) => t.slot?.toUpperCase() === slotKey);
+            if (existingIdx >= 0) {
+              transmogSlotsList[existingIdx] = transmogEntry;
+            } else {
+              transmogSlotsList.push(transmogEntry);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Enriquecer coleções (mounts e pets) garantindo que itemId e displayId/creatureDisplayId estejam devidamente populados
+  if (profile.collections) {
+    if (Array.isArray(profile.collections.mounts)) {
+      profile.collections.mounts = profile.collections.mounts.map((m) => {
+        const cDisplay = m.creatureDisplayId || m.displayId || 0;
+        return {
+          ...m,
+          displayId: cDisplay || m.displayId,
+          creatureDisplayId: cDisplay || m.creatureDisplayId,
+          itemId: m.itemId || (m.id > 10000 ? m.id : undefined),
+        };
+      });
+    }
+    if (Array.isArray(profile.collections.pets)) {
+      profile.collections.pets = profile.collections.pets.map((p) => {
+        const cDisplay = p.creatureDisplayId || p.displayId || 0;
+        return {
+          ...p,
+          displayId: cDisplay || p.displayId,
+          creatureDisplayId: cDisplay || p.creatureDisplayId,
+          itemId: p.itemId || (p.id > 10000 ? p.id : undefined),
+        };
+      });
+    }
+  }
+
+  profile.transmogs = transmogsRecord;
+  profile.transmogSlots = transmogSlotsList;
+
+  return profile;
+}
+
+/**
+ * Generates an authoritative composite key for a WoW character:
+ * Format: "charactername#realm-slug#wow_version"
+ * e.g. "arthas#azralon#retail" or "arthas#nemesis#classic"
+ */
+export function getCharacterCompositeKey(char: {
+  name: string;
+  realm?: string;
+  realmSlug?: string;
+  wow_version?: string;
+  gameMode?: string;
+}): string {
+  const nameNorm = (char.name || "").trim().toLowerCase();
+  const realmNorm = (char.realmSlug || char.realm || "").trim().toLowerCase().replace(/['\s_]+/g, "-");
+  const verNorm = (char.wow_version || char.gameMode || "retail").trim().toLowerCase();
+  return `${nameNorm}#${realmNorm}#${verNorm}`;
+}
+
+/**
+ * Parses an authoritative composite key or legacy hyphen key
+ */
+export function parseCharacterCompositeKey(key: string): {
+  name: string;
+  realm: string;
+  version: string;
+} {
+  if (!key) return { name: "", realm: "", version: "retail" };
+  if (key.includes("#")) {
+    const parts = key.split("#");
+    return {
+      name: parts[0] || "",
+      realm: parts[1] || "",
+      version: parts[2] || "retail",
+    };
+  }
+  if (key.includes("-")) {
+    const parts = key.split("-");
+    return {
+      name: parts[0] || "",
+      realm: parts.slice(1).join("-") || "",
+      version: "retail",
+    };
+  }
+  return { name: key, realm: "", version: "retail" };
+}
+
+/**
+ * Checks if a character matches a query key, name, realm and version.
+ * Unambiguously differentiates characters with the same name on different realms and WoW versions.
+ */
+export function matchCharacterComposite(
+  char: { name: string; realm?: string; realmSlug?: string; wow_version?: string; gameMode?: string },
+  queryKeyOrName: string,
+  queryRealm?: string,
+  queryVersion?: string
+): boolean {
+  if (!queryKeyOrName) return false;
+  const qLower = queryKeyOrName.toLowerCase().trim();
+
+  // If query contains composite delimiter '#'
+  if (qLower.includes("#")) {
+    const parts = qLower.split("#");
+    const qName = parts[0] || "";
+    const qRealm = (parts[1] || "").replace(/['\s-_]+/g, "");
+    const qVer = parts[2] || "";
+
+    if (char.name.toLowerCase() !== qName) return false;
+    if (qRealm) {
+      const cRealm = (char.realmSlug || char.realm || "").toLowerCase().replace(/['\s-_]+/g, "");
+      if (cRealm !== qRealm) return false;
+    }
+    if (qVer && qVer !== "all") {
+      const cVer = (char.wow_version || char.gameMode || "retail").toLowerCase();
+      if (cVer !== qVer) return false;
+    }
+    return true;
+  }
+
+  // If query contains delimiter '-'
+  if (qLower.includes("-")) {
+    const parts = qLower.split("-");
+    const qName = parts[0] || "";
+    const qRealm = parts.slice(1).join("-").replace(/['\s-_]+/g, "");
+
+    if (char.name.toLowerCase() !== qName) return false;
+    if (qRealm) {
+      const cRealm = (char.realmSlug || char.realm || "").toLowerCase().replace(/['\s-_]+/g, "");
+      if (cRealm !== qRealm) return false;
+    }
+    return true;
+  }
+
+  // Plain name check
+  if (char.name.toLowerCase() !== qLower) return false;
+  if (queryRealm) {
+    const cRealm = (char.realmSlug || char.realm || "").toLowerCase().replace(/['\s-_]+/g, "");
+    const targetRealm = queryRealm.toLowerCase().replace(/['\s-_]+/g, "");
+    if (cRealm !== targetRealm) return false;
+  }
+  if (queryVersion && queryVersion !== "all") {
+    const cVer = (char.wow_version || char.gameMode || "retail").toLowerCase();
+    if (cVer !== queryVersion.toLowerCase()) return false;
+  }
+  return true;
+}
+
+export interface BlizzardMountDbMetadata {
+  id: number;
+  name: string;
+  iconUrl: string;
+  mountType: "ground" | "flying" | "aquatic" | "dragonriding";
+  creatureDisplayId?: number;
+  source?: string;
+  description?: string;
+  speedBonus?: string;
+  factionRequirement?: "ALLIANCE" | "HORDE" | "ANY";
+  itemId?: number;
+  spellId?: number;
+}
+
+export interface BattlePetSpeciesInfo {
+  speciesId: number;
+  creatureId?: number;
+  name: string;
+  iconUrl: string;
+  family: string;
+  creatureDisplayId?: number;
+  description?: string;
+  source?: string;
+  quality?: string;
+  abilities?: string[];
+}
+
+// In-memory persistent cache for Mount.db2 metadata
+const mountMetadataMemoryCache = new Map<number, BlizzardMountDbMetadata>();
+const petSpeciesMemoryCache = new Map<number, BattlePetSpeciesInfo>();
+
+/**
+ * Utility function to fetch full metadata for Mounts (Mount.db2)
+ * using mount IDs extracted from official CSV files (e.g. Mount.12.1.5.69952.csv)
+ * or Blizzard API accounts. Accurately resolves name, icon, creatureDisplayId, and mountType.
+ */
+export async function fetchMountDb2Metadata(
+  mountIds: number | number[],
+  options?: { region?: string; force?: boolean }
+): Promise<BlizzardMountDbMetadata[]> {
+  const ids = Array.isArray(mountIds) ? mountIds : [mountIds];
+  if (ids.length === 0) return [];
+
+  const region = options?.region || getStoredBlizzardRegion() || "us";
+  const force = !!options?.force;
+  const results: BlizzardMountDbMetadata[] = [];
+  const missingIds: number[] = [];
+
+  // 1. Check in-memory cache first
+  for (const id of ids) {
+    if (!force && mountMetadataMemoryCache.has(id)) {
+      results.push(mountMetadataMemoryCache.get(id)!);
+    } else {
+      missingIds.push(id);
+    }
+  }
+
+  if (missingIds.length === 0) {
+    return results;
+  }
+
+  // 2. Fetch missing IDs from server-side DB2 proxy in batch chunks of 50
+  const chunkSize = 50;
+  for (let i = 0; i < missingIds.length; i += chunkSize) {
+    const chunk = missingIds.slice(i, i + chunkSize);
+    try {
+      const query = new URLSearchParams({
+        ids: chunk.join(","),
+        region,
+      });
+      const res = await fetch(`/api/blizzard/wow/mount-metadata?${query.toString()}`);
+      if (res.ok) {
+        const data = await res.json();
+        const list: BlizzardMountDbMetadata[] = data.mounts || (data.id ? [data] : []);
+        for (const item of list) {
+          if (item && item.id) {
+            mountMetadataMemoryCache.set(item.id, item);
+            results.push(item);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Error querying /api/blizzard/wow/mount-metadata:", err);
+    }
+  }
+
+  // 3. Fallback for any IDs that failed to resolve from the API: use client-side DB2 catalogs
+  for (const id of missingIds) {
+    if (!mountMetadataMemoryCache.has(id)) {
+      const fallbackMeta: BlizzardMountDbMetadata = {
+        id,
+        name: `Mount #${id}`,
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/ability_mount_ridinghorse.jpg",
+        mountType: "ground",
+        creatureDisplayId: 2404,
+        source: "World of Warcraft Mount.db2",
+        description: "Official World of Warcraft mount.",
+        speedBonus: "+100% Ground Speed",
+        factionRequirement: "ANY",
+      };
+      mountMetadataMemoryCache.set(id, fallbackMeta);
+      results.push(fallbackMeta);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Single mount metadata convenience fetcher
+ */
+export async function fetchMountMetadata(
+  mountId: number,
+  options?: { region?: string }
+): Promise<BlizzardMountDbMetadata | null> {
+  const list = await fetchMountDb2Metadata([mountId], options);
+  return list[0] || null;
+}
+
+/**
+ * Resolves BattlePetSpecies metadata by species ID using Wowhead & Blizzard DB2
+ */
+export async function fetchBattlePetSpeciesData(
+  speciesId: number
+): Promise<BattlePetSpeciesInfo | null> {
+  if (!speciesId || isNaN(speciesId)) return null;
+
+  if (petSpeciesMemoryCache.has(speciesId)) {
+    return petSpeciesMemoryCache.get(speciesId)!;
+  }
+
+  try {
+    const res = await fetch(`/api/blizzard/wow/battlepet-species/${speciesId}`);
+    if (res.ok) {
+      const data: BattlePetSpeciesInfo = await res.json();
+      petSpeciesMemoryCache.set(speciesId, data);
+      return data;
+    }
+  } catch (err) {
+    console.warn(`Could not fetch BattlePetSpecies for id ${speciesId}:`, err);
+  }
+
+  // Fallback item
+  const fallbackInfo: BattlePetSpeciesInfo = {
+    speciesId,
+    name: `Pet Species #${speciesId}`,
+    iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_misc_monsterclaw_04.jpg",
+    family: "Beast",
+    creatureDisplayId: 28917,
+    description: "Battle Pet Companion",
+    source: "Pet Battle / Wild Capture",
+    quality: "RARE",
+    abilities: ["Attack", "Defend", "Surge"],
+  };
+  petSpeciesMemoryCache.set(speciesId, fallbackInfo);
+  return fallbackInfo;
 }

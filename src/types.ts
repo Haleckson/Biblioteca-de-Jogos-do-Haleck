@@ -15,8 +15,10 @@ export interface ActiveLiveSession {
 export interface MediaItem {
   id?: string;
   src: string;
+  url?: string;
   isVideo: boolean;
   deleteUrl?: string;
+  isUploading?: boolean;
 }
 
 export interface DiaryEntry {
@@ -64,9 +66,11 @@ export interface Game {
   id: string;
   name: string;
   icon: string;
+  iconUrl?: string;
   iconType: "emoji" | "upload" | "url";
   series: string;
   cover: string;
+  coverUrl?: string;
   status: string[]; // e.g. ["Jogando", "Terminado"]
   platform: string; // Plataforma de Escolha (onde joguei / exibida no card)
   availablePlatforms?: string[] | string; // Plataformas Disponíveis (onde o jogo foi lançado)
@@ -106,7 +110,7 @@ export interface Game {
   cons?: string;
   isGaaS?: boolean;
   pricePaid?: number;
-  integrationPlatform?: "steam" | "gog" | "battlenet" | "none";
+  integrationPlatform?: "steam" | "gog" | "battlenet" | "blizzard" | "none";
   steamAppId?: number | string;
   steamPlaytimeMinutes?: number;
   steamLastPlayedTimestamp?: number;
@@ -127,6 +131,7 @@ export interface Game {
   blizzardCharacters?: BlizzardCharacterSummary[];
   blizzardProfileData?: BlizzardProfileData;
   wowVersion?: "retail" | "classic" | "forever" | "tbc" | "mop" | string;
+  isWow?: boolean;
   igdbId?: number;
   igdbRating?: number;
   igdbSlug?: string;
@@ -153,6 +158,8 @@ export interface BlizzardCharacterSummary {
   activeSpec?: string;
   achievementPoints?: number;
   lastLoginTimestamp?: number;
+  guild?: string;
+  ruleset?: string;
   gameMode?: "retail" | "forever" | "classic" | "tbc" | "mop" | string;
   wow_version?: "retail" | "forever" | "classic" | "tbc" | "mop" | string;
   classIconUrl?: string;
@@ -164,8 +171,17 @@ export interface BlizzardGearItem {
   slot: string; // e.g. "HEAD", "NECK", "SHOULDER", "BACK", "CHEST", "SHIRT", "TABARD", "WRIST", "HANDS", "WAIST", "LEGS", "FEET", "RING_1", "RING_2", "TRINKET_1", "TRINKET_2", "MAIN_HAND", "OFF_HAND", "RANGED"
   name: string;
   id?: number;
+  itemId?: number;
   displayId?: number;
   slotId?: number;
+  visualItemId?: number;
+  inventoryType?: string;
+  transmog?: {
+    itemId?: number;
+    name?: string;
+    displayId?: number;
+    displayString?: string;
+  };
   itemLevel?: number;
   quality?: "POOR" | "COMMON" | "UNCOMMON" | "RARE" | "EPIC" | "LEGENDARY" | "ARTIFACT" | "HEIRLOOM" | string;
   iconUrl?: string;
@@ -230,6 +246,9 @@ export interface BlizzardCollectionMount {
   id: number;
   name: string;
   iconUrl: string;
+  itemId?: number;
+  spellId?: number;
+  displayId?: number;
   creatureDisplayId?: number;
   mountType: "ground" | "flying" | "aquatic" | "dragonriding";
   source: string;
@@ -238,10 +257,19 @@ export interface BlizzardCollectionMount {
   isFavorite?: boolean;
   speedBonus?: string;
   factionRequirement?: "ALLIANCE" | "HORDE" | "ANY";
+  isCharacterSpecific?: boolean;
+  characterName?: string;
+  characterRealm?: string;
+  characterId?: number | string;
+  unlockedAt?: number | string;
+  unlockOrder?: number;
+  rarity?: string;
 }
 
 export interface BlizzardCollectionToy {
   id: number;
+  itemId?: number;
+  displayId?: number;
   name: string;
   iconUrl: string;
   source: string;
@@ -253,9 +281,15 @@ export interface BlizzardCollectionToy {
 
 export interface BlizzardCollectionPet {
   id: number;
+  speciesId?: number;
+  creatureId?: number;
+  npcId?: number;
+  itemId?: number;
+  spellId?: number;
+  displayId?: number;
   name: string;
   iconUrl: string;
-  family: "Beast" | "Dragonkin" | "Flying" | "Humanoid" | "Magical" | "Mechanical" | "Undead" | "Water" | "Elemental";
+  family: "Beast" | "Dragonkin" | "Flying" | "Humanoid" | "Magical" | "Magic" | "Mechanical" | "Undead" | "Water" | "Elemental" | "Aquatic" | "Critter" | string;
   level: number;
   quality: string;
   source: string;
@@ -263,6 +297,31 @@ export interface BlizzardCollectionPet {
   isCollected?: boolean;
   isFavorite?: boolean;
   creatureDisplayId?: number;
+  isCharacterSpecific?: boolean;
+  characterName?: string;
+  characterRealm?: string;
+  characterId?: number | string;
+  unlockedAt?: number | string;
+  unlockOrder?: number;
+  stats?: {
+    breedId?: number;
+    health?: number;
+    power?: number;
+    speed?: number;
+  };
+}
+
+export interface BlizzardAchievement {
+  id: number;
+  title: string;
+  description?: string;
+  points?: number;
+  iconUrl?: string;
+  category?: string;
+  completedTimestamp?: number;
+  isCharacterSpecific?: boolean;
+  characterName?: string;
+  characterRealm?: string;
 }
 
 export interface BlizzardCollectionTitle {
@@ -307,6 +366,7 @@ export interface BlizzardProfileData {
   name?: string;
   realm?: string;
   realmSlug?: string;
+  ruleset?: string;
   level?: number;
   characterClass?: string;
   race?: string;
@@ -321,6 +381,7 @@ export interface BlizzardProfileData {
   avatarUrl?: string;
   renderUrl?: string;
   gameMode?: string;
+  wow_version?: string;
   classIconUrl?: string;
   raceIconUrl?: string;
   factionIconUrl?: string;
@@ -342,6 +403,7 @@ export interface BlizzardProfileData {
     haste?: number;
     mastery?: number;
     versatility?: number;
+    speed?: number;
     dodge?: number;
     parry?: number;
     block?: number;
@@ -356,17 +418,89 @@ export interface BlizzardProfileData {
   }[];
   selectedCharacter?: BlizzardCharacterSummary;
   gear?: BlizzardGearItem[];
-  achievements?: {
-    id: number;
-    title: string;
-    description?: string;
-    points?: number;
-    iconUrl?: string;
-    category?: string;
-    completedTimestamp?: number;
-  }[];
+  achievements?: BlizzardAchievement[];
   talents?: any;
   reputations?: BlizzardReputation[];
+  professions?: {
+    primary?: { name: string; icon?: string; skillLevel: number; maxSkillLevel: number; recipes?: { name: string; quality?: string; icon?: string }[] }[];
+    secondary?: { name: string; icon?: string; skillLevel: number; maxSkillLevel: number; recipes?: { name: string; quality?: string; icon?: string }[] }[];
+  } | any;
+  pvp?: {
+    lifetimeHK?: number;
+    honorPoints?: number;
+    rankName?: string;
+    rankNumber?: number;
+  } | any;
+  hardcore?: {
+    isDead?: boolean;
+    survivalStatus?: string;
+    snapshotTime?: number;
+    deathCertificate?: {
+      killerName?: string;
+      zoneName?: string;
+      subZoneText?: string;
+      coordinates?: string;
+      finalLevel?: number;
+      timePlayed?: string;
+      deathDate?: string;
+      lastWords?: string;
+    };
+  } | any;
+  hardcoreDeathCertificate?: {
+    killerName?: string;
+    zoneName?: string;
+    subZoneText?: string;
+    coordinates?: string;
+    finalLevel?: number;
+    timePlayed?: string;
+    deathDate?: string;
+    lastWords?: string;
+  };
+  playedTime?: {
+    totalSeconds?: number;
+    totalFormatted?: string;
+    levelSeconds?: number;
+    levelFormatted?: string;
+  };
+  gearTimeline?: {
+    date: string;
+    avgIlvl: number;
+    equippedIlvl: number;
+    upgradedSlots?: string[];
+    note?: string;
+  }[];
+  lockouts?: {
+    name: string;
+    instanceId?: number;
+    resetInSeconds?: number;
+    isRaid?: boolean;
+    difficulty?: string;
+  }[] | any;
+  bank?: {
+    mainBank?: any[];
+    bankBags?: any[];
+    reagentBank?: any[];
+    warbandBank?: any[];
+    lastBankVisit?: string;
+  };
+  accountEconomy?: {
+    totalGold: number;
+    charactersGold: { characterName: string; realm: string; gold: number; faction: string; class: string; level: number }[];
+    sessionDeltaGold?: number;
+  };
+  mythicPlus?: {
+    rating?: number;
+    currentKeystone?: { name: string; level: number; mapId?: number; iconUrl?: string };
+    runHistory?: { mapName: string; level: number; completed: boolean; score?: number }[];
+    greatVault?: { type: string; category: string; progress: number; threshold: number; unlocked: boolean; rewardItemLevel?: number }[];
+  };
+  worldBosses?: {
+    name: string;
+    zone: string;
+    status: "Available" | "Defeated" | "Spawning Soon";
+    respawnEstimate?: string;
+    lastKilled?: string;
+  }[];
   mainRawUrl?: string;
   insetImageUrl?: string;
   appearance?: {
@@ -381,6 +515,22 @@ export interface BlizzardProfileData {
       item_appearance_modifier_id?: number;
     }[];
   };
+  transmogs?: Record<string, {
+    slot: string;
+    slotId?: number;
+    itemId?: number;
+    displayId?: number;
+    name?: string;
+    displayString?: string;
+  }>;
+  transmogSlots?: {
+    slot: string;
+    slotId?: number;
+    itemId?: number;
+    displayId?: number;
+    name?: string;
+    displayString?: string;
+  }[];
   inventory?: BlizzardCharacterInventory;
   collections?: BlizzardCharacterCollections;
   lastSyncedAt?: string;
@@ -402,6 +552,7 @@ export interface SteamGridGameCandidate {
   name: string;
   types?: string[];
   verified?: boolean;
+  release_date?: number;
 }
 
 export interface SteamGridAuthor {
@@ -584,3 +735,47 @@ export function formatDateDisplay(dateStr: string | undefined | null): string {
   return clean;
 }
 
+export type ThemeMode = 'paper' | 'cream' | 'slate' | 'noir' | 'dark' | 'light' | 'sepia';
+export type FontStyle = 'serif' | 'sans' | 'mono';
+export type PageWidth = 'narrow' | 'standard' | 'wide' | 'full' | 'normal';
+
+export interface DocumentItem {
+  id: string;
+  title: string;
+  content: string;
+  wordCount?: number;
+  characterCount?: number;
+  lastModified?: number;
+  createdAt?: number;
+  updatedAt?: number;
+  folderId?: string;
+  tags?: string[];
+  isPinned?: boolean;
+  pinned?: boolean;
+  targetWordCount?: number;
+}
+
+export interface ScratchpadNote {
+  id: string;
+  title?: string;
+  content?: string;
+  text?: string;
+  lastModified?: number;
+  createdAt?: number;
+}
+
+export interface EditorSettings {
+  theme: ThemeMode;
+  font?: FontStyle | string;
+  fontStyle?: FontStyle | string;
+  fontSize: number;
+  lineHeight: string | number;
+  pageWidth: PageWidth;
+  soundEnabled?: boolean;
+  typewriterMode: boolean;
+  focusMode?: boolean;
+  showStats?: boolean;
+  dailyGoal?: number;
+  spellcheck?: boolean;
+  autoSaveInterval?: number;
+}

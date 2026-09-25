@@ -146,36 +146,59 @@ export default function ImageZoomLightbox({
     if (zoomScale <= 1.02) {
       return { maxDragX: 0, maxDragY: 0 };
     }
-    const renderedW = imgRef.current?.clientWidth || (naturalSize ? Math.min(naturalSize.width, viewportSize.width) : viewportSize.width * 0.95);
-    const renderedH = imgRef.current?.clientHeight || (naturalSize ? Math.min(naturalSize.height, viewportSize.height) : viewportSize.height * 0.9);
 
-    // Scaled dimensions
-    const scaledW = renderedW * zoomScale;
-    const scaledH = renderedH * zoomScale;
+    // Calculate exact rendered dimensions inside the viewport
+    let fittedW = viewportSize.width * 0.99;
+    let fittedH = viewportSize.height * 0.96;
+
+    if (naturalSize && naturalSize.width > 0 && naturalSize.height > 0) {
+      const imgAspect = naturalSize.width / naturalSize.height;
+      const vpAspect = (viewportSize.width * 0.99) / (viewportSize.height * 0.96);
+
+      if (imgAspect > vpAspect) {
+        // Constrained by width (common for ultrawide screenshots)
+        fittedW = viewportSize.width * 0.99;
+        fittedH = fittedW / imgAspect;
+      } else {
+        // Constrained by height
+        fittedH = viewportSize.height * 0.96;
+        fittedW = fittedH * imgAspect;
+      }
+    }
+
+    // Scaled dimensions under current zoom
+    const scaledW = fittedW * zoomScale;
+    const scaledH = fittedH * zoomScale;
 
     // How much the scaled image overflows the viewport
     const overflowX = Math.max(0, (scaledW - viewportSize.width) / 2);
     const overflowY = Math.max(0, (scaledH - viewportSize.height) / 2);
 
-    // Generous boundary margin (200px) so the user can easily pan past and see edges in full detail
-    const boundX = Math.max(Math.round(overflowX + 200), 200);
-    const boundY = Math.max(Math.round(overflowY + 200), 200);
+    // Generous boundary margin (160px) so user can see edges with plenty of room
+    const boundX = Math.round(overflowX + 160);
+    const boundY = Math.round(overflowY + 160);
 
     return { maxDragX: boundX, maxDragY: boundY };
   }, [zoomScale, naturalSize, viewportSize]);
 
   // Reset zoom and pan smoothly back to dead center
   const resetZoomAndPan = useCallback(() => {
+    x.stop();
+    y.stop();
+    x.jump(0);
+    y.jump(0);
     setZoomScale(1);
-    animate(x, 0, { type: "spring", stiffness: 350, damping: 32 });
-    animate(y, 0, { type: "spring", stiffness: 350, damping: 32 });
+    animate(x, 0, { type: "spring", stiffness: 350, damping: 30 });
+    animate(y, 0, { type: "spring", stiffness: 350, damping: 30 });
   }, [x, y]);
 
-  // When zoom drops to 1x or less, immediately animate pan position back to dead center
+  // When zoom drops to 1x or less, immediately stop momentum and return dead center
   useEffect(() => {
-    if (zoomScale <= 1.05) {
-      animate(x, 0, { type: "spring", stiffness: 350, damping: 32 });
-      animate(y, 0, { type: "spring", stiffness: 350, damping: 32 });
+    if (zoomScale <= 1.02) {
+      x.stop();
+      y.stop();
+      x.jump(0);
+      y.jump(0);
     } else {
       // If user zoomed out while panned far away, constrain smoothly within active bounds
       const currentX = x.get();
@@ -192,9 +215,11 @@ export default function ImageZoomLightbox({
   // Reset states, motion values, and resolve cache when opening a new image
   useEffect(() => {
     if (currentSrc) {
-      setZoomScale(1);
+      x.stop();
+      y.stop();
       x.jump(0);
       y.jump(0);
+      setZoomScale(1);
       setImgError(false);
       setControlsVisible(true);
       setResolvedSrc(currentSrc);
@@ -219,22 +244,28 @@ export default function ImageZoomLightbox({
     preloadImagesToCache(adjacent);
   }, [isOpen, currentIndex, validImages]);
 
-  // Navigate functions with immediate position reset
+  // Navigate functions with immediate position and zoom reset
   const handleNext = useCallback(() => {
     if (validImages.length <= 1 || currentIndex === -1) return;
     const nextIdx = (currentIndex + 1) % validImages.length;
-    setZoomScale(1);
+    x.stop();
+    y.stop();
     x.jump(0);
     y.jump(0);
+    setZoomScale(1);
+    setNaturalSize(null);
     onSelectImage?.(validImages[nextIdx]);
   }, [validImages, currentIndex, onSelectImage, x, y]);
 
   const handlePrev = useCallback(() => {
     if (validImages.length <= 1 || currentIndex === -1) return;
     const prevIdx = (currentIndex - 1 + validImages.length) % validImages.length;
-    setZoomScale(1);
+    x.stop();
+    y.stop();
     x.jump(0);
     y.jump(0);
+    setZoomScale(1);
+    setNaturalSize(null);
     onSelectImage?.(validImages[prevIdx]);
   }, [validImages, currentIndex, onSelectImage, x, y]);
 
@@ -482,9 +513,9 @@ export default function ImageZoomLightbox({
         </div>
 
         {/* Main Stage - Maximized screen utilization for standard and Ultrawide displays */}
-        <div className="relative w-full h-full z-10 flex items-center justify-center overflow-hidden p-1 sm:p-2 md:p-3">
+        <div className="relative w-full h-full z-10 flex items-center justify-center overflow-hidden p-0 sm:p-1 md:p-1.5">
           {isVideo ? (
-            <div className="w-full max-w-[96vw] max-h-[88vh] aspect-video rounded-2xl overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 bg-black relative flex items-center justify-center my-auto ring-1 ring-cyan-500/20">
+            <div className="w-full max-w-[99vw] max-h-[95vh] aspect-video rounded-2xl overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-cyan-500/30 bg-black relative flex items-center justify-center my-auto ring-1 ring-cyan-500/20">
               {youtubeEmbedUrl ? (
                 <iframe
                   src={`${youtubeEmbedUrl}?autoplay=1&rel=0&modestbranding=1`}
@@ -518,10 +549,14 @@ export default function ImageZoomLightbox({
             <motion.img
               ref={imgRef}
               key={resolvedSrc || currentSrc}
-              style={{ x, y }}
-              drag={zoomScale > 1.05}
+              style={{
+                x: zoomScale <= 1.02 ? 0 : x,
+                y: zoomScale <= 1.02 ? 0 : y,
+                transformOrigin: "center center",
+              }}
+              drag={zoomScale > 1.02}
               dragSnapToOrigin={false}
-              dragElastic={0.18}
+              dragElastic={0.15}
               dragConstraints={{
                 left: -maxDragX,
                 right: maxDragX,
@@ -530,12 +565,17 @@ export default function ImageZoomLightbox({
               }}
               dragTransition={{ bounceStiffness: 300, bounceDamping: 30 }}
               animate={{ scale: zoomScale }}
-              transition={{ type: "spring", stiffness: 320, damping: 28 }}
+              transition={{ type: "spring", stiffness: 350, damping: 30 }}
               src={resolvedSrc || currentSrc}
               alt="Mídia em Modo Teatro"
               onLoad={(e) => {
                 const img = e.currentTarget;
                 setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
+                // Enforce instant dead-center positioning upon image load
+                x.stop();
+                y.stop();
+                x.jump(0);
+                y.jump(0);
               }}
               onDoubleClick={handleDoubleTap}
               onClick={(e) => {
@@ -549,8 +589,8 @@ export default function ImageZoomLightbox({
                   ? "Clique para fechar • Duplo clique para dar zoom"
                   : "Arraste para mover • Duplo clique para restaurar tamanho"
               }
-              className={`w-auto h-auto max-w-[calc(100vw-12px)] sm:max-w-[calc(100vw-24px)] md:max-w-[calc(100vw-36px)] max-h-[calc(100vh-16px)] sm:max-h-[calc(100vh-24px)] md:max-h-[calc(100vh-32px)] object-contain rounded-xl sm:rounded-2xl shadow-2xl border border-zinc-800/80 select-none ${
-                zoomScale > 1.05 ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
+              className={`w-full h-full max-w-[99vw] max-h-[96vh] sm:max-h-[98vh] object-contain rounded-xl sm:rounded-2xl shadow-[0_0_80px_rgba(0,0,0,0.95)] border border-zinc-800/80 select-none ${
+                zoomScale > 1.02 ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"
               }`}
               referrerPolicy="no-referrer"
               onError={() => setImgError(true)}
@@ -673,6 +713,25 @@ export default function ImageZoomLightbox({
                 >
                   <RotateCcw size={16} />
                 </button>
+
+                {ultrawideRatio && (
+                  <>
+                    <div className="w-px h-5 bg-zinc-800 mx-0.5" />
+                    <button
+                      type="button"
+                      onClick={resetZoomAndPan}
+                      className={`px-2 py-1 rounded-lg text-[11px] font-mono font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                        zoomScale <= 1.02
+                          ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
+                          : "bg-zinc-900 hover:bg-zinc-800 text-zinc-300 border border-zinc-800"
+                      }`}
+                      title="Enquadramento Ultrawide total (100% sem cortes)"
+                    >
+                      <Sparkles size={11} className="text-cyan-400" />
+                      <span>Panorâmica {ultrawideRatio}:1</span>
+                    </button>
+                  </>
+                )}
 
                 {validImages.length > 1 && (
                   <>

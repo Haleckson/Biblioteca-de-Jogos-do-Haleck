@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Game, TrophyItem, getDlcMode, getGameTrophyItems, getGameHighestTrophy, parseProConTopic, splitEntities, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star, Edit3, Maximize2, Shield, Copy, ExternalLink, Key } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity as InfinityIcon, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star, Edit3, Maximize2, Shield, Copy, ExternalLink, Key } from "lucide-react";
 import ProsConsModal from "./ProsConsModal";
 import { detectProConCategory } from "../utils/proConCategories";
 import { COVER_BANK } from "../data";
@@ -238,10 +238,10 @@ export default function GameFormModal({
   const [selectedMetacriticPlatform, setSelectedMetacriticPlatform] = useState<string>("");
 
   // Integration Platform Switcher
-  const [integrationPlatform, setIntegrationPlatform] = useState<"none" | "steam" | "gog" | "battlenet">("steam");
+  const [integrationPlatform, setIntegrationPlatform] = useState<"none" | "steam" | "gog" | "battlenet" | "blizzard">("steam");
 
   // Steam States
-  const [steamAppId, setSteamAppId] = useState<number | undefined>(undefined);
+  const [steamAppId, setSteamAppId] = useState<number | string | undefined>(undefined);
   const [steamPlaytimeMinutes, setSteamPlaytimeMinutes] = useState<number | undefined>(undefined);
   const [steamLastPlayedTimestamp, setSteamLastPlayedTimestamp] = useState<number | undefined>(undefined);
   const [steamAchievementsCount, setSteamAchievementsCount] = useState<number | undefined>(undefined);
@@ -271,6 +271,10 @@ export default function GameFormModal({
   const [manualTokenInput, setManualTokenInput] = useState<string>("");
   const [manualTokenTagInput, setManualTokenTagInput] = useState<string>("");
   const [copiedRedirectUri, setCopiedRedirectUri] = useState<boolean>(false);
+  const [manualRealmInput, setManualRealmInput] = useState<string>("Azralon");
+  const [manualCharNameInput, setManualCharNameInput] = useState<string>("");
+  const [isSearchingArmory, setIsSearchingArmory] = useState<boolean>(false);
+  const [selectedWowVersion, setSelectedWowVersion] = useState<"forever" | "forever_beta" | "classic" | "retail" | "mop" | "tbc">("forever");
 
   const [showGogImport, setShowGogImport] = useState(false);
   const [isFetchingGog, setIsFetchingGog] = useState(false);
@@ -704,11 +708,16 @@ export default function GameFormModal({
 
         return {
           name: cand.name || "Sem título",
+          cover: cover,
           coverUrl: cover,
+          icon: "🎮",
+          iconType: "emoji" as const,
           studio: cand.developer || "",
           publisher: cand.publisher || "",
           series: cand.series || "",
           releaseDate: cand.releaseDate || "",
+          startDate: "",
+          endDate: "",
           platform: Array.isArray(cand.platforms) && cand.platforms.length > 0 ? cand.platforms[0] : "PC",
           availablePlatforms: Array.isArray(cand.platforms) ? cand.platforms : [],
           genre: genres,
@@ -1476,35 +1485,72 @@ export default function GameFormModal({
   };
 
   // Load characters if Blizzard is logged in and game is WoW
-  const handleFetchBlizzardCharacters = async (selectedGameId?: string) => {
+  const handleFetchBlizzardCharacters = async (selectedGameId?: string, forceRefresh?: boolean) => {
     const targetGame = selectedGameId || blizzardGameId || "wow-retail";
     setIsLoadingBlizzardChars(true);
     try {
       const chars = await fetchBlizzardWoWCharacters({
         region: blizzardRegion,
         gameId: targetGame,
+        force: forceRefresh,
       });
-      setBlizzardCharacters(chars);
-      if (chars.length > 0 && !blizzardSelectedCharacter) {
-        const first = chars[0];
-        const charKey = `${first.name}-${first.realmSlug || first.realm}`;
-        setBlizzardSelectedCharacter(charKey);
-        handleFetchBlizzardProfile(first.name, first.realmSlug || first.realm, targetGame);
+      if (chars && chars.length > 0) {
+        setBlizzardCharacters(chars);
+        try {
+          localStorage.setItem("halo_blizzard_cached_characters", JSON.stringify(chars));
+        } catch {}
+
+        // Check if current selected character is present in the newly fetched list
+        const selName = (blizzardSelectedCharacter || game?.blizzardCharacterName || "").split("-")[0]?.toLowerCase();
+        const selRealm = (blizzardSelectedCharacter || "").split("-").slice(1).join("-")?.toLowerCase();
+
+        const existingMatch = chars.find((c) => {
+          const cName = c.name.toLowerCase();
+          const cRealm = (c.realmSlug || c.realm).toLowerCase();
+          if (selRealm) {
+            return cName === selName && cRealm === selRealm;
+          }
+          return cName === selName;
+        });
+
+        if (existingMatch) {
+          const charKey = `${existingMatch.name}-${existingMatch.realmSlug || existingMatch.realm}`;
+          setBlizzardSelectedCharacter(charKey);
+          handleFetchBlizzardProfile(existingMatch.name, existingMatch.realmSlug || existingMatch.realm, targetGame, existingMatch);
+        } else if (!blizzardSelectedCharacter && !game?.blizzardCharacterName && chars.length > 0) {
+          const first = chars[0];
+          const charKey = `${first.name}-${first.realmSlug || first.realm}`;
+          setBlizzardSelectedCharacter(charKey);
+          handleFetchBlizzardProfile(first.name, first.realmSlug || first.realm, targetGame, first);
+        }
       }
     } catch (err: any) {
       console.warn("Aviso ao buscar personagens Blizzard:", err);
-      triggerAlert("Aviso Blizzard", err?.message || "Não foi possível sincronizar personagens da conta.");
     } finally {
       setIsLoadingBlizzardChars(false);
     }
   };
 
-  const handleFetchBlizzardProfile = async (charName: string, realmSlug: string, gameIdVal?: string) => {
+  const handleFetchBlizzardProfile = async (
+    charName: string,
+    realmSlug: string,
+    gameIdVal?: string,
+    summaryObj?: BlizzardCharacterSummary
+  ) => {
     setIsLoadingBlizzardProfile(true);
     try {
       const profile = await fetchBlizzardCharacterProfile(charName, realmSlug, {
         region: blizzardRegion,
         gameId: gameIdVal || blizzardGameId || "wow-retail",
+        characterSummary: summaryObj,
+        characterClass: summaryObj?.characterClass,
+        race: summaryObj?.race,
+        level: summaryObj?.level,
+        gender: summaryObj?.gender,
+        faction: summaryObj?.faction,
+        activeSpec: summaryObj?.activeSpec,
+        equippedItemLevel: summaryObj?.equippedItemLevel,
+        version: summaryObj?.wow_version,
       });
       setBlizzardProfileData(profile);
       triggerAlert("Armory Atualizado", `Personagem ${charName} sincronizado com sucesso do Armory da Blizzard!`);
@@ -1515,6 +1561,59 @@ export default function GameFormModal({
     }
   };
 
+  const handleDirectArmorySearch = async () => {
+    if (!manualCharNameInput.trim()) {
+      triggerAlert("Campo Obrigatório", "Digite o nome do personagem para buscar no Armory oficial.");
+      return;
+    }
+    const rName = manualRealmInput.trim() || "Azralon";
+    const cName = manualCharNameInput.trim();
+    setIsSearchingArmory(true);
+    try {
+      const profile = await fetchBlizzardCharacterProfile(cName, rName, {
+        region: blizzardRegion,
+        gameId: blizzardGameId || "wow-retail",
+      });
+      setBlizzardProfileData(profile);
+
+      const charKey = `${profile.name}-${profile.realmSlug || profile.realm}`;
+      const newSummary: BlizzardCharacterSummary = {
+        name: profile.name,
+        realm: profile.realm,
+        realmSlug: profile.realmSlug,
+        level: profile.level,
+        characterClass: profile.characterClass,
+        race: profile.race,
+        gender: profile.gender,
+        faction: profile.faction,
+        equippedItemLevel: profile.equippedItemLevel,
+        activeSpec: profile.activeSpec,
+        gameMode: (blizzardGameId?.replace("wow-", "") as any) || "retail",
+        wow_version: (blizzardGameId?.replace("wow-", "") as any) || "retail",
+        classIconUrl: profile.classIconUrl,
+        raceIconUrl: profile.raceIconUrl,
+        factionIconUrl: profile.factionIconUrl,
+        avatarUrl: profile.avatarUrl,
+      };
+
+      setBlizzardCharacters((prev) => {
+        const filtered = prev.filter((p) => `${p.name}-${p.realmSlug || p.realm}` !== charKey);
+        const nextList = [newSummary, ...filtered];
+        try {
+          localStorage.setItem("halo_blizzard_cached_characters", JSON.stringify(nextList));
+        } catch {}
+        return nextList;
+      });
+
+      setBlizzardSelectedCharacter(charKey);
+      triggerAlert("Armory Conectado", `Personagem ${cName} (${rName}) importado do Armory oficial da Blizzard com sucesso!`);
+    } catch (err: any) {
+      triggerAlert("Aviso Armory", err?.message || "Não foi possível carregar o personagem no Armory.");
+    } finally {
+      setIsSearchingArmory(false);
+    }
+  };
+
   const handleSelectBlizzardGame = (gameItem: BlizzardOfficialGame) => {
     setBlizzardGameId(gameItem.id);
     setBlizzardGameName(gameItem.name);
@@ -1522,7 +1621,7 @@ export default function GameFormModal({
       setName(gameItem.name);
     }
     if (gameItem.isWow) {
-      handleFetchBlizzardCharacters(gameItem.id);
+      handleFetchBlizzardCharacters(gameItem.id, false);
     }
   };
 
@@ -1650,17 +1749,48 @@ export default function GameFormModal({
       setBlizzardGameId(game.blizzardGameId || "");
       setBlizzardGameName(game.blizzardGameName || "");
       setBlizzardRegion((game.blizzardRegion as any) || getStoredBlizzardRegion());
-      setBlizzardSelectedCharacter(game.blizzardCharacterName && game.blizzardRealm ? `${game.blizzardCharacterName}-${game.blizzardRealm}` : "");
+      const rawWowVer = (game.wowVersion || (game.blizzardGameId ? game.blizzardGameId.replace("wow-", "") : "forever")).toLowerCase();
+      if (rawWowVer.includes("beta")) setSelectedWowVersion("forever_beta");
+      else if (rawWowVer.includes("classic")) setSelectedWowVersion("classic");
+      else if (rawWowVer.includes("retail") || rawWowVer.includes("midnight") || rawWowVer.includes("tww")) setSelectedWowVersion("retail");
+      else if (rawWowVer.includes("mop")) setSelectedWowVersion("mop");
+      else if (rawWowVer.includes("tbc")) setSelectedWowVersion("tbc");
+      else setSelectedWowVersion("forever");
+      const initialStoredChar =
+        game.blizzardSelectedCharacter ||
+        (game.blizzardCharacterName && game.blizzardRealm ? `${game.blizzardCharacterName}-${game.blizzardRealm}` : "") ||
+        (game.id ? localStorage.getItem(`halo_blizzard_selected_char_${game.id}`) : null) ||
+        (game.blizzardGameId ? localStorage.getItem(`halo_blizzard_selected_char_${game.blizzardGameId}`) : null) ||
+        localStorage.getItem("halo_blizzard_selected_char_global") ||
+        "";
+      setBlizzardSelectedCharacter(initialStoredChar);
       setBlizzardProfileData(game.blizzardProfileData || null);
       const isBlizzAuthed = isBlizzardAuthenticated();
       setIsBlizzardLoggedIn(isBlizzAuthed);
       setBlizzardBattleTag(getStoredBlizzardBattleTag());
-      if (isBlizzAuthed && (game.blizzardGameId?.startsWith("wow") || (!game.blizzardGameId && game.name?.toLowerCase().includes("warcraft")))) {
+      let initialChars: BlizzardCharacterSummary[] = [];
+      if (Array.isArray(game.blizzardCharacters) && game.blizzardCharacters.length > 0) {
+        initialChars = game.blizzardCharacters;
+      } else {
+        try {
+          const saved = localStorage.getItem("halo_blizzard_cached_characters");
+          if (saved) {
+            initialChars = JSON.parse(saved);
+          }
+        } catch {}
+      }
+      if (initialChars.length > 0) {
+        setBlizzardCharacters(initialChars);
+      }
+
+      if (game.blizzardGameId?.startsWith("wow") || (!game.blizzardGameId && game.name?.toLowerCase().includes("warcraft"))) {
         fetchBlizzardWoWCharacters({
           region: (game.blizzardRegion as any) || getStoredBlizzardRegion(),
           gameId: game.blizzardGameId || "wow-retail"
         }).then((chars) => {
-          setBlizzardCharacters(chars);
+          if (chars && chars.length > 0) {
+            setBlizzardCharacters(chars);
+          }
         }).catch(() => {});
       }
 
@@ -2082,13 +2212,15 @@ export default function GameFormModal({
       gogLastPlayedTimestamp: typeof gogLastPlayedTimestamp === "number" && !isNaN(gogLastPlayedTimestamp) ? gogLastPlayedTimestamp : undefined,
       gogAchievementsCount: gogAchieveData ? (!isNaN(gogAchieveData.unlockedCount) ? gogAchieveData.unlockedCount : undefined) : (typeof gogAchievementsCount === "number" && !isNaN(gogAchievementsCount) ? gogAchievementsCount : (game?.gogAchievementsCount && !isNaN(game.gogAchievementsCount) ? game.gogAchievementsCount : undefined)),
       gogAchievementsTotal: gogAchieveData ? (!isNaN(gogAchieveData.totalCount) ? gogAchieveData.totalCount : undefined) : (typeof gogAchievementsTotal === "number" && !isNaN(gogAchievementsTotal) ? gogAchievementsTotal : (game?.gogAchievementsTotal && !isNaN(game.gogAchievementsTotal) ? game.gogAchievementsTotal : undefined)),
-      blizzardGameId: blizzardGameId || undefined,
-      blizzardGameName: blizzardGameName || undefined,
+      blizzardGameId: blizzardGameId || (selectedWowVersion ? (selectedWowVersion === "forever_beta" ? "wow-forever" : `wow-${selectedWowVersion}`) : undefined),
+      blizzardGameName: blizzardGameName || (selectedWowVersion === "forever" ? "World of Warcraft: Forever" : (selectedWowVersion === "forever_beta" ? "World of Warcraft: Forever Beta" : (selectedWowVersion === "classic" ? "World of Warcraft: Classic Era" : "World of Warcraft: Retail"))),
       blizzardRegion: blizzardRegion || undefined,
       blizzardCharacterName: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-")[0] : (game?.blizzardCharacterName || undefined),
       blizzardRealm: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-").slice(1).join("-") : (game?.blizzardRealm || undefined),
+      blizzardSelectedCharacter: blizzardSelectedCharacter || game?.blizzardSelectedCharacter || undefined,
       blizzardProfileData: blizzardProfileData || game?.blizzardProfileData || undefined,
-      wowVersion: (blizzardGameId === "wow-classic" ? "classic" : blizzardGameId === "wow-forever" ? "forever" : blizzardGameId === "wow-tbc" ? "tbc" : blizzardGameId === "wow-mop" ? "mop" : blizzardGameId === "wow-retail" ? "retail" : (game?.wowVersion || undefined)) as any,
+      blizzardCharacters: blizzardCharacters.length > 0 ? blizzardCharacters : (game?.blizzardCharacters || undefined),
+      wowVersion: (blizzardGameId?.startsWith("wow") || name.toLowerCase().includes("warcraft") || integrationPlatform === "battlenet") ? selectedWowVersion : (game?.wowVersion || undefined),
       igdbId,
       igdbRating,
       igdbSlug,
@@ -2715,7 +2847,7 @@ export default function GameFormModal({
                     {/* Marcador GaaS Integrado */}
                     <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-pink-950/20 border border-pink-500/30 rounded-xl p-3">
                       <div className="flex items-start sm:items-center gap-2.5">
-                        <Infinity size={18} className="text-pink-400 shrink-0 mt-0.5 sm:mt-0" />
+                        <InfinityIcon size={18} className="text-pink-400 shrink-0 mt-0.5 sm:mt-0" />
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold uppercase tracking-wider text-pink-200 font-mono">
@@ -4858,11 +4990,11 @@ export default function GameFormModal({
                               </span>
                             </div>
                           )}
-                          {metacriticUserScore !== undefined && (
+                          {metacriticUserScore !== undefined && !isNaN(Number(metacriticUserScore)) && (
                             <div className="p-2.5 rounded-xl bg-zinc-950 border border-amber-500/30 text-left">
                               <span className="block text-[9px] font-black uppercase text-zinc-400 tracking-wider">Média dos Usuários</span>
                               <span className="text-sm font-black text-cyan-300 font-mono mt-0.5 block flex items-center justify-between">
-                                <span>{metacriticUserScore.toFixed(1)}</span>
+                                <span>{Number(metacriticUserScore).toFixed(1)}</span>
                               </span>
                             </div>
                           )}
@@ -5615,6 +5747,9 @@ export default function GameFormModal({
                               const r = e.target.value as any;
                               setBlizzardRegion(r);
                               setStoredBlizzardRegion(r);
+                              if (blizzardGameId?.startsWith("wow")) {
+                                handleFetchBlizzardCharacters(blizzardGameId, true);
+                              }
                             }}
                             className="bg-zinc-900 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-cyan-300 font-mono focus:outline-none focus:border-cyan-500 cursor-pointer"
                           >
@@ -5660,66 +5795,243 @@ export default function GameFormModal({
 
                     {/* WoW Character & Armory Importer if WoW game is chosen */}
                     {blizzardGameId && (blizzardGameId.startsWith("wow") || blizzardGameId === "warcraft-3-reforged") && (
-                      <div className="p-4 rounded-xl bg-zinc-900/90 border border-amber-500/30 text-left space-y-3">
+                      <div className="p-4 rounded-xl bg-zinc-900/90 border border-amber-500/30 text-left space-y-4">
+                        {/* 2.1. Dedicated WoW Version Selector */}
+                        <div className="space-y-2 pb-3 border-b border-zinc-800">
+                          <div className="flex items-center justify-between flex-wrap gap-1.5">
+                            <label className="text-xs font-bold text-amber-300 uppercase tracking-wider font-mono flex items-center gap-1.5">
+                              <Layers size={13} className="text-amber-400" />
+                              <span>2. Versão do World of Warcraft (Reflete Armory, Addon e Banco):</span>
+                            </label>
+                            <span className="text-[10px] text-zinc-400 font-mono">
+                              Versão Ativa: <strong className="text-cyan-300 font-bold uppercase">{selectedWowVersion}</strong>
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                            {[
+                              {
+                                id: "forever" as const,
+                                name: "WoW Forever (Vanilla+)",
+                                sub: "Lançamento Oficial 04/Nov • Principal",
+                                desc: "Rulesets customizados, World Boss Timers e Banco Clássico (Sem Warband/M+)",
+                                badge: "⭐ Principal",
+                                color: "border-cyan-500/70 text-cyan-300 bg-cyan-950/60 ring-1 ring-cyan-400/40",
+                                defaultGameId: "wow-forever",
+                              },
+                              {
+                                id: "forever_beta" as const,
+                                name: "WoW Forever Beta",
+                                sub: "Build 16001 em Testes",
+                                desc: "Ambiente do beta com proteção a Secret Health Values e Dead Secure SNI",
+                                badge: "Beta 16001",
+                                color: "border-rose-500/60 text-rose-300 bg-rose-950/40",
+                                defaultGameId: "wow-forever",
+                              },
+                              {
+                                id: "classic" as const,
+                                name: "WoW Classic Era",
+                                sub: "Vanilla 1.15.x Histórico",
+                                desc: "Level 60, talentos clássicos de 51 pontos e World Bosses (Kazzak/Azuregos)",
+                                badge: "1.15 Era",
+                                color: "border-amber-500/60 text-amber-300 bg-amber-950/40",
+                                defaultGameId: "wow-classic",
+                              },
+                              {
+                                id: "retail" as const,
+                                name: "WoW Retail",
+                                sub: "The War Within / Midnight",
+                                desc: "Cofre de Guerra (Warband), Mítico+ Keystone e The Great Vault",
+                                badge: "11.x Modern",
+                                color: "border-purple-500/60 text-purple-300 bg-purple-950/40",
+                                defaultGameId: "wow-retail",
+                              },
+                              {
+                                id: "mop" as const,
+                                name: "Classic MoP",
+                                sub: "Pandaria Progression",
+                                desc: "Level 90, talentos de Mists of Pandaria e coleções",
+                                badge: "Level 90",
+                                color: "border-emerald-500/60 text-emerald-300 bg-emerald-950/40",
+                                defaultGameId: "wow-mop",
+                              },
+                              {
+                                id: "tbc" as const,
+                                name: "Classic TBC",
+                                sub: "The Burning Crusade",
+                                desc: "Level 70 e Terralém",
+                                badge: "Level 70",
+                                color: "border-teal-500/60 text-teal-300 bg-teal-950/40",
+                                defaultGameId: "wow-tbc",
+                              },
+                            ].map((ver) => {
+                              const isSelected = selectedWowVersion === ver.id;
+                              return (
+                                <button
+                                  key={ver.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedWowVersion(ver.id);
+                                    setBlizzardGameId(ver.defaultGameId);
+                                    handleFetchBlizzardCharacters(ver.defaultGameId, false);
+                                  }}
+                                  className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
+                                    isSelected
+                                      ? ver.color + " shadow-md"
+                                      : "bg-zinc-950/50 border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between gap-1 w-full">
+                                    <span className="text-xs font-bold truncate">{ver.name}</span>
+                                    <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-black/40 border border-white/10 shrink-0">
+                                      {ver.badge}
+                                    </span>
+                                  </div>
+                                  <span className="text-[10px] text-zinc-400 font-medium mt-0.5">{ver.sub}</span>
+                                  <span className="text-[9px] text-zinc-500 line-clamp-1 mt-0.5">{ver.desc}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
                         <div className="flex items-center justify-between flex-wrap gap-2">
                           <div className="flex items-center gap-2">
                             <Trophy size={14} className="text-amber-400" />
                             <h5 className="text-xs font-bold text-amber-300 uppercase tracking-wider font-mono">
-                              2. Sincronização de Personagem & Armory ({blizzardGameName || "World of Warcraft"})
+                              3. Sincronização de Personagem & Armory ({blizzardGameName || "World of Warcraft"})
                             </h5>
                           </div>
 
-                          <button
-                            type="button"
-                            onClick={() => handleFetchBlizzardCharacters()}
-                            disabled={isLoadingBlizzardChars}
-                            className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/40 text-amber-300 hover:bg-amber-900/60 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
-                          >
-                            {isLoadingBlizzardChars ? (
-                              <Loader2 size={12} className="animate-spin text-amber-400" />
-                            ) : (
-                              <RefreshCw size={12} />
-                            )}
-                            <span>Sincronizar Personagens</span>
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleFetchBlizzardCharacters(blizzardGameId, true)}
+                              disabled={isLoadingBlizzardChars}
+                              className="px-2.5 py-1 rounded-lg bg-amber-950/60 border border-amber-500/40 text-amber-300 hover:bg-amber-900/60 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                            >
+                              {isLoadingBlizzardChars ? (
+                                <Loader2 size={12} className="animate-spin text-amber-400" />
+                              ) : (
+                                <RefreshCw size={12} />
+                              )}
+                              <span>Sincronizar Personagens</span>
+                            </button>
+                          </div>
                         </div>
 
                         {/* Character selector dropdown */}
                         {blizzardCharacters.length > 0 ? (
                           <div className="space-y-2">
                             <label className="text-[11px] text-zinc-400 font-medium block">
-                              Selecione seu personagem principal para importar conquistas, nível, facção, raça, classe e armory:
+                              Selecione seu personagem principal ({blizzardCharacters.length} personagem{blizzardCharacters.length > 1 ? "s" : ""} disponível{blizzardCharacters.length > 1 ? "is" : ""}):
                             </label>
                             <div className="flex flex-wrap gap-2 items-center">
-                              <select
-                                value={blizzardSelectedCharacter}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  setBlizzardSelectedCharacter(val);
-                                  const match = blizzardCharacters.find((c) => `${c.name}-${c.realmSlug || c.realm}` === val);
-                                  if (match) {
-                                    handleFetchBlizzardProfile(match.name, match.realmSlug || match.realm);
-                                  }
-                                }}
-                                className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400 cursor-pointer flex-1 min-w-[200px]"
-                              >
-                                {blizzardCharacters.map((char) => (
-                                  <option key={`${char.name}-${char.realmSlug || char.realm}`} value={`${char.name}-${char.realmSlug || char.realm}`}>
-                                    {char.name} — Nvl {char.level} {char.characterClass || ""} ({char.realm}) {char.faction === "HORDE" ? "🔴 Horda" : "🔵 Aliança"}
-                                  </option>
-                                ))}
-                              </select>
+                              {(() => {
+                                const matchedOption = blizzardCharacters.find(
+                                  (c) =>
+                                    `${c.name}-${c.realmSlug || c.realm}`.toLowerCase() === (blizzardSelectedCharacter || "").toLowerCase() ||
+                                    c.name.toLowerCase() === (blizzardSelectedCharacter || "").split("-")[0]?.toLowerCase()
+                                );
+                                const effectiveSelectVal = matchedOption
+                                  ? `${matchedOption.name}-${matchedOption.realmSlug || matchedOption.realm}`
+                                  : blizzardSelectedCharacter;
+
+                                return (
+                                  <select
+                                    value={effectiveSelectVal}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setBlizzardSelectedCharacter(val);
+                                      const match = blizzardCharacters.find(
+                                        (c) => `${c.name}-${c.realmSlug || c.realm}`.toLowerCase() === val.toLowerCase()
+                                      );
+                                      if (match) {
+                                        try {
+                                          if (game?.id) {
+                                            localStorage.setItem(`halo_blizzard_selected_char_${game.id}`, val);
+                                            localStorage.setItem(`halo_blizzard_selected_name_${game.id}`, match.name);
+                                          }
+                                          if (blizzardGameId) {
+                                            localStorage.setItem(`halo_blizzard_selected_char_${blizzardGameId}`, val);
+                                            localStorage.setItem(`halo_blizzard_selected_name_${blizzardGameId}`, match.name);
+                                          }
+                                          localStorage.setItem("halo_blizzard_selected_char_global", val);
+                                          localStorage.setItem("halo_blizzard_selected_name_global", match.name);
+                                        } catch {}
+                                        handleFetchBlizzardProfile(match.name, match.realmSlug || match.realm, blizzardGameId, match);
+                                      }
+                                    }}
+                                    className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400 cursor-pointer flex-1 min-w-[200px]"
+                                  >
+                                    {blizzardCharacters.map((char) => {
+                                      const verLabel = char.wow_version === "retail" ? "Retail" : (char.wow_version === "mop" ? "Progression (MoP)" : (char.wow_version === "tbc" ? "TBC" : "Classic Era"));
+                                      return (
+                                        <option key={`${char.name}-${char.realmSlug || char.realm}`} value={`${char.name}-${char.realmSlug || char.realm}`}>
+                                          {char.name} — Nvl {char.level} {char.characterClass || ""} ({char.realm}) {char.faction === "HORDE" ? "🔴 Horda" : "🔵 Aliança"} • [{verLabel}]
+                                        </option>
+                                      );
+                                    })}
+                                  </select>
+                                );
+                              })()}
                             </div>
                           </div>
                         ) : (
-                          <div className="text-xs text-zinc-400 italic bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 flex items-center justify-between gap-2">
+                          <div className="text-xs text-zinc-400 italic bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                             <span>
                               {isBlizzardLoggedIn
-                                ? "Nenhum personagem retornado ainda. Clique em 'Sincronizar Personagens' ou use a busca direta de reino."
-                                : "Faça login com a Battle.net acima ou informe sua BattleTag para carregar seus personagens."}
+                                ? "Nenhum personagem carregado no momento. Clique para sincronizar ou busque diretamente no Armory abaixo."
+                                : "Faça login com a Battle.net acima ou busque qualquer personagem diretamente pelo Armory oficial abaixo."}
                             </span>
+                            <button
+                              type="button"
+                              onClick={() => handleFetchBlizzardCharacters(blizzardGameId, true)}
+                              className="text-xs text-amber-400 hover:text-amber-300 underline font-semibold cursor-pointer shrink-0"
+                            >
+                              Carregar Personagens
+                            </button>
                           </div>
                         )}
+
+                        {/* Direct Blizzard Armory Character Search */}
+                        <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 text-[11px] text-zinc-400 font-medium">
+                            <Search size={12} className="text-cyan-400" />
+                            <span>Buscar no Armory Oficial:</span>
+                          </div>
+                          <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                            <input
+                              type="text"
+                              placeholder="Reino (ex: Azralon)"
+                              value={manualRealmInput}
+                              onChange={(e) => setManualRealmInput(e.target.value)}
+                              className="bg-zinc-950 border border-zinc-700/80 rounded-lg px-2.5 py-1 text-xs text-white w-28 focus:border-cyan-400 focus:outline-none"
+                            />
+                            <input
+                              type="text"
+                              placeholder="Nome do Personagem"
+                              value={manualCharNameInput}
+                              onChange={(e) => setManualCharNameInput(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  handleDirectArmorySearch();
+                                }
+                              }}
+                              className="bg-zinc-950 border border-zinc-700/80 rounded-lg px-2.5 py-1 text-xs text-white w-36 focus:border-cyan-400 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleDirectArmorySearch}
+                              disabled={isSearchingArmory}
+                              className="px-2.5 py-1 rounded-lg bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900/80 text-xs font-bold transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50 shrink-0"
+                            >
+                              {isSearchingArmory ? <Loader2 size={12} className="animate-spin text-cyan-400" /> : <Search size={12} />}
+                              <span>Buscar</span>
+                            </button>
+                          </div>
+                        </div>
 
                         {/* Active Character Preview Card */}
                         {blizzardProfileData && (

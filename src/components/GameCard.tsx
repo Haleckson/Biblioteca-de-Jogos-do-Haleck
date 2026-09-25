@@ -1159,16 +1159,16 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 </div>
               )}
 
-              {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null ? (
+              {game.metacriticUserScore !== undefined && game.metacriticUserScore !== null && !isNaN(Number(game.metacriticUserScore)) ? (
                 <div 
                   className="flex items-center justify-between gap-1 w-full min-w-0"
-                  title={`Nota do Público (Metacritic): ${game.metacriticUserScore.toFixed(1)} de 10`}
+                  title={`Nota do Público (Metacritic): ${Number(game.metacriticUserScore).toFixed(1)} de 10`}
                 >
                   <span className="shrink-0 text-[clamp(0.55rem,0.85vw,0.6875rem)] font-bold text-cyan-400 uppercase tracking-tight font-sans whitespace-nowrap flex items-center gap-0.5 sm:gap-1">
                     <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 shrink-0"></span>
-                    <span>Público</span> <span className="font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">({game.metacriticUserScore.toFixed(1)})</span>
+                    <span>Público</span> <span className="font-mono text-[clamp(0.5rem,0.75vw,0.625rem)]">({Number(game.metacriticUserScore).toFixed(1)})</span>
                   </span>
-                  <div className="flex items-center shrink-0 min-w-0 gap-0.5 flex-wrap justify-end">{renderStars(Math.round((game.metacriticUserScore / 2) * 2) / 2, `${game.id}-top-user`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]", "", game.metacriticUserScore >= 9.5)}</div>
+                  <div className="flex items-center shrink-0 min-w-0 gap-0.5 flex-wrap justify-end">{renderStars(Math.round((Number(game.metacriticUserScore) / 2) * 2) / 2, `${game.id}-top-user`, "w-[clamp(9px,0.8vw,13px)] h-[clamp(9px,0.8vw,13px)]", "", Number(game.metacriticUserScore) >= 9.5)}</div>
                 </div>
               ) : (
                 <div className="flex items-center justify-between gap-1 w-full min-w-0 opacity-40" title="Nota do Público: N/A">

@@ -23,10 +23,13 @@ import {
   getWoWFactionInfo,
   getWoWVersionInfo,
 } from "../utils/blizzardIcons";
+import { matchCharacterComposite } from "../utils/blizzardApi";
 
 export interface WoWCharacterGridProps {
   characters?: BlizzardCharacterSummary[];
   activeCharacterName?: string;
+  activeCharacterRealm?: string;
+  activeCharacterKey?: string;
   onSelectCharacter?: (char: BlizzardCharacterSummary) => void;
   isLoading?: boolean;
   filterVersion?: string;
@@ -38,6 +41,8 @@ export interface WoWCharacterGridProps {
 export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
   characters = [],
   activeCharacterName,
+  activeCharacterRealm,
+  activeCharacterKey,
   onSelectCharacter,
   isLoading = false,
   filterVersion = "all",
@@ -48,6 +53,16 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
   const [searchQuery, setSearchQuery] = useState("");
   const [internalVersion, setInternalVersion] = useState<string>(filterVersion);
   const [isListOpen, setIsListOpen] = useState(false);
+
+  const isCharSelected = (char: BlizzardCharacterSummary) => {
+    if (activeCharacterKey) {
+      if (matchCharacterComposite(char, activeCharacterKey)) return true;
+    }
+    if (activeCharacterName) {
+      return matchCharacterComposite(char, activeCharacterName, activeCharacterRealm, currentVersion);
+    }
+    return false;
+  };
   const [viewMode, setViewMode] = useState<"list_az" | "grid">("list_az");
 
   const currentVersion = onFilterVersionChange ? filterVersion : internalVersion;
@@ -59,10 +74,25 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
     }
   };
 
-  // Filtered & strictly sorted in ALPHABETICAL ORDER (A-Z)
+  // Filtered & strictly sorted in ALPHABETICAL ORDER (A-Z) with guaranteed deduplication
   const alphabeticalCharacters = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    const filtered = characters.filter((c) => {
+
+    // Deduplicate incoming characters to prevent duplicate React keys or duplicate entries
+    const seen = new Set<string>();
+    const deduplicated: BlizzardCharacterSummary[] = [];
+
+    for (const c of characters) {
+      const v = (c.wow_version || c.gameMode || "retail").toLowerCase();
+      const r = (c.realmSlug || c.realm || "").toLowerCase();
+      const k = `${c.name.toLowerCase()}#${r}#${v}`;
+      if (!seen.has(k)) {
+        seen.add(k);
+        deduplicated.push(c);
+      }
+    }
+
+    const filtered = deduplicated.filter((c) => {
       if (currentVersion !== "all") {
         const raw = (c.wow_version || c.gameMode || "retail").toLowerCase();
         let key = "retail";
@@ -359,9 +389,7 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
                 </div>
               ) : (
                 alphabeticalCharacters.map((char, index) => {
-                  const isSelected = activeCharacterName
-                    ? char.name.toLowerCase() === activeCharacterName.toLowerCase()
-                    : false;
+                  const isSelected = isCharSelected(char);
 
                   const classInfo = getWoWClassInfo(char.characterClass);
                   const raceInfo = getWoWRaceInfo(char.race, char.gender);
@@ -421,7 +449,7 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
                             <span className="text-zinc-600">•</span>
                             <span className="truncate">{raceInfo.name}</span>
                             <span className="text-zinc-600">•</span>
-                            <span className="truncate">{char.realm}</span>
+                            <span className="truncate">{char.ruleset ? `Ruleset: ${char.ruleset}` : char.realm}</span>
                           </div>
                         </div>
                       </div>
@@ -488,17 +516,15 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {chars.map((char) => {
-                    const isSelected = activeCharacterName
-                      ? char.name.toLowerCase() === activeCharacterName.toLowerCase()
-                      : false;
+                  {chars.map((char, charIdx) => {
+                    const isSelected = isCharSelected(char);
                     const classInfo = getWoWClassInfo(char.characterClass);
                     const raceInfo = getWoWRaceInfo(char.race, char.gender);
                     const factionInfo = getWoWFactionInfo(char.faction);
 
                     return (
                       <div
-                        key={`${char.name}-${char.realm}`}
+                        key={`grid-char-${vKey}-${char.name}-${char.realmSlug || char.realm}-${char.id || charIdx}`}
                         onClick={() => onSelectCharacter?.(char)}
                         className={`group relative rounded-xl p-3 border transition-all cursor-pointer select-none ${
                           isSelected
@@ -535,7 +561,9 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
                             >
                               {char.name}
                             </h5>
-                            <p className="text-[11px] text-zinc-400 truncate mt-0.5">{char.realm}</p>
+                            <p className="text-[11px] text-zinc-400 truncate mt-0.5">
+                              {char.ruleset ? `Ruleset: ${char.ruleset}` : char.realm}
+                            </p>
                             <div className="flex items-center gap-1.5 mt-1 text-[11px]">
                               <span style={{ color: classInfo.color }} className="font-semibold">
                                 {classInfo.name}

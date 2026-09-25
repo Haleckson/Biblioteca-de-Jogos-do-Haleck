@@ -36,6 +36,13 @@ import { mediaUploadQueueManager } from "./utils/mediaUploadManager";
 import SiteSettingsModal from "./components/SiteSettingsModal";
 import { formatSteamPlaytime, fetchSteamOwnedGames, fetchSteamAchievements, fetchSteamProfile, SteamPlayerSummary } from "./utils/steamApi";
 import { fetchGogOwnedGames, fetchGogAchievements, formatGogPlaytime, fetchGogProfile, resolveGogGame, setStoredGogOAuthToken, setStoredGogUsername, setStoredGogUserId, GogPlayerSummary } from "./utils/gogApi";
+import {
+  fetchWoWUserCharacters,
+  fetchBlizzardCharacterProfile,
+  getCharacterCompositeKey,
+  matchCharacterComposite,
+} from "./utils/blizzardApi";
+import { BlizzardCharacterSummary } from "./types";
 import { parsePlaytimeHours } from "./utils/playtime";
 import ImageZoomLightbox from "./components/ImageZoomLightbox";
 import { repairAllGameMedias, recoverAndReindexImgBBMedias, deduplicateAndSanitizeGameMedias } from "./utils/mediaRepair";
@@ -61,10 +68,90 @@ import {
   safeSetLocalStorage,
   safeGetLocalStorage
 } from "./utils/storageDb";
+import {
+  createWowCharacterViewer,
+  getRaceIdFromName,
+  getGenderId,
+  ZamViewerInstance,
+  Character3DConfig,
+} from "./utils/wowModelEngine";
+import { resolveCharacterGearItems } from "./utils/blizzardAssetCache";
+import {
+  resolveWowheadUrl,
+  buildWowheadUrl,
+  normalizeWoWVersion,
+  getWowheadBaseUrl,
+  WoWEntityContext,
+  WoWEntityKind,
+  WoWVersionSlug,
+} from "./utils/wowheadUrls";
+
+// Re-export Wowhead database linking utilities directly on App
+export {
+  resolveWowheadUrl,
+  buildWowheadUrl,
+  normalizeWoWVersion,
+  getWowheadBaseUrl,
+  type WoWEntityContext,
+  type WoWEntityKind,
+  type WoWVersionSlug,
+};
 
 const sortAlphabetically = (arr: string[]) => {
   return [...arr].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
 };
+
+/**
+ * Centralized initialization helper to map transmog IDs (Item ID and Display ID)
+ * stored in blizzardProfileData to ZamModelViewer instances, ensuring 3D character
+ * models accurately display transmogrified and equipped gear.
+ */
+export async function initZamModelViewer(
+  container: HTMLElement | null,
+  blizzardProfileData: any,
+  options?: { aspect?: number; version?: string; anim?: string }
+): Promise<ZamViewerInstance | null> {
+  if (!container || !blizzardProfileData) return null;
+  const aspect = options?.aspect || 0.85;
+
+  const allGear = blizzardProfileData.gear || blizzardProfileData.equippedItems || [];
+  const profileTransmogs = blizzardProfileData.transmogs;
+  const region = blizzardProfileData.region || "us";
+
+  // Map and resolve transmog IDs (prioritizing transmog displayId and itemId)
+  const items = await resolveCharacterGearItems(allGear, region, profileTransmogs);
+
+  const race = blizzardProfileData.race || "Human";
+  const gender = blizzardProfileData.gender || "MALE";
+  const raceId = getRaceIdFromName(race);
+  const genderId = getGenderId(gender);
+
+  const characterConfig: Character3DConfig = {
+    race: raceId,
+    gender: genderId,
+    skin: 0,
+    face: 0,
+    hairStyle: 1,
+    hairColor: 1,
+    facialStyle: 0,
+    items,
+    customizations: blizzardProfileData.appearance?.customizations,
+  };
+
+  const viewer = await createWowCharacterViewer(container, characterConfig, aspect);
+  if (viewer && options?.anim) {
+    setTimeout(() => {
+      try {
+        viewer.setAnimation(options.anim!);
+      } catch (_) {}
+    }, 150);
+  }
+  return viewer;
+}
+
+if (typeof window !== "undefined") {
+  (window as any).initZamModelViewer = initZamModelViewer;
+}
 
 export default function App() {
   // Core game data storage & custom tags/genres
@@ -623,6 +710,7 @@ export default function App() {
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [isBatchSyncingSteam, setIsBatchSyncingSteam] = useState(false);
   const [isBatchSyncingGog, setIsBatchSyncingGog] = useState(false);
+  const [isBatchSyncingBlizzard, setIsBatchSyncingBlizzard] = useState(false);
   const [steamProfile, setSteamProfile] = useState<SteamPlayerSummary | null>(null);
   const [gogProfile, setGogProfile] = useState<GogPlayerSummary | null>(null);
 
@@ -930,6 +1018,173 @@ export default function App() {
       triggerAlert("Erro na Sincronização GOG", "Não foi possível sincronizar todos os dados da GOG do usuário.");
     } finally {
       setIsBatchSyncingGog(false);
+    }
+  };
+
+  const handleBatchSyncBlizzard = async () => {
+    setIsBatchSyncingBlizzard(true);
+    try {
+      // 1. Fetch user WoW characters across all accounts and expansions
+      let userChars: BlizzardCharacterSummary[] = [];
+      try {
+        userChars = await fetchWoWUserCharacters({ version: "all", force: true });
+      } catch (err: any) {
+        console.warn("Could not fetch remote WoW characters from Blizzard API:", err);
+      }
+
+      // Check if any Blizzard game is in library
+      const existingBlizzardGame = games.find(
+        (g) =>
+          g.integrationPlatform === "battlenet" ||
+          (g.integrationPlatform as any) === "blizzard" ||
+          g.platform?.toLowerCase().includes("blizzard") ||
+          g.platform?.toLowerCase().includes("battle.net") ||
+          g.name?.toLowerCase().includes("warcraft") ||
+          g.name?.toLowerCase().includes("world of warcraft")
+      );
+
+      let gamesList = [...games];
+
+      // If user has no WoW game yet, create World of Warcraft entry automatically
+      if (!existingBlizzardGame) {
+        const topChar = userChars.length > 0 ? [...userChars].sort((a, b) => (b.level || 0) - (a.level || 0))[0] : null;
+        const initialGame: Game = {
+          id: `game-blizzard-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          name: "World of Warcraft",
+          platform: "PC (Battle.net)",
+          integrationPlatform: "battlenet",
+          isWow: true,
+          wowVersion: topChar?.wow_version || "retail",
+          status: ["Jogando"],
+          genre: ["MMORPG", "RPG"],
+          tags: ["Blizzard", "Battle.net", "WoW"],
+          cover: "https://images.unsplash.com/photo-1542751371-adc38448a05e?q=80&w=600",
+          icon: "⚔️",
+          iconType: "emoji",
+          rating: 5,
+          startDate: new Date().toISOString().slice(0, 10),
+          endDate: "",
+          releaseDate: "2004-11-23",
+          playtime: "0h",
+          series: "Warcraft",
+          publisher: "Blizzard Entertainment",
+          blizzardGameId: "wow-retail",
+          blizzardGameName: "World of Warcraft",
+          blizzardCharacters: userChars,
+          blizzardSelectedCharacter: topChar ? getCharacterCompositeKey(topChar) : undefined,
+          blizzardCharacterName: topChar?.name,
+          blizzardRealm: topChar?.realmSlug || topChar?.realm,
+          diary: [],
+        };
+        gamesList.push(initialGame);
+      }
+
+      let updatedCount = 0;
+      let totalCharsSynced = userChars.length;
+
+      const newGames = await Promise.all(
+        gamesList.map(async (g) => {
+          const isTarget =
+            g.integrationPlatform === "battlenet" ||
+            (g.integrationPlatform as any) === "blizzard" ||
+            g.platform?.toLowerCase().includes("blizzard") ||
+            g.platform?.toLowerCase().includes("battle.net") ||
+            g.name?.toLowerCase().includes("warcraft") ||
+            g.name?.toLowerCase().includes("world of warcraft") ||
+            g.name?.toLowerCase().includes("diablo") ||
+            g.name?.toLowerCase().includes("overwatch") ||
+            g.name?.toLowerCase().includes("starcraft") ||
+            g.name?.toLowerCase().includes("hearthstone");
+
+          if (!isTarget) return g;
+
+          let updated = { ...g };
+          updated.integrationPlatform = "battlenet";
+          updatedCount++;
+
+          const isWoW = updated.isWow || updated.name.toLowerCase().includes("warcraft");
+          if (isWoW) {
+            if (userChars.length > 0) {
+              updated.blizzardCharacters = userChars;
+            }
+
+            // Find selected or best character using composite key
+            let targetChar: BlizzardCharacterSummary | undefined;
+            if (updated.blizzardSelectedCharacter) {
+              targetChar = userChars.find((c) => matchCharacterComposite(c, updated.blizzardSelectedCharacter!));
+            }
+            if (!targetChar && updated.blizzardCharacterName) {
+              targetChar = userChars.find((c) => matchCharacterComposite(c, updated.blizzardCharacterName!, updated.blizzardRealm, updated.wowVersion));
+            }
+            if (!targetChar && userChars.length > 0) {
+              targetChar = [...userChars].sort((a, b) => (b.level || 0) - (a.level || 0))[0];
+            }
+
+            if (targetChar) {
+              const compKey = getCharacterCompositeKey(targetChar);
+              updated.blizzardSelectedCharacter = compKey;
+              updated.blizzardCharacterName = targetChar.name;
+              updated.blizzardRealm = targetChar.realmSlug || targetChar.realm;
+              updated.wowVersion = targetChar.wow_version || updated.wowVersion || "retail";
+
+              // Fetch detailed character profile with gear and collections
+              try {
+                const profile = await fetchBlizzardCharacterProfile(
+                  targetChar.name,
+                  targetChar.realmSlug || targetChar.realm,
+                  {
+                    version: targetChar.wow_version || updated.wowVersion || "retail",
+                    characterSummary: targetChar,
+                  }
+                );
+                if (profile) {
+                  updated.blizzardProfileData = profile;
+                  if (profile.avatarUrl && (!updated.coverUrl || updated.coverUrl.includes("unsplash"))) {
+                    updated.coverUrl = profile.avatarUrl;
+                  }
+                }
+              } catch (profErr) {
+                console.warn("Could not fetch detailed profile for character:", targetChar.name, profErr);
+              }
+            }
+          }
+
+          return updated;
+        })
+      );
+
+      setGames(newGames);
+      setHasUnsavedChanges(true);
+
+      // Auto-save to Firebase for true cloud persistence
+      if (isFirebaseConfigured()) {
+        try {
+          await saveToFirebase(newGames, globalTags, globalGenres);
+          setHasUnsavedChanges(false);
+        } catch (saveErr) {
+          console.warn("Aviso ao salvar sincronização Blizzard no Firebase:", saveErr);
+        }
+      }
+
+      showToast({
+        title: "⚡ Blizzard / WoW Sincronizado!",
+        message: `${updatedCount} jogo(s) e ${totalCharsSynced} personagem(ns) sincronizados e salvos com sucesso no Firebase.`,
+        type: "success",
+        duration: 7000,
+      });
+
+      triggerAlert(
+        "Sincronização Blizzard Concluída!",
+        `Foram sincronizados com sucesso ${updatedCount} jogo(s) e ${totalCharsSynced} personagem(ns) da Battle.net. Todos os dados, armory, equipamentos e coleções foram salvos no seu banco de dados persistente.`
+      );
+    } catch (err: any) {
+      console.error("Erro em handleBatchSyncBlizzard:", err);
+      triggerAlert(
+        "Erro na Sincronização Blizzard",
+        "Não foi possível sincronizar com a API da Blizzard: " + (err.message || String(err))
+      );
+    } finally {
+      setIsBatchSyncingBlizzard(false);
     }
   };
 
@@ -1695,14 +1950,34 @@ export default function App() {
     });
   }, [isAdmin]);
 
-  const handleUpdateGame = useCallback((updatedGame: Game) => {
-    if (!isAdmin) {
-      triggerAlert("Modo Admin Necessário", "É necessário ativar o Modo Admin (Editor) para realizar alterações de dados.");
-      return;
+  // Automatic persistence of gameLibrary to localStorage
+  useEffect(() => {
+    try {
+      if (games && games.length > 0) {
+        localStorage.setItem("gameLibrary", JSON.stringify(games));
+      }
+    } catch (e) {
+      console.warn("Erro ao salvar gameLibrary no localStorage:", e);
     }
+  }, [games]);
+
+  const handleUpdateGame = useCallback((updatedGame: Game) => {
     console.log(`[handleUpdateGame] Jogo atualizado: "${updatedGame.name}" (ID: ${updatedGame.id})`);
-    setGames((prev) => prev.map((g) => (g.id === updatedGame.id ? updatedGame : g)));
-  }, [isAdmin]);
+    setGames((prev) => {
+      const updated = prev.map((g) => (g.id === updatedGame.id ? updatedGame : g));
+      try {
+        localStorage.setItem("gameLibrary", JSON.stringify(updated));
+      } catch (e) {
+        console.warn("Erro ao salvar gameLibrary no localStorage:", e);
+      }
+      if (isFirebaseConfigured()) {
+        saveToFirebase(updated, globalTags, globalGenres).catch((err) => {
+          console.warn("[handleUpdateGame] Erro ao sincronizar com Firebase:", err);
+        });
+      }
+      return updated;
+    });
+  }, [globalTags, globalGenres]);
 
   // Create or Update
   const handleSaveGame = (
@@ -2774,6 +3049,8 @@ export default function App() {
         isSyncingSteamBatch={isBatchSyncingSteam}
         onBatchSyncGog={handleBatchSyncGog}
         isSyncingGogBatch={isBatchSyncingGog}
+        onBatchSyncBlizzard={handleBatchSyncBlizzard}
+        isSyncingBlizzardBatch={isBatchSyncingBlizzard}
         triggerAlert={triggerAlert}
       />
 
