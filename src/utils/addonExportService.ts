@@ -988,10 +988,10 @@ AI Studio.
 1. Extraia esta pasta "HaleckAccountImporter" dentro do diretório de AddOns:
    - WoW Forever Beta (Vanilla+ • Pasta do Cliente: _classic_beta_):
      World of Warcraft/_classic_beta_/Interface/AddOns/
-     (ATENÇÃO: A pasta de instalação do WoW Forever Beta vem nomeada como _classic_beta_)
-   - WoW Forever Oficial (Vanilla+ • Lançamento 04/Nov):
-     World of Warcraft/_classic_era_/Interface/AddOns/  ou  World of Warcraft/_forever_/Interface/AddOns/
-   - WoW Classic Era (1.15.x):
+     (ATENÇÃO CRÍTICA: O cliente do Beta do WoW Forever vem no disco na pasta _classic_beta_. Não confundir com Classic Era nem Classic!)
+   - WoW Forever Oficial (Vanilla+ • Lançamento Oficial: 04 de Novembro de 2026):
+     (Nome oficial da pasta a ser anunciado pela Blizzard no lançamento - NÃO é _classic_era_ nem _classic_)
+   - WoW Classic Era (1.15.x Original):
      World of Warcraft/_classic_era_/Interface/AddOns/
    - WoW Classic (Progression / MoP):
      World of Warcraft/_classic_/Interface/AddOns/

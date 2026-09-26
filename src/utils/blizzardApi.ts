@@ -10,6 +10,38 @@ import {
   BlizzardProfileData,
 } from "../types";
 import { saveBlizzardAuthToFirebase, removeBlizzardAuthFromFirebase } from "./firebase";
+import {
+  getBlizzardRawCache,
+  setBlizzardRawCache,
+  invalidateBlizzardRawCache,
+  clearAllBlizzardRawCache,
+  getBlizzardCacheStats,
+  buildBlizzardProfileCacheKey,
+  BLIZZARD_CACHE_TTL_24H,
+} from "./blizzardApiCache";
+import {
+  validateBlizzardCodePreflight,
+  notifyBlizzardReauthRequired,
+  registerBlizzardReauthListener,
+  sanitizeBlizzardAuthCode,
+  markCodePending,
+  markCodeConsumed,
+  markCodeExpired,
+} from "./blizzardOAuthPreflight";
+
+export {
+  getBlizzardRawCache,
+  setBlizzardRawCache,
+  invalidateBlizzardRawCache,
+  clearAllBlizzardRawCache,
+  getBlizzardCacheStats,
+  buildBlizzardProfileCacheKey,
+  BLIZZARD_CACHE_TTL_24H,
+  validateBlizzardCodePreflight,
+  notifyBlizzardReauthRequired,
+  registerBlizzardReauthListener,
+  sanitizeBlizzardAuthCode,
+};
 
 // Official Blizzard Game Catalog with focus on WoW and major franchises
 export const BLIZZARD_OFFICIAL_GAMES: BlizzardOfficialGame[] = [
@@ -397,52 +429,158 @@ export async function requestBlizzardClientCredentials(
 }
 
 // Exchange code obtained from popup callback
-export async function exchangeBlizzardCode(code: string, redirectUri?: string): Promise<{
+export interface BlizzardOAuthExchangeResult {
   success: boolean;
   token?: string;
   battleTag?: string;
   accountId?: string;
   error?: string;
-}> {
+  isInvalidGrant?: boolean;
+  isConsumed?: boolean;
+  isExpired?: boolean;
+  requiresReauth?: boolean;
+  userNotice?: {
+    title: string;
+    message: string;
+  };
+}
+
+// Exchange code obtained from popup callback with pre-flight validation
+export async function exchangeBlizzardCode(
+  code: string,
+  redirectUri?: string
+): Promise<BlizzardOAuthExchangeResult> {
+  // Pre-flight check: validate authorization code before firing network request
+  const preflight = validateBlizzardCodePreflight(code);
+
+  if (preflight.inFlightPromise) {
+    return preflight.inFlightPromise;
+  }
+
+  if (!preflight.valid) {
+    return {
+      success: false,
+      error: preflight.friendlyMessage || "Código de autorização inválido ou expirado",
+      isInvalidGrant: true,
+      isConsumed: preflight.reason === "already_consumed",
+      isExpired: preflight.reason === "expired",
+      requiresReauth: true,
+      userNotice: {
+        title: preflight.friendlyTitle || "Reautenticação Necessária",
+        message: preflight.friendlyMessage || "Por favor, inicie uma nova autenticação.",
+      },
+    };
+  }
+
+  const sanitizedCode = preflight.sanitizedCode;
+  markCodePending(sanitizedCode);
+
+  const exchangeTask = (async (): Promise<BlizzardOAuthExchangeResult> => {
+    try {
+      const effRedirectUri = redirectUri || getEffectiveBlizzardRedirectUri();
+      const res = await fetch("/api/blizzard/oauth-exchange", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          code: sanitizedCode,
+          redirectUri: effRedirectUri,
+          region: getStoredBlizzardRegion(),
+          clientId: getStoredBlizzardClientId() || undefined,
+          clientSecret: getStoredBlizzardClientSecret() || undefined,
+        }),
+      });
+
+      const data = await res.json().catch(() => ({ success: false, error: "Resposta inválida do servidor" }));
+      if (!res.ok || !data.success) {
+        const isGrantError = Boolean(
+          data.isInvalidGrant ||
+          (data.details && data.details.includes("invalid_grant")) ||
+          (data.error && data.error.includes("invalid_grant"))
+        );
+
+        if (isGrantError) {
+          markCodeExpired(sanitizedCode, data.error);
+          const friendlyTitle = "Autorização Expirada ou Já Utilizada";
+          const friendlyMsg =
+            "O código de autorização expirou ou já foi consumido pela Blizzard. " +
+            "Por favor, clique em 'Conectar com Blizzard' para iniciar uma nova autorização.";
+          notifyBlizzardReauthRequired(friendlyTitle, friendlyMsg);
+          return {
+            success: false,
+            error: data.error || friendlyMsg,
+            isInvalidGrant: true,
+            requiresReauth: true,
+            userNotice: {
+              title: friendlyTitle,
+              message: friendlyMsg,
+            },
+          };
+        }
+
+        return {
+          success: false,
+          error: data.error || "Falha na troca de código da Blizzard",
+          isInvalidGrant: false,
+        };
+      }
+
+      // Mark code as consumed in lifecycle registry
+      markCodeConsumed(sanitizedCode, { battleTag: data.battleTag });
+
+      if (data.token) {
+        const expires = Date.now() + (data.expiresIn || 86400) * 1000;
+        setStoredBlizzardOAuthToken(data.token, expires, data.refreshToken);
+      }
+      if (data.battleTag) {
+        setStoredBlizzardBattleTag(data.battleTag);
+      }
+      if (data.accountId) {
+        setStoredBlizzardAccountId(data.accountId);
+      }
+
+      return {
+        success: true,
+        token: data.token,
+        battleTag: data.battleTag,
+        accountId: data.accountId,
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || String(err) };
+    }
+  })();
+
+  return exchangeTask;
+}
+
+/**
+ * Persists an imported or viewed WoW character profile to the server database
+ * so it is permanently saved and never requires re-importing or re-fetching
+ */
+export async function persistWoWProfileOnServer(profile: any): Promise<boolean> {
+  if (!profile || !profile.name) return false;
   try {
-    const effRedirectUri = redirectUri || getEffectiveBlizzardRedirectUri();
-    const res = await fetch("/api/blizzard/oauth-exchange", {
+    const res = await fetch("/api/blizzard/wow/persist-profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code,
-        redirectUri: effRedirectUri,
-        region: getStoredBlizzardRegion(),
-        clientId: getStoredBlizzardClientId() || undefined,
-        clientSecret: getStoredBlizzardClientSecret() || undefined,
-      }),
+      body: JSON.stringify({ profile }),
     });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
+/**
+ * Loads all saved character profiles directly from the server disk database
+ */
+export async function fetchPersistedWoWProfiles(): Promise<any[]> {
+  try {
+    const res = await fetch("/api/blizzard/wow/persisted-profiles");
+    if (!res.ok) return [];
     const data = await res.json();
-    if (!res.ok || !data.success) {
-      throw new Error(data.error || "Falha na troca de código da Blizzard");
-    }
-
-    if (data.token) {
-      const expires = Date.now() + (data.expiresIn || 86400) * 1000;
-      setStoredBlizzardOAuthToken(data.token, expires, data.refreshToken);
-    }
-    if (data.battleTag) {
-      setStoredBlizzardBattleTag(data.battleTag);
-    }
-    if (data.accountId) {
-      setStoredBlizzardAccountId(data.accountId);
-    }
-
-    return {
-      success: true,
-      token: data.token,
-      battleTag: data.battleTag,
-      accountId: data.accountId,
-    };
-  } catch (err: any) {
-    console.error("Erro em exchangeBlizzardCode:", err);
-    return { success: false, error: err.message || String(err) };
+    return data.profiles || [];
+  } catch {
+    return [];
   }
 }
 
@@ -571,63 +709,12 @@ export async function fetchBlizzardWoWCharacters(options?: FetchWoWCharactersOpt
   return fetchWoWUserCharacters(options);
 }
 
-// Fetch character details: gear, stats, achievements, talents, reputations
-export async function fetchBlizzardCharacterProfile(
-  characterName: string,
-  realmSlug: string,
-  options?: {
-    region?: string;
-    gameId?: string;
-    characterSummary?: BlizzardCharacterSummary;
-    characterClass?: string;
-    race?: string;
-    level?: number;
-    gender?: string;
-    faction?: string;
-    activeSpec?: string;
-    equippedItemLevel?: number;
-    version?: string;
-  }
-): Promise<BlizzardProfileData> {
-  const region = options?.region || getStoredBlizzardRegion();
-  const token = getStoredBlizzardOAuthToken();
-  const gameId = options?.gameId || "wow-retail";
-  const summary = options?.characterSummary;
-
-  const charClass = options?.characterClass || summary?.characterClass;
-  const race = options?.race || summary?.race;
-  const level = options?.level !== undefined ? options.level : summary?.level;
-  const gender = options?.gender || summary?.gender;
-  const faction = options?.faction || summary?.faction;
-  const activeSpec = options?.activeSpec || summary?.activeSpec;
-  const equippedItemLevel = options?.equippedItemLevel !== undefined ? options.equippedItemLevel : summary?.equippedItemLevel;
-  const version = options?.version || summary?.wow_version || summary?.gameMode;
-
-  const params = new URLSearchParams({
-    character: characterName,
-    realm: realmSlug,
-    region,
-    gameId,
-    ...(charClass ? { characterClass: charClass } : {}),
-    ...(race ? { race } : {}),
-    ...(level !== undefined ? { level: String(level) } : {}),
-    ...(gender ? { gender } : {}),
-    ...(faction ? { faction } : {}),
-    ...(activeSpec ? { activeSpec } : {}),
-    ...(equippedItemLevel !== undefined ? { equippedItemLevel: String(equippedItemLevel) } : {}),
-    ...(version ? { version } : {}),
-    ...(token ? { token } : {}),
-    ...(getStoredBlizzardClientId() ? { clientId: getStoredBlizzardClientId() } : {}),
-    ...(getStoredBlizzardClientSecret() ? { clientSecret: getStoredBlizzardClientSecret() } : {}),
-  });
-
-  const res = await fetch(`/api/blizzard/wow/character-profile?${params.toString()}`);
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    throw new Error(err.error || `Erro ao buscar perfil do personagem (${res.status})`);
-  }
-
-  const profile: BlizzardProfileData = await res.json();
+/**
+ * Enriches raw Blizzard character profile data with transmog slot mappings,
+ * appearance item fallbacks, and collection display IDs.
+ */
+export function enrichBlizzardProfileData(profile: BlizzardProfileData): BlizzardProfileData {
+  if (!profile) return profile;
 
   // Mapear e extrair dados de transmog de cada item/slot do personagem com alta fidelidade
   const transmogsRecord: Record<string, {
@@ -770,6 +857,93 @@ export async function fetchBlizzardCharacterProfile(
   profile.transmogSlots = transmogSlotsList;
 
   return profile;
+}
+
+// Fetch character details: gear, stats, achievements, talents, reputations
+// Validates raw local cache with 24h TTL before performing network requests
+export async function fetchBlizzardCharacterProfile(
+  characterName: string,
+  realmSlug: string,
+  options?: {
+    region?: string;
+    gameId?: string;
+    characterSummary?: BlizzardCharacterSummary;
+    characterClass?: string;
+    race?: string;
+    level?: number;
+    gender?: string;
+    faction?: string;
+    activeSpec?: string;
+    equippedItemLevel?: number;
+    version?: string;
+    force?: boolean;
+    bypassCache?: boolean;
+  }
+): Promise<BlizzardProfileData> {
+  const region = options?.region || getStoredBlizzardRegion();
+  const token = getStoredBlizzardOAuthToken();
+  const gameId = options?.gameId || "wow-retail";
+  const summary = options?.characterSummary;
+
+  const charClass = options?.characterClass || summary?.characterClass;
+  const race = options?.race || summary?.race;
+  const level = options?.level !== undefined ? options.level : summary?.level;
+  const gender = options?.gender || summary?.gender;
+  const faction = options?.faction || summary?.faction;
+  const activeSpec = options?.activeSpec || summary?.activeSpec;
+  const equippedItemLevel = options?.equippedItemLevel !== undefined ? options.equippedItemLevel : summary?.equippedItemLevel;
+  const version = options?.version || summary?.wow_version || summary?.gameMode || "retail";
+
+  // Dedicated raw responses local cache lookup (TTL 24h)
+  const cacheKey = buildBlizzardProfileCacheKey(characterName, realmSlug, region, gameId, version);
+
+  if (!options?.force && !options?.bypassCache) {
+    try {
+      const cached = await getBlizzardRawCache<BlizzardProfileData>(cacheKey);
+      if (cached && cached.isFresh && cached.data) {
+        // Deep copy raw payload to prevent local mutations from contaminating the cache store
+        const rawCopy: BlizzardProfileData = JSON.parse(JSON.stringify(cached.data));
+        return enrichBlizzardProfileData(rawCopy);
+      }
+    } catch (cacheErr) {
+      console.warn("[BlizzardApiCache] Erro ao consultar cache local de perfil:", cacheErr);
+    }
+  }
+
+  const params = new URLSearchParams({
+    character: characterName,
+    realm: realmSlug,
+    region,
+    gameId,
+    ...(charClass ? { characterClass: charClass } : {}),
+    ...(race ? { race } : {}),
+    ...(level !== undefined ? { level: String(level) } : {}),
+    ...(gender ? { gender } : {}),
+    ...(faction ? { faction } : {}),
+    ...(activeSpec ? { activeSpec } : {}),
+    ...(equippedItemLevel !== undefined ? { equippedItemLevel: String(equippedItemLevel) } : {}),
+    ...(version ? { version } : {}),
+    ...(token ? { token } : {}),
+    ...(getStoredBlizzardClientId() ? { clientId: getStoredBlizzardClientId() } : {}),
+    ...(getStoredBlizzardClientSecret() ? { clientSecret: getStoredBlizzardClientSecret() } : {}),
+  });
+
+  const res = await fetch(`/api/blizzard/wow/character-profile?${params.toString()}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Erro ao buscar perfil do personagem (${res.status})`);
+  }
+
+  // Raw API response received from Blizzard endpoint
+  const rawProfile: BlizzardProfileData = await res.json();
+
+  // Exclusively store raw Blizzard API response in the local cache with 24h TTL
+  setBlizzardRawCache(cacheKey, rawProfile, BLIZZARD_CACHE_TTL_24H, "/api/blizzard/wow/character-profile").catch((err) => {
+    console.warn("[BlizzardApiCache] Falha ao gravar cache local:", err);
+  });
+
+  const profileCopy: BlizzardProfileData = JSON.parse(JSON.stringify(rawProfile));
+  return enrichBlizzardProfileData(profileCopy);
 }
 
 /**

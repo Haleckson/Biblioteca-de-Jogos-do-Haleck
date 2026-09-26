@@ -107,21 +107,33 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
   const ruleset = char.ruleset || game.ruleset || (game.isForever ? realm : undefined);
 
   // Version detection
-  let detectedVersion = (game.version || char.wow_version || "retail").toLowerCase();
+  let detectedVersion = (game.version || char.wow_version || "").toLowerCase();
+  const rawPath = String(game.clientFolder || game.folder || game.path || char.folder || "").toLowerCase();
   let isForever = false;
 
+  // CRITICAL DISTINCTION:
+  // The WoW Forever Beta client resides strictly in `_classic_beta_` on disk.
+  // It is NOT Classic Era (`_classic_era_`) nor Classic Progression (`_classic_`).
+  // When WoW Forever launches on Nov 4, 2026, the official folder name will be announced by Blizzard.
   if (
-    ruleset ||
+    rawPath.includes("_classic_beta_") ||
+    rawPath.includes("classic_beta") ||
     game.isForever ||
+    game.isForeverBeta ||
     detectedVersion.includes("forever") ||
     realm.toLowerCase().includes("forever") ||
-    realm.toLowerCase().includes("16001")
+    realm.toLowerCase().includes("16001") ||
+    String(game.build || "").startsWith("1600")
   ) {
     detectedVersion = "forever";
     isForever = true;
-  } else if (detectedVersion.includes("classic") || detectedVersion === "era") {
+  } else if (
+    rawPath.includes("_classic_era_") ||
+    detectedVersion.includes("era") ||
+    detectedVersion === "classic"
+  ) {
     detectedVersion = "classic";
-  } else if (detectedVersion.includes("mop") || detectedVersion.includes("pandaria")) {
+  } else if (rawPath.includes("_classic_") || detectedVersion.includes("mop") || detectedVersion.includes("pandaria")) {
     detectedVersion = "mop";
   } else if (detectedVersion.includes("tbc") || detectedVersion.includes("crusade")) {
     detectedVersion = "tbc";
@@ -131,8 +143,8 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
 
   const versionLabels: Record<string, string> = {
     retail: "WoW Retail (The War Within)",
-    classic: "WoW Classic Era",
-    forever: "WoW Forever (Beta 16001)",
+    classic: "WoW Classic Era (1.15.x)",
+    forever: "WoW Forever Beta (Build 16001 • _classic_beta_)",
     mop: "Mists of Pandaria",
     tbc: "The Burning Crusade",
   };

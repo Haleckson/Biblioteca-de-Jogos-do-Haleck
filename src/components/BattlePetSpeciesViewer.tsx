@@ -566,7 +566,15 @@ export const BattlePetSpeciesViewer: React.FC<BattlePetSpeciesViewerProps> = ({
                       )}
 
                       <WowheadBadgeLink
-                        url={getWowheadPetUrl(pet.id, pet.speciesId, undefined, pet.itemId, pet.name)}
+                        url={resolveWowheadUrl({
+                          kind: "pet",
+                          id: pet.id,
+                          speciesId: pet.speciesId,
+                          creatureId: pet.creatureId || (pet as any).npcId,
+                          itemId: pet.itemId,
+                          spellId: pet.spellId,
+                          name: pet.name,
+                        })}
                         label="Wowhead"
                         compact
                       />

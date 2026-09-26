@@ -6,10 +6,19 @@
 import React from "react";
 import { ExternalLink } from "lucide-react";
 import {
-  WOW_PET_CREATURE_TO_SPECIES,
+  WOW_PET_CREATURE_TO_SPECIES as LEGACY_PET_CREATURE_TO_SPECIES,
   WOW_PET_NAME_TO_DISPLAY,
   WOW_MOUNT_NAME_TO_DISPLAY,
 } from "./blizzardMountDb";
+import {
+  WOW_MOUNT_ID_TO_SPELL as OFFICIAL_MOUNT_ID_TO_SPELL,
+  WOW_MOUNT_NAME_TO_SPELL as OFFICIAL_MOUNT_NAME_TO_SPELL,
+} from "./blizzardMountSpellDb";
+import {
+  WOW_PET_SPECIES_TO_CREATURE as OFFICIAL_PET_SPECIES_TO_CREATURE,
+  WOW_PET_CREATURE_TO_SPECIES as OFFICIAL_PET_CREATURE_TO_SPECIES,
+  WOW_PET_SPECIES_TO_SPELL as OFFICIAL_PET_SPECIES_TO_SPELL,
+} from "./blizzardPetSpeciesDb";
 
 export type WoWEntityKind =
   | "item"
@@ -79,7 +88,19 @@ export function toWowheadSlug(name?: string): string {
  * Inverted Species ID -> Creature ID (NPC ID) map for Battle Pets.
  * Wowhead organizes Battle Pets under /npc=<creatureId>, NEVER /battle-pet=.
  */
-export const WOW_PET_SPECIES_TO_CREATURE: Record<number, number> = {};
+export const WOW_PET_SPECIES_TO_CREATURE: Record<number, number> = {
+  ...OFFICIAL_PET_SPECIES_TO_CREATURE,
+};
+
+export const WOW_PET_CREATURE_TO_SPECIES: Record<number, number> = {
+  ...LEGACY_PET_CREATURE_TO_SPECIES,
+  ...OFFICIAL_PET_CREATURE_TO_SPECIES,
+};
+
+export const WOW_PET_SPECIES_TO_SPELL: Record<number, number> = {
+  ...OFFICIAL_PET_SPECIES_TO_SPELL,
+};
+
 for (const [creatureIdStr, speciesId] of Object.entries(WOW_PET_CREATURE_TO_SPECIES)) {
   const cId = parseInt(creatureIdStr, 10);
   const sId = Number(speciesId);
@@ -93,8 +114,9 @@ for (const [creatureIdStr, speciesId] of Object.entries(WOW_PET_CREATURE_TO_SPEC
  * Wowhead organizes Mounts strictly under /spell=<spellId> and /spells/mounts!
  */
 export const WOW_MOUNT_ID_TO_SPELL: Record<number, number> = {
+  ...OFFICIAL_MOUNT_ID_TO_SPELL,
   363: 72286,   // Invincible
-  449: 127271,  // Azure Water Strider
+  449: 118089,  // Azure Water Strider (SourceSpellID 118089 / 127271)
   488: 127272,  // Crimson Water Strider
   183: 34090,   // Ashes of Al'ar
   197: 42777,   // Swift Spectral Tiger
@@ -293,6 +315,7 @@ export const WOW_MOUNT_ITEM_TO_SPELL: Record<number, number> = {
  * Normalized name to Summon Spell ID lookup for mounts
  */
 export const WOW_MOUNT_NAME_TO_SPELL: Record<string, number> = {
+  ...OFFICIAL_MOUNT_NAME_TO_SPELL,
   invincible: 72286,
   invinciblesreins: 72286,
   invencivel: 72286,
@@ -505,14 +528,19 @@ export function resolvePetCreatureId(ctx: WoWEntityContext): number | undefined 
   const numId = typeof rawId === "number" ? rawId : parseInt(String(rawId || "0"), 10) || 0;
   const speciesId = ctx.speciesId && ctx.speciesId > 0 ? ctx.speciesId : (numId > 0 && numId < 100000 ? numId : 0);
 
-  // 1. Inverted species to creature ID lookup
+  // 1. Inverted species to creature ID lookup (e.g. species 320 -> creature 54027)
   if (speciesId > 0 && WOW_PET_SPECIES_TO_CREATURE[speciesId]) {
     return WOW_PET_SPECIES_TO_CREATURE[speciesId];
   }
 
-  // 2. If numId itself is already a creature ID (exists in WOW_PET_CREATURE_TO_SPECIES keys)
+  // 2. If numId itself is already a creature ID (exists in WOW_PET_CREATURE_TO_SPECIES keys, e.g. 199938)
   if (numId > 0 && WOW_PET_CREATURE_TO_SPECIES[numId]) {
     return numId;
+  }
+
+  // 3. If numId > 0, check if numId is in WOW_PET_SPECIES_TO_CREATURE
+  if (numId > 0 && WOW_PET_SPECIES_TO_CREATURE[numId]) {
+    return WOW_PET_SPECIES_TO_CREATURE[numId];
   }
 
   return undefined;
@@ -597,8 +625,11 @@ export function resolveWowheadUrl(
     if (creatureId && creatureId > 0) {
       return `${base}/npc=${creatureId}${slug}`;
     }
-    if (ctx.spellId && ctx.spellId > 0) {
-      return `${base}/spell=${ctx.spellId}${slug}`;
+    const speciesId = ctx.speciesId || (numId > 0 && numId < 100000 ? numId : 0);
+    const spellFromSpecies = speciesId > 0 ? WOW_PET_SPECIES_TO_SPELL[speciesId] : 0;
+    const effSpellId = ctx.spellId || spellFromSpecies;
+    if (effSpellId && effSpellId > 0) {
+      return `${base}/spell=${effSpellId}${slug}`;
     }
     if (ctx.itemId && ctx.itemId > 0) {
       return `${base}/item=${ctx.itemId}${slug}`;

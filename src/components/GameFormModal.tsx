@@ -59,6 +59,7 @@ import {
   setStoredBlizzardRedirectUri,
   getEffectiveBlizzardRedirectUri,
   verifyAndSaveManualToken,
+  registerBlizzardReauthListener,
 } from "../utils/blizzardApi";
 import {
   IgdbGameCandidate,
@@ -1398,6 +1399,10 @@ export default function GameFormModal({
 
   // Listen for popup message from Blizzard OAuth callback
   useEffect(() => {
+    const unsubscribe = registerBlizzardReauthListener((title, message) => {
+      triggerAlert(title, message);
+    });
+
     const handleMessage = async (event: MessageEvent) => {
       if (event.data?.type === "BLIZZARD_AUTH_SUCCESS") {
         if (event.data.error) {
@@ -1422,7 +1427,9 @@ export default function GameFormModal({
                 handleFetchBlizzardCharacters(blizzardGameId);
               }
             } else {
-              triggerAlert("Aviso de Conexão", exchangeResult.error || "Não foi possível validar as credenciais.");
+              const alertTitle = exchangeResult.userNotice?.title || "Aviso de Conexão";
+              const alertMsg = exchangeResult.userNotice?.message || exchangeResult.error || "Não foi possível validar as credenciais. Por favor, tente novamente.";
+              triggerAlert(alertTitle, alertMsg);
             }
           } catch (err: any) {
             triggerAlert("Erro na Conexão", err?.message || "Falha ao processar código de acesso da Blizzard.");
@@ -1435,7 +1442,10 @@ export default function GameFormModal({
       }
     };
     window.addEventListener("message", handleMessage);
-    return () => window.removeEventListener("message", handleMessage);
+    return () => {
+      unsubscribe();
+      window.removeEventListener("message", handleMessage);
+    };
   }, [blizzardGameId, blizzardRegion, triggerAlert]);
 
   const handleCopyCallbackUrl = () => {

@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste, Video, Code } from "lucide-react";
+import { Settings, X, Key, Image, Database, Sliders, Shield, LogOut, CheckCircle2, ChevronRight, Sparkles, HardDrive, Mail, Gamepad2, RefreshCw, Loader2, Globe, MonitorPlay, Save, Check, Lock, Cpu, Trash2, Volume2, VolumeX, Wifi, WifiOff, Radio, Gauge, Zap, Layers, Copy, ExternalLink, ClipboardPaste, Video, Code, Clock } from "lucide-react";
 import { WoWAddonDevModal } from "./WoWAddonDevModal";
 import { isSoundEffectsEnabled, setSoundEffectsEnabled, playRetroSound } from "../utils/audioEffects";
 import { getCustomImgBBKey } from "../utils/imgbb";
@@ -46,6 +46,9 @@ import {
   verifyAndSaveManualToken,
   requestBlizzardClientCredentials,
   getEffectiveBlizzardRedirectUri,
+  registerBlizzardReauthListener,
+  clearAllBlizzardRawCache,
+  getBlizzardCacheStats,
   DEFAULT_BLIZZARD_CLIENT_ID,
   DEFAULT_BLIZZARD_CLIENT_SECRET,
   BLIZZARD_ALLOWED_REDIRECT_URIS,
@@ -170,6 +173,16 @@ export default function SiteSettingsModal({
     window.addEventListener("message", handleAuthMessage);
     return () => window.removeEventListener("message", handleAuthMessage);
   }, [blizzardRegion, blizzardClientId, blizzardClientSecret]);
+
+  // Listen to Blizzard OAuth pre-flight re-authentication prompts
+  useEffect(() => {
+    const unsubscribe = registerBlizzardReauthListener((title, message) => {
+      if (triggerAlert) {
+        triggerAlert(title, message);
+      }
+    });
+    return () => unsubscribe();
+  }, [triggerAlert]);
 
   // Check URL query parameters if redirected in full window
   useEffect(() => {
@@ -299,6 +312,14 @@ export default function SiteSettingsModal({
   });
   const [isClearingImageCache, setIsClearingImageCache] = useState(false);
 
+  // Local Blizzard API Raw Responses Cache State
+  const [blizzardCacheStats, setBlizzardCacheStats] = useState<{ count: number; totalSizeBytes: number; storageType: string }>({
+    count: 0,
+    totalSizeBytes: 0,
+    storageType: "indexeddb",
+  });
+  const [isClearingBlizzardCache, setIsClearingBlizzardCache] = useState(false);
+
   const [sfxEnabled, setSfxEnabled] = useState(isSoundEffectsEnabled());
   const [youtubeConnected, setYoutubeConnected] = useState(isYouTubeAuthenticated());
   const [isConnectingYoutube, setIsConnectingYoutube] = useState(false);
@@ -306,6 +327,7 @@ export default function SiteSettingsModal({
   // Auto load profile summary, IGDB and SteamGridDB status on mount
   useEffect(() => {
     getImageCacheStats().then(setImageCacheStats);
+    getBlizzardCacheStats().then(setBlizzardCacheStats);
 
     const user = getStoredGogUsername();
     if (user) {
@@ -559,12 +581,27 @@ export default function SiteSettingsModal({
 
     setIsConnectingBlizzard(true);
     try {
-      if (target.includes("code=") || target.includes("localhost") || target.length >= 25) {
+      // 1. Direct BattleTag linking (e.g. "Arthas#1234" or "Haleck#1234")
+      if (target.includes("#") && !target.includes("code=") && !target.includes("http")) {
+        setStoredBlizzardBattleTag(target);
+        setBlizzardBattleTag(target);
+        setBlizzardDirectAuthModalOpen(false);
+        setIsBlizzardConnected(true);
+        if (triggerAlert) {
+          triggerAlert("BattleTag Vinculada com Sucesso!", `Conta BattleTag "${target}" salva permanentemente. Personagens e dados sincronizados no servidor.`);
+        }
+        return;
+      }
+
+      // 2. OAuth authorization code or access token exchange
+      if (target.includes("code=") || target.includes("localhost") || target.length >= 20) {
         let code = target;
-        if (target.includes("code=")) {
-          const match = target.match(/[?&]code=([^&#\s]+)/);
+        if (code.includes("code=")) {
+          const match = code.match(/(?:[?&]|^)code=([^&#\s]+)/);
           if (match) code = match[1];
         }
+        code = code.replace(/^Bearer\s+/i, "").trim().replace(/^["']|["']$/g, "");
+
         try {
           const effRedirectUri = getEffectiveBlizzardRedirectUri();
           const authResult = await exchangeBlizzardCode(code, effRedirectUri);
@@ -580,10 +617,18 @@ export default function SiteSettingsModal({
               );
             }
             return;
-          } else if (authResult && authResult.error) {
-            console.warn("Blizzard OAuth exchange error:", authResult.error);
+          } else if (authResult && (authResult.requiresReauth || authResult.error)) {
+            console.warn("Blizzard OAuth exchange aviso:", authResult.error);
+            const noticeTitle = authResult.userNotice?.title || "Código Expirado ou Inválido";
+            const noticeMsg =
+              authResult.userNotice?.message ||
+              authResult.error ||
+              "O código de autorização expirou ou já foi utilizado. Por favor, inicie uma nova autenticação.";
             if (triggerAlert) {
-              triggerAlert("Erro na Conexão com a Blizzard", authResult.error);
+              triggerAlert(noticeTitle, noticeMsg);
+            }
+            if (authResult.requiresReauth) {
+              return;
             }
           }
         } catch (authErr: any) {
@@ -591,7 +636,7 @@ export default function SiteSettingsModal({
         }
       }
 
-      // Check if it's a token or valid BattleTag
+      // 3. Fallback: Check if it's a token or valid BattleTag
       const verified = await verifyAndSaveManualToken(target, blizzardBattleTag);
       if (verified) {
         setIsBlizzardConnected(true);
@@ -601,7 +646,7 @@ export default function SiteSettingsModal({
         if (triggerAlert) {
           triggerAlert(
             "Battle.net / Blizzard Conectado!",
-            `Sessão persistente ativada para "${tag}". Seus dados da Blizzard e World of Warcraft estão sincronizados permanentemente.`
+            `Sessão persistente ativada para "${tag}". Seus dados da Blizzard e World of Warcraft estão sincronizados permanentemente no servidor.`
           );
         }
       } else {
@@ -616,7 +661,7 @@ export default function SiteSettingsModal({
           }
         } else {
           if (triggerAlert) {
-            triggerAlert("Falha na Validação", "Não foi possível validar o código ou token da Blizzard. Certifique-se de copiar o código retornado na URL de login.");
+            triggerAlert("Falha na Validação", "Não foi possível validar o código ou token da Blizzard. Certifique-se de copiar o código retornado na URL de login ou informe sua BattleTag (ex: Arthas#1234).");
           }
         }
       }
@@ -1773,6 +1818,54 @@ export default function SiteSettingsModal({
                     <Trash2 size={12} className="text-rose-400" />
                   )}
                   <span>Limpar Cache</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Local Blizzard API Raw Responses Cache Card */}
+            <div className="p-4 bg-zinc-900/80 border border-zinc-800 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+              <div className="flex items-center gap-3.5 min-w-0">
+                <div className="p-2.5 bg-sky-500/15 border border-sky-500/30 rounded-xl text-sky-400 shrink-0">
+                  <Database size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-white">
+                      Cache Local da Blizzard API
+                    </span>
+                    <span className="text-[9px] font-mono font-bold text-sky-400 bg-sky-950/50 border border-sky-500/30 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Clock size={9} /> TTL 24h Ativo
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 mt-0.5">
+                    Armazenamento local de respostas brutas ({blizzardCacheStats.storageType.toUpperCase()}): <strong className="text-zinc-200">{blizzardCacheStats.count} perfis salvos</strong> com frescor de 24h para navegação instantânea e economia de cota da API.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+                <button
+                  type="button"
+                  disabled={isClearingBlizzardCache || blizzardCacheStats.count === 0}
+                  onClick={async () => {
+                    setIsClearingBlizzardCache(true);
+                    await clearAllBlizzardRawCache();
+                    const stats = await getBlizzardCacheStats();
+                    setBlizzardCacheStats(stats);
+                    setIsClearingBlizzardCache(false);
+                    if (triggerAlert) {
+                      triggerAlert("Cache Blizzard Limpo", "O cache local de respostas brutas da Blizzard API foi esvaziado. Novas requisições consultarão a API da Blizzard.");
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-750 disabled:opacity-40 disabled:cursor-not-allowed border border-zinc-700 text-xs font-semibold text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-1.5"
+                  title="Esvaziar cache local de dados brutos da Blizzard"
+                >
+                  {isClearingBlizzardCache ? (
+                    <Loader2 size={12} className="animate-spin text-sky-400" />
+                  ) : (
+                    <Trash2 size={12} className="text-rose-400" />
+                  )}
+                  <span>Limpar Cache Blizzard</span>
                 </button>
               </div>
             </div>

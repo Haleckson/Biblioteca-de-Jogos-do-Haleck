@@ -3361,9 +3361,42 @@ app.get("/api/blizzard/callback", (req, res) => {
 app.post("/api/blizzard/oauth-exchange", async (req, res) => {
   try {
     const { code, redirectUri, region = "us", clientId: customClientId, clientSecret: customClientSecret } = req.body;
-    if (!code) {
+    if (!code || typeof code !== "string" || !code.trim()) {
       res.status(400).json({ success: false, error: "Código de autorização não fornecido." });
       return;
+    }
+
+    // Clean code: remove Bearer prefix, code= prefix, full URL prefixes, quotes, and whitespace
+    let cleanCode = code.trim().replace(/^["']|["']$/g, "");
+    if (cleanCode.startsWith("Bearer ")) {
+      cleanCode = cleanCode.replace(/^Bearer\s+/i, "").trim();
+    }
+    if (cleanCode.includes("code=")) {
+      const match = cleanCode.match(/(?:[?&]|^)code=([^&#\s]+)/);
+      if (match) cleanCode = match[1];
+    }
+    cleanCode = cleanCode.trim();
+
+    const oauthHost = region === "cn" ? "https://oauth.battlenet.com.cn" : "https://oauth.battle.net";
+
+    // Fast-path: Check if `cleanCode` is actually an already active Bearer access token
+    // (Common when users paste their personal Bearer token directly or from developer portal)
+    if (cleanCode.length >= 25 && !cleanCode.includes(" ") && !cleanCode.includes("?") && !cleanCode.includes("&")) {
+      try {
+        const directUserRes = await fetchWithTimeout(`${oauthHost}/userinfo`, {
+          headers: { "Authorization": `Bearer ${cleanCode}` }
+        }, 4000);
+        if (directUserRes.ok) {
+          const uData = await directUserRes.json();
+          return res.json({
+            success: true,
+            token: cleanCode,
+            battleTag: uData.battletag || uData.battle_tag || "",
+            accountId: String(uData.id || uData.sub || ""),
+            expiresIn: 86400 * 30, // 30 days
+          });
+        }
+      } catch (_) {}
     }
 
     const clientId = customClientId || process.env.BLIZZARD_CLIENT_ID || DEFAULT_BLIZZARD_CLIENT_ID;
@@ -3374,61 +3407,89 @@ app.post("/api/blizzard/oauth-exchange", async (req, res) => {
       return;
     }
 
-    const oauthHost = region === "cn" ? "https://oauth.battlenet.com.cn" : "https://oauth.battle.net";
-    const targetRedirectUri = resolveAllowedRedirectUri(redirectUri, req);
+    // RFC 6749: redirect_uri MUST match exactly the redirect_uri used during the /authorize step
+    const targetRedirectUri = (typeof redirectUri === "string" && redirectUri.trim())
+      ? redirectUri.trim()
+      : resolveAllowedRedirectUri(redirectUri, req);
 
     const authHeader = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-    const tokenRes = await fetchWithTimeout(`${oauthHost}/token`, {
-      method: "POST",
-      headers: {
-        "Authorization": `Basic ${authHeader}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        code: code.trim(),
-        redirect_uri: targetRedirectUri,
-      }).toString(),
-    }, 8000);
 
-    if (tokenRes.ok) {
-      const tokenData = await tokenRes.json();
-      const userToken = tokenData.access_token;
+    // Candidate redirect URIs: start with the targeted one, followed by standard allowed ones as fallback
+    const candidateUris = [
+      targetRedirectUri,
+      ...BLIZZARD_ALLOWED_REDIRECT_URIS.filter(u => u !== targetRedirectUri)
+    ];
 
-      // Fetch User Info to get BattleTag and account ID
-      let battleTag = "";
-      let accountId = "";
-      try {
-        const userRes = await fetchWithTimeout(`${oauthHost}/userinfo`, {
-          headers: { "Authorization": `Bearer ${userToken}` }
-        }, 5000);
-        if (userRes.ok) {
-          const userData = await userRes.json();
-          battleTag = userData.battletag || userData.battle_tag || "";
-          accountId = String(userData.id || userData.sub || "");
+    let lastErrorStatus = 400;
+    let lastErrorBody = "";
+
+    for (const testUri of candidateUris) {
+      const tokenRes = await fetchWithTimeout(`${oauthHost}/token`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Basic ${authHeader}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          code: cleanCode,
+          redirect_uri: testUri,
+        }).toString(),
+      }, 7000);
+
+      if (tokenRes.ok) {
+        const tokenData = await tokenRes.json();
+        const userToken = tokenData.access_token;
+
+        // Fetch User Info to get BattleTag and account ID
+        let battleTag = "";
+        let accountId = "";
+        try {
+          const userRes = await fetchWithTimeout(`${oauthHost}/userinfo`, {
+            headers: { "Authorization": `Bearer ${userToken}` }
+          }, 5000);
+          if (userRes.ok) {
+            const userData = await userRes.json();
+            battleTag = userData.battletag || userData.battle_tag || "";
+            accountId = String(userData.id || userData.sub || "");
+          }
+        } catch (e) {
+          console.warn("Aviso ao buscar userinfo da Blizzard:", e);
         }
-      } catch (e) {
-        console.warn("Aviso ao buscar userinfo da Blizzard:", e);
-      }
 
-      res.json({
-        success: true,
-        token: userToken,
-        refreshToken: tokenData.refresh_token,
-        expiresIn: tokenData.expires_in,
-        battleTag,
-        accountId,
-      });
-      return;
-    } else {
-      const errBody = await tokenRes.text();
-      console.warn("Falha no token exchange da Blizzard:", tokenRes.status, errBody);
-      res.status(tokenRes.status || 400).json({
-        success: false,
-        error: `Falha ao autorizar na Blizzard (${tokenRes.status}): ${errBody || "Código ou URL de redirecionamento inválidos"}`,
-      });
-      return;
+        res.json({
+          success: true,
+          token: userToken,
+          refreshToken: tokenData.refresh_token,
+          expiresIn: tokenData.expires_in,
+          battleTag,
+          accountId,
+        });
+        return;
+      } else {
+        lastErrorStatus = tokenRes.status;
+        lastErrorBody = await tokenRes.text();
+        // If the error was not a redirect URI mismatch or invalid grant, stop retrying
+        if (!lastErrorBody.includes("invalid_grant")) {
+          break;
+        }
+      }
     }
+
+    console.warn("Falha no token exchange da Blizzard:", lastErrorStatus, lastErrorBody);
+
+    let friendlyMessage = `Falha ao autorizar na Blizzard (${lastErrorStatus}).`;
+    if (lastErrorBody.includes("invalid_grant")) {
+      friendlyMessage = "Código de autorização inválido, expirado ou já utilizado. O código OAuth da Blizzard é de uso único. Por favor, clique novamente para fazer login ou informe sua BattleTag (ex: Arthas#1234).";
+    }
+
+    res.status(lastErrorStatus || 400).json({
+      success: false,
+      error: friendlyMessage,
+      isInvalidGrant: lastErrorBody.includes("invalid_grant"),
+      details: lastErrorBody,
+    });
+    return;
   } catch (err: any) {
     console.warn("Erro no /api/blizzard/oauth-exchange:", err);
     res.status(500).json({ success: false, error: err?.message || "Erro ao trocar token da Blizzard" });
@@ -4382,6 +4443,46 @@ app.get(["/api/blizzard/wow/characters", "/api/blizzard/wow/user/characters"], a
       }
     }
 
+    // Merge all persisted characters saved on server database (from Addon Sync, Armory, or prior viewing)
+    // This ensures any character ever imported or viewed is available offline without re-fetching
+    const seenCharKeys = new Set(characters.map((c) => `${(c.name || "").toLowerCase()}-${(c.realm || "").toLowerCase()}`));
+    for (const [key, p] of Object.entries(wowCharacterProfilesStore)) {
+      if (key === "latest" || !p || !p.name) continue;
+      const cKey = `${(p.name || "").toLowerCase()}-${(p.realm || "").toLowerCase()}`;
+      if (!seenCharKeys.has(cKey)) {
+        seenCharKeys.add(cKey);
+        const pMode = p.gameMode || p.wow_version || "retail";
+        // Filter by targetMode if specific mode requested
+        if (targetMode !== "all" && pMode !== targetMode && !(targetMode === "forever" && pMode === "forever")) {
+          // If forever requested, match forever; otherwise skip
+          if (targetMode === "forever" || pMode === "forever") {
+            if (targetMode !== pMode) continue;
+          }
+        }
+        characters.push({
+          id: p.id || Date.now(),
+          name: p.name,
+          realm: p.realm || "Azralon",
+          realmSlug: p.realmSlug || (p.realm ? p.realm.toLowerCase().replace(/['\s]+/g, "-") : "azralon"),
+          level: p.level || 80,
+          characterClass: p.characterClass || "Warrior",
+          race: p.race || "Human",
+          faction: p.faction || "ALLIANCE",
+          equippedItemLevel: p.equippedItemLevel || 0,
+          averageItemLevel: p.averageItemLevel || p.equippedItemLevel || 0,
+          activeSpec: p.activeSpec || "Primary Specialization",
+          gender: p.gender || "MALE",
+          gameMode: pMode,
+          wow_version: pMode,
+          classIconUrl: getWowClassIcon(p.characterClass),
+          raceIconUrl: getWowRaceIcon(p.race, p.gender),
+          factionIconUrl: getWowFactionIcon(p.faction, p.race),
+          avatarUrl: p.avatarUrl || getWowRaceIcon(p.race, p.gender),
+          source: "persisted_database",
+        });
+      }
+    }
+
     if (characters.length === 0 && isDemoRequested) {
       const defaultCatalog: Record<string, any[]> = {
         retail: [
@@ -4698,6 +4799,90 @@ async function resolveWowheadAchievementIcon(id: number): Promise<string> {
   return "https://render.worldofwarcraft.com/us/icons/56/achievement_general.jpg";
 }
 
+// =========================================================================
+// PERSISTENT DATABASE STORAGE FOR ALL WOW DATA (CHARACTERS, ADDONS, ECONOMY)
+// Ensures all WoW data imported or viewed is permanently saved to the server
+// database (wow-storage.json) so no re-import or re-fetch is ever required.
+// =========================================================================
+const WOW_DATA_DIR = path.join(process.cwd(), "data");
+const WOW_STORAGE_FILE = path.join(WOW_DATA_DIR, "wow-storage.json");
+
+interface SyncedAddonRecord {
+  receivedAt: string;
+  profile: any;
+  payload: any;
+  detectedVersion: string;
+  isForever: boolean;
+  ruleset?: string;
+}
+
+interface WoWStorageData {
+  syncedAddons: Record<string, SyncedAddonRecord>;
+  addonEconomy: Record<string, any>;
+  characterProfiles: Record<string, any>;
+  lastSavedAt: string;
+}
+
+let wowAddonSyncStore: Record<string, SyncedAddonRecord> = {};
+let wowAddonEconomyStore: Record<string, {
+  characterName: string;
+  realm: string;
+  gold: number;
+  silver?: number;
+  copper?: number;
+  faction?: string;
+  characterClass?: string;
+  level?: number;
+  lastUpdated: string;
+}> = {};
+let wowCharacterProfilesStore: Record<string, any> = {};
+
+function loadWoWStorage(): void {
+  try {
+    if (!fs.existsSync(WOW_DATA_DIR)) {
+      fs.mkdirSync(WOW_DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(WOW_STORAGE_FILE)) {
+      const raw = fs.readFileSync(WOW_STORAGE_FILE, "utf-8");
+      const parsed: WoWStorageData = JSON.parse(raw);
+      if (parsed.syncedAddons && typeof parsed.syncedAddons === "object") {
+        wowAddonSyncStore = parsed.syncedAddons;
+      }
+      if (parsed.addonEconomy && typeof parsed.addonEconomy === "object") {
+        wowAddonEconomyStore = parsed.addonEconomy;
+      }
+      if (parsed.characterProfiles && typeof parsed.characterProfiles === "object") {
+        wowCharacterProfilesStore = parsed.characterProfiles;
+      }
+      console.log(`[WoW Storage] Carregados ${Object.keys(wowCharacterProfilesStore).length} perfis de personagens e ${Object.keys(wowAddonSyncStore).length} sincronizações de addon do disco.`);
+    }
+  } catch (err: any) {
+    console.warn("[WoW Storage] Aviso ao carregar dados do disco:", err?.message);
+  }
+}
+
+function saveWoWStorage(): void {
+  try {
+    if (!fs.existsSync(WOW_DATA_DIR)) {
+      fs.mkdirSync(WOW_DATA_DIR, { recursive: true });
+    }
+    const data: WoWStorageData = {
+      syncedAddons: wowAddonSyncStore,
+      addonEconomy: wowAddonEconomyStore,
+      characterProfiles: wowCharacterProfilesStore,
+      lastSavedAt: new Date().toISOString(),
+    };
+    const tmp = `${WOW_STORAGE_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(data, null, 2), "utf-8");
+    fs.renameSync(tmp, WOW_STORAGE_FILE);
+  } catch (err: any) {
+    console.warn("[WoW Storage] Aviso ao salvar dados no disco:", err?.message);
+  }
+}
+
+// Initialize persistent storage from disk immediately
+loadWoWStorage();
+
 // 5. Fetch Full Character Profile (Equipment, Talents, Achievements, Reputations)
 app.get("/api/blizzard/wow/character-profile", async (req, res) => {
   try {
@@ -4717,15 +4902,24 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
     const equippedItemLevelParam = req.query.equippedItemLevel ? parseInt(req.query.equippedItemLevel as string, 10) : undefined;
     const versionParam = (req.query.version as string) || "";
 
-    const cacheKey = `blizzard_char_profile_v3_${region}_${gameId}_${realm.toLowerCase()}_${character.toLowerCase()}_${charClassParam}_${levelParam || 0}`;
-    const cached = blizzardCache.get(cacheKey);
-    if (cached) {
-      res.json(cached);
+    const realmSlug = realm.toLowerCase().replace(/['\s]+/g, "-");
+    const charLower = character.toLowerCase();
+    const charKey = `${charLower}-${realmSlug}`;
+
+    // 0. Primary check: If character was already imported/synced/saved in the persistent server database,
+    // return it immediately without needing to re-fetch from Blizzard API or re-ask for addon import!
+    const persisted = wowCharacterProfilesStore[charKey] || wowCharacterProfilesStore[`${charLower}-${realm.toLowerCase()}`];
+    if (persisted && req.query.force !== "true") {
+      res.json(persisted);
       return;
     }
 
-    const realmSlug = realm.toLowerCase().replace(/['\s]+/g, "-");
-    const charLower = character.toLowerCase();
+    const cacheKey = `blizzard_char_profile_v3_${region}_${gameId}_${realm.toLowerCase()}_${character.toLowerCase()}_${charClassParam}_${levelParam || 0}`;
+    const cached = blizzardCache.get(cacheKey);
+    if (cached && req.query.force !== "true") {
+      res.json(cached);
+      return;
+    }
 
     // 1. Try Live Blizzard API with user token or client credentials
     let effectiveToken = token && !token.startsWith("bnet_token_") ? token : "";
@@ -5248,6 +5442,8 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
           }
 
           blizzardCache.set(cacheKey, profileData, 30 * 60 * 1000);
+          wowCharacterProfilesStore[charKey] = profileData;
+          saveWoWStorage();
           res.json(profileData);
           return;
         }
@@ -5285,35 +5481,14 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
     generatedProfile.factionIconUrl = getWowFactionIcon(generatedProfile.faction);
 
     blizzardCache.set(cacheKey, generatedProfile, 30 * 60 * 1000);
+    wowCharacterProfilesStore[charKey] = generatedProfile;
+    saveWoWStorage();
     res.json(generatedProfile);
   } catch (err: any) {
     console.warn("Erro no /api/blizzard/wow/character-profile:", err);
     res.status(500).json({ error: err?.message || "Erro ao obter detalhes do personagem de WoW" });
   }
 });
-
-// In-memory storage for WoW Addon sync snapshots and multi-character account economy
-interface SyncedAddonRecord {
-  receivedAt: string;
-  profile: any;
-  payload: any;
-  detectedVersion: string;
-  isForever: boolean;
-  ruleset?: string;
-}
-
-const wowAddonSyncStore: Record<string, SyncedAddonRecord> = {};
-const wowAddonEconomyStore: Record<string, {
-  characterName: string;
-  realm: string;
-  gold: number;
-  silver?: number;
-  copper?: number;
-  faction?: string;
-  characterClass?: string;
-  level?: number;
-  lastUpdated: string;
-}> = {};
 
 // 1. Endpoint to receive in-game Addon export data (Lua SavedVariables or JSON)
 app.post("/api/blizzard/wow/addon-sync", (req, res) => {
@@ -5370,6 +5545,8 @@ app.post("/api/blizzard/wow/addon-sync", (req, res) => {
     };
     wowAddonSyncStore[key] = record;
     wowAddonSyncStore["latest"] = record;
+    wowCharacterProfilesStore[key] = profile;
+    wowCharacterProfilesStore["latest"] = profile;
 
     // Update Account Economy Store across alts
     const charKey = `${charName}-${realmSlug}`;
@@ -5405,6 +5582,9 @@ app.post("/api/blizzard/wow/addon-sync", (req, res) => {
       }
     }
 
+    // Persist everything to disk database
+    saveWoWStorage();
+
     // Calculate total account gold
     const totalGold = Object.values(wowAddonEconomyStore).reduce((acc, curr) => acc + (curr.gold || 0), 0);
 
@@ -5414,7 +5594,7 @@ app.post("/api/blizzard/wow/addon-sync", (req, res) => {
 
     return res.json({
       success: true,
-      message: "Dados do Haleck Account Importer sincronizados com sucesso!",
+      message: "Dados do Haleck Account Importer sincronizados e salvos com sucesso no servidor!",
       character: profile.name || charName,
       realm: realmRaw,
       ruleset: ruleset,
@@ -5434,6 +5614,55 @@ app.post("/api/blizzard/wow/addon-sync", (req, res) => {
   } catch (err: any) {
     console.error("Erro ao sincronizar addon:", err);
     return res.status(500).json({ error: "Falha ao processar dados do addon", details: err?.message });
+  }
+});
+
+// 1b. Explicit persistence endpoint for characters loaded/viewed in UI
+app.post("/api/blizzard/wow/persist-profile", (req, res) => {
+  try {
+    const { profile, charKey: customKey } = req.body;
+    if (!profile || !profile.name) {
+      return res.status(400).json({ error: "Perfil inválido fornecido" });
+    }
+    const cName = (profile.name || "character").toLowerCase();
+    const cRealm = (profile.realm || profile.realmSlug || "realm").toLowerCase().replace(/['\s]+/g, "-");
+    const key = customKey || `${cName}-${cRealm}`;
+    wowCharacterProfilesStore[key] = profile;
+    saveWoWStorage();
+    return res.json({
+      success: true,
+      key,
+      message: `Perfil de "${profile.name}" (${profile.realm || cRealm}) salvo permanentemente na database do servidor.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Erro ao persistir perfil no servidor", details: err?.message });
+  }
+});
+
+// 1c. Query all persisted character profiles stored on server disk database
+app.get("/api/blizzard/wow/persisted-profiles", (req, res) => {
+  try {
+    const profiles = Object.entries(wowCharacterProfilesStore)
+      .filter(([k]) => k !== "latest")
+      .map(([key, p]) => ({
+        key,
+        name: p.name,
+        realm: p.realm,
+        level: p.level,
+        characterClass: p.characterClass,
+        equippedItemLevel: p.equippedItemLevel,
+        wow_version: p.wow_version || p.gameMode,
+        gold: p.inventory?.gold || 0,
+        mountsCount: p.collections?.mounts?.length || p.collections?.totalMountsCount || 0,
+        petsCount: p.collections?.pets?.length || p.collections?.totalPetsCount || 0,
+      }));
+    return res.json({
+      success: true,
+      total: profiles.length,
+      profiles,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Erro ao listar perfis persistidos", details: err?.message });
   }
 });
 
@@ -5489,27 +5718,28 @@ app.get("/api/blizzard/wow/addon-sync/detect-paths", (req, res) => {
         savedVariablesPath: "World of Warcraft/_classic_beta_/WTF/Account/<SUA_CONTA>/SavedVariables/HaleckAccountImporter.lua",
         interfaceBuild: "16001",
         status: "Active Beta",
-        notes: "A pasta do WoW Forever Beta vem nomeada como _classic_beta_. Todas as APIs seguem regras Anti-Taint e chamadas seguras em pcall.",
+        notes: "Atenção Crítica: O cliente do Beta do WoW Forever vem gravado em disco estritamente na pasta _classic_beta_. Não confundir com classic_era nem classic!",
       },
       {
         versionKey: "forever",
-        name: "WoW Forever Oficial (Vanilla+)",
-        clientFolder: "_classic_era_ ou _forever_",
-        folderExample: "World of Warcraft/_classic_era_/",
-        addonPath: "World of Warcraft/_classic_era_/Interface/AddOns/HaleckAccountImporter/",
-        savedVariablesPath: "World of Warcraft/_classic_era_/WTF/Account/<SUA_CONTA>/SavedVariables/HaleckAccountImporter.lua",
+        name: "WoW Forever Oficial (Vanilla+ - Lançamento 04/Nov/2026)",
+        clientFolder: "Nome Oficial a Ser Anunciado pela Blizzard (TBA)",
+        folderExample: "World of Warcraft/<PASTA_OFICIAL_TBA>/",
+        addonPath: "World of Warcraft/<PASTA_OFICIAL_TBA>/Interface/AddOns/HaleckAccountImporter/",
+        savedVariablesPath: "World of Warcraft/<PASTA_OFICIAL_TBA>/WTF/Account/<SUA_CONTA>/SavedVariables/HaleckAccountImporter.lua",
         interfaceBuild: "16001",
         officialRelease: "04 de Novembro de 2026",
-        notes: "Transição do Beta 16001 para lançamento oficial Vanilla+.",
+        notes: "O nome oficial da pasta no lançamento será anunciado pela Blizzard (não misturar classic_era com WoW Forever). Durante o Beta, usa prioritariamente _classic_beta_.",
       },
       {
         versionKey: "classic",
-        name: "WoW Classic Era (1.15.x)",
+        name: "WoW Classic Era (1.15.x Original)",
         clientFolder: "_classic_era_",
         folderExample: "World of Warcraft/_classic_era_/",
         addonPath: "World of Warcraft/_classic_era_/Interface/AddOns/HaleckAccountImporter/",
         savedVariablesPath: "World of Warcraft/_classic_era_/WTF/Account/<SUA_CONTA>/SavedVariables/HaleckAccountImporter.lua",
         interfaceBuild: "11506",
+        notes: "Versão oficial Classic Era 1.15 original (não misturar com WoW Forever).",
       },
       {
         versionKey: "mop",
@@ -5522,7 +5752,7 @@ app.get("/api/blizzard/wow/addon-sync/detect-paths", (req, res) => {
       },
       {
         versionKey: "retail",
-        name: "WoW Retail (The War Within 11.x)",
+        name: "WoW Retail (The War Within 11.x / Midnight)",
         clientFolder: "_retail_",
         folderExample: "World of Warcraft/_retail_/",
         addonPath: "World of Warcraft/_retail_/Interface/AddOns/HaleckAccountImporter/",
