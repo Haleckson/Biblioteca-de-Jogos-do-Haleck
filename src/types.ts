@@ -500,7 +500,12 @@ export interface BlizzardProfileData {
     status: "Available" | "Defeated" | "Spawning Soon";
     respawnEstimate?: string;
     lastKilled?: string;
+    bossId?: number;
+    respawnMinEpoch?: number;
+    respawnMaxEpoch?: number;
+    iconUrl?: string;
   }[];
+  pendingChangesCount?: number;
   mainRawUrl?: string;
   insetImageUrl?: string;
   appearance?: {
@@ -533,7 +538,101 @@ export interface BlizzardProfileData {
   }[];
   inventory?: BlizzardCharacterInventory;
   collections?: BlizzardCharacterCollections;
+  adventureJournal?: AdventureJournalData;
+  quests?: BlizzardQuestLog;
+  spells?: BlizzardSpellbook;
   lastSyncedAt?: string;
+}
+
+export interface AdventureJournalTimelineEntry {
+  id: string;
+  timestamp: string;
+  type: "level" | "boss" | "quest" | "death" | "discovery" | "group" | "achievement" | "spell" | "milestone";
+  title: string;
+  desc: string;
+  icon?: string;
+  zone?: string;
+  level?: number;
+  details?: Record<string, any>;
+}
+
+export interface AdventureBossEntry {
+  id: string | number;
+  name: string;
+  firstKillDate: string;
+  killCount: number;
+  zone?: string;
+  level?: number;
+  isWorldBoss?: boolean;
+}
+
+export interface AdventureExplorationEntry {
+  zone: string;
+  subZone?: string;
+  firstVisited: string;
+  visitCount: number;
+}
+
+export interface AdventureCompanionEntry {
+  name: string;
+  realm?: string;
+  class?: string;
+  level?: number;
+  firstMetDate: string;
+  lastMetDate?: string;
+  zone?: string;
+  timesGrouped?: number;
+}
+
+export interface AdventureDeathEntry {
+  id: string;
+  timestamp: string;
+  killerName: string;
+  zone: string;
+  subZone?: string;
+  coordinates?: string;
+  level: number;
+  lastWords?: string;
+}
+
+export interface AdventureJournalData {
+  timeline: AdventureJournalTimelineEntry[];
+  bosses: AdventureBossEntry[];
+  exploration: AdventureExplorationEntry[];
+  companions: AdventureCompanionEntry[];
+  deaths: AdventureDeathEntry[];
+  statistics: Record<string, any>;
+  steps?: number;
+  distanceYards?: number;
+  totalQuestsCompleted?: number;
+  totalBossesDefeated?: number;
+  totalCompanionsMet?: number;
+}
+
+export interface BlizzardQuestLog {
+  completedCount: number;
+  completedQuests: number[];
+  activeQuests: {
+    id: number;
+    title: string;
+    level?: number;
+    isComplete?: boolean;
+    isFailed?: boolean;
+    zone?: string;
+  }[];
+}
+
+export interface BlizzardSpellbook {
+  totalSpells: number;
+  spells: {
+    id: number;
+    name: string;
+    rank?: string;
+    icon?: string;
+    tab?: string;
+    isPassive?: boolean;
+  }[];
+  flightPathsCount?: number;
 }
 
 export interface BlizzardOfficialGame {
@@ -659,9 +758,13 @@ export function getGameHighestTrophy(game: Partial<Game>): "none" | "bronze" | "
   return "none";
 }
 
-export function splitEntities(val: string | undefined | null): string[] {
+export function splitEntities(val: any): string[] {
   if (!val) return [];
-  return val.split(/[;\n\r]+/).map((s) => s.trim()).filter(Boolean);
+  if (Array.isArray(val)) {
+    return val.flatMap((v) => splitEntities(v)).filter(Boolean);
+  }
+  const str = typeof val === "string" ? val : String(val);
+  return str.split(/[;\n\r]+/).map((s) => s.trim()).filter(Boolean);
 }
 
 export interface ContextParsed {

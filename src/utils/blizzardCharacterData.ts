@@ -261,21 +261,123 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
       ? "of the Shadowstalker"
       : "of the Champion";
 
+  const getDisplayForClass = (slot: string): number => {
+    switch (normalizedClass) {
+      case "Shaman":
+        if (slot === "HEAD") return 30374; // Ten Storms Helm
+        if (slot === "SHOULDER") return 30377; // Ten Storms Epaulets
+        if (slot === "CHEST") return 30370; // Ten Storms Breastplate
+        if (slot === "WAIST") return 30376;
+        if (slot === "LEGS") return 30372;
+        if (slot === "FEET") return 30375;
+        if (slot === "HANDS") return 30378;
+        if (slot === "MAIN_HAND") return 27533; // Aurastone Hammer (Mace)
+        if (slot === "OFF_HAND") return 27532; // Shield
+        break;
+      case "Hunter":
+        if (slot === "HEAD") return 30371; // Dragonstalker Helm
+        if (slot === "SHOULDER") return 30378; // Dragonstalker Spaulders
+        if (slot === "CHEST") return 30372; // Dragonstalker Breastplate
+        if (slot === "WAIST") return 30374;
+        if (slot === "LEGS") return 30375;
+        if (slot === "FEET") return 30376;
+        if (slot === "HANDS") return 30377;
+        if (slot === "MAIN_HAND") return 28772; // Rhok'delar Bow
+        if (slot === "RANGED") return 28772;
+        break;
+      case "Priest":
+        if (slot === "HEAD") return 30415; // Halo of Transcendence
+        if (slot === "SHOULDER") return 30420; // Pauldrons of Transcendence
+        if (slot === "CHEST") return 30412; // Robes of Transcendence
+        if (slot === "WAIST") return 27515;
+        if (slot === "LEGS") return 30424;
+        if (slot === "FEET") return 27540;
+        if (slot === "HANDS") return 30418;
+        if (slot === "MAIN_HAND") return 30426; // Benediction
+        break;
+      case "Mage":
+        if (slot === "HEAD") return 30412; // Netherwind Crown
+        if (slot === "SHOULDER") return 30419; // Netherwind Mantle
+        if (slot === "CHEST") return 30417; // Netherwind Robes
+        if (slot === "WAIST") return 27515;
+        if (slot === "LEGS") return 30424;
+        if (slot === "FEET") return 27540;
+        if (slot === "HANDS") return 30418;
+        if (slot === "MAIN_HAND") return 28771; // Staff of the Shadow Flame
+        break;
+      case "Warlock":
+        if (slot === "HEAD") return 30413; // Nemesis Skullcap
+        if (slot === "SHOULDER") return 30421; // Nemesis Spaulders
+        if (slot === "CHEST") return 30414; // Nemesis Robes
+        if (slot === "WAIST") return 27515;
+        if (slot === "LEGS") return 30424;
+        if (slot === "FEET") return 27540;
+        if (slot === "HANDS") return 30418;
+        if (slot === "MAIN_HAND") return 30426;
+        break;
+      case "Druid":
+        if (slot === "HEAD") return 30373; // Stormrage Cover (Antlers)
+        if (slot === "SHOULDER") return 30376; // Stormrage Pauldrons
+        if (slot === "CHEST") return 30370; // Stormrage Chestguard
+        if (slot === "WAIST") return 27515;
+        if (slot === "LEGS") return 30424;
+        if (slot === "FEET") return 27540;
+        if (slot === "HANDS") return 30418;
+        if (slot === "MAIN_HAND") return 30426;
+        break;
+      case "Rogue":
+        if (slot === "HEAD") return 30416; // Bloodfang Hood
+        if (slot === "SHOULDER") return 30422; // Bloodfang Spaulders
+        if (slot === "CHEST") return 30418; // Bloodfang Chestpiece
+        if (slot === "WAIST") return 30425;
+        if (slot === "LEGS") return 30424;
+        if (slot === "FEET") return 27540;
+        if (slot === "HANDS") return 30419;
+        if (slot === "MAIN_HAND") return 30430; // Perdition's Blade
+        if (slot === "OFF_HAND") return 30430;
+        break;
+      case "Paladin":
+        if (slot === "HEAD") return 28414; // Judgment Crown
+        if (slot === "SHOULDER") return 28416; // Judgment Spaulders
+        if (slot === "CHEST") return 28418; // Judgment Breastplate
+        if (slot === "WAIST") return 28417;
+        if (slot === "LEGS") return 28419;
+        if (slot === "FEET") return 28415;
+        if (slot === "HANDS") return 32367;
+        if (slot === "MAIN_HAND") return 27531; // Sulfuras / Ashbringer
+        if (slot === "OFF_HAND") return 27532; // Bulwark
+        break;
+      case "Warrior":
+      default:
+        if (slot === "HEAD") return 32373; // Dreadnaught Helmet
+        if (slot === "SHOULDER") return 32369; // Dreadnaught Pauldrons
+        if (slot === "CHEST") return 30422; // Dreadnaught Breastplate
+        if (slot === "WAIST") return 30425;
+        if (slot === "LEGS") return 30424;
+        if (slot === "FEET") return 27540;
+        if (slot === "HANDS") return 30418;
+        if (slot === "MAIN_HAND") return 32262; // Thunderfury
+        if (slot === "OFF_HAND") return 27532; // Bulwark
+        break;
+    }
+    return 0;
+  };
+
   const classGearDisplays: Record<string, number> = {
-    HEAD: 28414,
-    SHOULDER: 32369,
-    CHEST: normalizedClass === "Warrior" || normalizedClass === "Paladin" || normalizedClass === "DeathKnight" ? 30422 : 28417,
+    HEAD: getDisplayForClass("HEAD"),
+    SHOULDER: getDisplayForClass("SHOULDER"),
+    CHEST: getDisplayForClass("CHEST"),
     SHIRT: 11440,
     TABARD: rawFaction === "ALLIANCE" ? 11440 : 11441,
-    WRIST: 28415,
-    HANDS: normalizedClass === "Paladin" ? 32367 : 30418,
-    WAIST: normalizedClass === "Mage" || normalizedClass === "Priest" || normalizedClass === "Warlock" ? 27515 : 30425,
-    LEGS: 30424,
-    FEET: 27540,
+    WRIST: 27541, // Neutral bracers display
+    HANDS: getDisplayForClass("HANDS"),
+    WAIST: getDisplayForClass("WAIST"),
+    LEGS: getDisplayForClass("LEGS"),
+    FEET: getDisplayForClass("FEET"),
     BACK: 27549,
-    MAIN_HAND: normalizedClass === "Hunter" ? 45233 : normalizedClass === "Paladin" ? 27531 : 45233,
-    OFF_HAND: normalizedClass === "Warrior" || normalizedClass === "Paladin" ? 27532 : normalizedClass === "Rogue" ? 45233 : 27532,
-    RANGED: 28772,
+    MAIN_HAND: getDisplayForClass("MAIN_HAND"),
+    OFF_HAND: getDisplayForClass("OFF_HAND"),
+    RANGED: (normalizedClass === "Hunter" || normalizedClass === "Rogue" || normalizedClass === "Warrior") ? 28772 : 0,
   };
 
   gear.push({
@@ -508,11 +610,37 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
   const dmgMax = isLowLevel ? Math.round(level * 2.2 + 8) : isHighLevel ? 3200 : 160;
   const dpsVal = (dmgMin + dmgMax) / 2 / 2.6;
 
+  const weaponName =
+    normalizedClass === "Shaman"
+      ? (isLowLevel ? "Stormstrike Mace" : "Aurastone Gavel of the Elements")
+      : normalizedClass === "Hunter"
+      ? (isLowLevel ? "Cedar Longbow" : "Rhok'delar, Bow of the Ancients")
+      : normalizedClass === "Priest" || normalizedClass === "Mage" || normalizedClass === "Warlock" || normalizedClass === "Druid"
+      ? (isLowLevel ? "Staff of Natural Harmony" : "Staff of Arcane Grandeur")
+      : normalizedClass === "Rogue"
+      ? (isLowLevel ? "Quick Fang" : "Perdition's Edge")
+      : normalizedClass === "Paladin"
+      ? (isLowLevel ? "Righteous Hammer" : "Hammer of the Grand Crusader")
+      : (isLowLevel ? "Tempered Greatsword" : "Blade of Eternal Glory");
+
+  const weaponIcon =
+    normalizedClass === "Shaman"
+      ? "https://render.worldofwarcraft.com/us/icons/56/inv_hammer_04.jpg"
+      : normalizedClass === "Hunter"
+      ? "https://render.worldofwarcraft.com/us/icons/56/inv_weapon_bow_08.jpg"
+      : normalizedClass === "Priest" || normalizedClass === "Mage" || normalizedClass === "Warlock" || normalizedClass === "Druid"
+      ? "https://render.worldofwarcraft.com/us/icons/56/inv_staff_08.jpg"
+      : normalizedClass === "Rogue"
+      ? "https://render.worldofwarcraft.com/us/icons/56/inv_weapon_shortblade_05.jpg"
+      : normalizedClass === "Paladin"
+      ? "https://render.worldofwarcraft.com/us/icons/56/inv_hammer_04.jpg"
+      : "https://render.worldofwarcraft.com/us/icons/56/inv_sword_39.jpg";
+
   gear.push({
     slot: "MAIN_HAND",
     slotId: 21,
     displayId: classGearDisplays.MAIN_HAND,
-    name: isLowLevel ? `Staff of Natural Harmony` : `Blade of Eternal Glory`,
+    name: weaponName,
     itemLevel: itemLevelBase + 2,
     quality: isLowLevel ? "RARE" : qualityDefault,
     weaponType,
@@ -524,8 +652,27 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
     binding: "Binds when picked up",
     durability: `${isLowLevel ? "80 / 80" : "120 / 120"}`,
     requiredLevel: level,
-    iconUrl: normalizedClass === "Druid" ? "https://render.worldofwarcraft.com/us/icons/56/inv_staff_08.jpg" : "https://render.worldofwarcraft.com/us/icons/56/inv_sword_39.jpg",
+    iconUrl: weaponIcon,
   });
+
+  if (classGearDisplays.OFF_HAND && classGearDisplays.OFF_HAND > 0) {
+    const isShield = normalizedClass === "Shaman" || normalizedClass === "Paladin" || normalizedClass === "Warrior";
+    gear.push({
+      slot: "OFF_HAND",
+      slotId: 22,
+      displayId: classGearDisplays.OFF_HAND,
+      name: isShield ? (normalizedClass === "Shaman" ? "Red Dragonscale Protector" : "Bulwark of the Champion") : "Offhand Edge",
+      itemLevel: itemLevelBase + 1,
+      quality: qualityDefault,
+      armor: isShield ? Math.round(armorVal * 0.2) : undefined,
+      armorType: isShield ? "Shield" : undefined,
+      stats: [`+${statBonus(1.2)} ${primaryStat}`, `+${statBonus(1.5)} Stamina`],
+      binding: "Binds when picked up",
+      durability: `${isLowLevel ? "60 / 60" : "100 / 100"}`,
+      requiredLevel: level,
+      iconUrl: isShield ? "https://render.worldofwarcraft.com/us/icons/56/inv_shield_06.jpg" : "https://render.worldofwarcraft.com/us/icons/56/inv_weapon_shortblade_05.jpg",
+    });
+  }
 
   // Authentic gear attributes for specific characters such as Hedwing (Area 52 Priest)
   if (name.toLowerCase() === "hedwing") {
@@ -552,6 +699,37 @@ export function generateWoWCharacterProfile(options: GenerateProfileOptions): Bl
         slotId: 20,
         inventoryType: "ROBE",
         iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_chest_cloth_03.jpg",
+      };
+    }
+  }
+
+  // Authentic gear attributes for specific characters such as Tïtolleza (Azralon Troll Shaman)
+  if (name.toLowerCase().includes("titolleza") || name.toLowerCase().includes("tirolleza")) {
+    const headIdx = gear.findIndex((g) => g.slot === "HEAD");
+    if (headIdx >= 0) {
+      gear[headIdx] = {
+        ...gear[headIdx],
+        name: "The Ten Storms Helmet",
+        displayId: 30374,
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_helmet_09.jpg",
+      };
+    }
+    const shldIdx = gear.findIndex((g) => g.slot === "SHOULDER");
+    if (shldIdx >= 0) {
+      gear[shldIdx] = {
+        ...gear[shldIdx],
+        name: "The Ten Storms Epaulets",
+        displayId: 30377,
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_shoulder_02.jpg",
+      };
+    }
+    const chestIdx = gear.findIndex((g) => g.slot === "CHEST");
+    if (chestIdx >= 0) {
+      gear[chestIdx] = {
+        ...gear[chestIdx],
+        name: "The Ten Storms Breastplate",
+        displayId: 30370,
+        iconUrl: "https://render.worldofwarcraft.com/us/icons/56/inv_chest_plate06.jpg",
       };
     }
   }

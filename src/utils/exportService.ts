@@ -31,7 +31,7 @@ export function exportGameDiaryToMarkdown(game: Game) {
   if (game.diary && game.diary.length > 0) {
     game.diary.forEach((entry, idx) => {
       md += `### Registros ${idx + 1}: ${entry.period || "Sem data"}\n`;
-      if (entry.keyMoments && entry.keyMoments.length > 0) {
+      if (Array.isArray(entry.keyMoments) && entry.keyMoments.length > 0) {
         md += `*Momentos Chave: ${entry.keyMoments.map((km) => `\`${km}\``).join(" ")}*\n\n`;
       }
       md += `${entry.text}\n\n`;

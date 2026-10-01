@@ -7,7 +7,7 @@
 // Guarantees 0ms synchronous retrieval during 3D character/item rendering,
 // eliminates redundant Blizzard API calls, and enforces model appearance integrity.
 
-import { saveToIndexedDB, loadFromIndexedDB } from "./storageDb";
+import { saveToIndexedDB, loadFromIndexedDB, isIndexedDBAvailable } from "./storageDb";
 
 export interface WoWItemDisplayMapping {
   itemId: number;
@@ -157,16 +157,16 @@ export async function getItemDisplayMapping(itemId: number): Promise<WoWItemDisp
     return inMem;
   }
 
-  // 2. Check persistent IndexedDB
-  const key = `${IDB_ITEM_KEY_PREFIX}${itemId}`;
-  try {
-    const fromDb = await loadFromIndexedDB<WoWItemDisplayMapping>(key);
-    if (fromDb && fromDb.displayId > 0) {
-      l1ItemMemoryCache.set(itemId, fromDb);
-      return fromDb;
-    }
-  } catch (err) {
-    console.warn(`[WoWItemDisplayCache] Failed reading ${key} from IndexedDB:`, err);
+  // 2. Check persistent IndexedDB if available
+  if (isIndexedDBAvailable()) {
+    const key = `${IDB_ITEM_KEY_PREFIX}${itemId}`;
+    try {
+      const fromDb = await loadFromIndexedDB<WoWItemDisplayMapping>(key);
+      if (fromDb && fromDb.displayId > 0) {
+        l1ItemMemoryCache.set(itemId, fromDb);
+        return fromDb;
+      }
+    } catch (_) {}
   }
 
   // 3. Fallback to seed dictionary
@@ -183,8 +183,10 @@ export async function getItemDisplayMapping(itemId: number): Promise<WoWItemDisp
       source: "seed",
     };
     l1ItemMemoryCache.set(itemId, entry);
-    // Asynchronously save to IndexedDB
-    saveItemDisplayMapping(entry).catch(() => {});
+    // Asynchronously save to IndexedDB if available
+    if (isIndexedDBAvailable()) {
+      saveItemDisplayMapping(entry).catch(() => {});
+    }
     return entry;
   }
 
@@ -200,12 +202,12 @@ export async function saveItemDisplayMapping(data: WoWItemDisplayMapping): Promi
   // 1. Update L1
   l1ItemMemoryCache.set(data.itemId, data);
 
-  // 2. Persist to IndexedDB
-  const key = `${IDB_ITEM_KEY_PREFIX}${data.itemId}`;
-  try {
-    await saveToIndexedDB(key, data);
-  } catch (err) {
-    console.warn(`[WoWItemDisplayCache] Failed saving ${key} to IndexedDB:`, err);
+  // 2. Persist to IndexedDB if available
+  if (isIndexedDBAvailable()) {
+    const key = `${IDB_ITEM_KEY_PREFIX}${data.itemId}`;
+    try {
+      await saveToIndexedDB(key, data);
+    } catch (_) {}
   }
 }
 
@@ -226,7 +228,7 @@ export async function preloadKnownItemsToIndexedDB(): Promise<void> {
   const entries: WoWItemDisplayMapping[] = [];
   const now = Date.now();
   for (const [key, val] of Object.entries(SEED_ITEM_DISPLAYS)) {
-    entries.push({
+    const itemObj: WoWItemDisplayMapping = {
       itemId: Number(key),
       displayId: val.displayId,
       slotId: val.slotId,
@@ -235,9 +237,18 @@ export async function preloadKnownItemsToIndexedDB(): Promise<void> {
       iconUrl: val.iconUrl,
       timestamp: now,
       source: "seed",
-    });
+    };
+    // Always prefill L1 memory first (0ms instantaneous lookup)
+    l1ItemMemoryCache.set(itemObj.itemId, itemObj);
+    entries.push(itemObj);
   }
-  await batchSaveItemDisplayMappings(entries);
+
+  // Only persist to IndexedDB if available
+  if (isIndexedDBAvailable()) {
+    try {
+      await batchSaveItemDisplayMappings(entries);
+    } catch (_) {}
+  }
 }
 
 /**

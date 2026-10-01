@@ -33,7 +33,7 @@ import ImgBBModal from "./components/ImgBBModal";
 import WelcomeRoleModal from "./components/WelcomeRoleModal";
 import { GlobalUploadProgressWidget } from "./components/GlobalUploadProgressWidget";
 import { mediaUploadQueueManager } from "./utils/mediaUploadManager";
-import SiteSettingsModal from "./components/SiteSettingsModal";
+import SiteSettingsModal, { AdminCategory, BlizzardSubTab } from "./components/SiteSettingsModal";
 import { formatSteamPlaytime, fetchSteamOwnedGames, fetchSteamAchievements, fetchSteamProfile, SteamPlayerSummary } from "./utils/steamApi";
 import { fetchGogOwnedGames, fetchGogAchievements, formatGogPlaytime, fetchGogProfile, resolveGogGame, setStoredGogOAuthToken, setStoredGogUsername, setStoredGogUserId, GogPlayerSummary } from "./utils/gogApi";
 import {
@@ -41,6 +41,7 @@ import {
   fetchBlizzardCharacterProfile,
   getCharacterCompositeKey,
   matchCharacterComposite,
+  isWorldOfWarcraftGame,
 } from "./utils/blizzardApi";
 import { BlizzardCharacterSummary } from "./types";
 import { parsePlaytimeHours } from "./utils/playtime";
@@ -114,11 +115,15 @@ export async function initZamModelViewer(
   if (!container || !blizzardProfileData) return null;
   const aspect = options?.aspect || 0.85;
 
-  const allGear = blizzardProfileData.gear || blizzardProfileData.equippedItems || [];
+  const allGear = Array.isArray(blizzardProfileData.gear) && blizzardProfileData.gear.length > 0
+    ? blizzardProfileData.gear
+    : Array.isArray(blizzardProfileData.equippedItems) && blizzardProfileData.equippedItems.length > 0
+    ? blizzardProfileData.equippedItems
+    : [];
   const profileTransmogs = blizzardProfileData.transmogs;
   const region = blizzardProfileData.region || "us";
 
-  // Map and resolve transmog IDs (prioritizing transmog displayId and itemId)
+  // Map and resolve transmog IDs (prioritizing transmog displayId and itemId with robust fallback)
   const items = await resolveCharacterGearItems(allGear, region, profileTransmogs);
 
   const race = blizzardProfileData.race || "Human";
@@ -135,7 +140,7 @@ export async function initZamModelViewer(
     hairColor: 1,
     facialStyle: 0,
     items,
-    customizations: blizzardProfileData.appearance?.customizations,
+    customizations: blizzardProfileData.appearance?.customizations || blizzardProfileData.appearance?.customization_choices,
   };
 
   const viewer = await createWowCharacterViewer(container, characterConfig, aspect);
@@ -158,7 +163,11 @@ export default function App() {
   const [games, setGames] = useState<Game[]>(() => {
     try {
       const saved = localStorage.getItem("gameLibrary");
-      return saved ? JSON.parse(saved) : SAMPLE_GAMES;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+      return SAMPLE_GAMES;
     } catch {
       return SAMPLE_GAMES;
     }
@@ -167,8 +176,11 @@ export default function App() {
   const [globalTags, setGlobalTags] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("globalTagsList");
-      const list = saved ? JSON.parse(saved) : DEFAULT_TAGS;
-      return sortAlphabetically(Array.from(new Set(list)));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return sortAlphabetically(Array.from(new Set(parsed)));
+      }
+      return sortAlphabetically(Array.from(new Set(DEFAULT_TAGS)));
     } catch {
       return sortAlphabetically(Array.from(new Set(DEFAULT_TAGS)));
     }
@@ -177,8 +189,11 @@ export default function App() {
   const [globalGenres, setGlobalGenres] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem("globalGenresList");
-      const list = saved ? JSON.parse(saved) : DEFAULT_GENRES;
-      return sortAlphabetically(Array.from(new Set(list)));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return sortAlphabetically(Array.from(new Set(parsed)));
+      }
+      return sortAlphabetically(Array.from(new Set(DEFAULT_GENRES)));
     } catch {
       return sortAlphabetically(Array.from(new Set(DEFAULT_GENRES)));
     }
@@ -189,12 +204,17 @@ export default function App() {
     const initialGames = (() => {
       try {
         const savedGames = localStorage.getItem("gameLibrary");
-        return savedGames ? JSON.parse(savedGames) : SAMPLE_GAMES;
+        if (savedGames) {
+          const parsed = JSON.parse(savedGames);
+          if (Array.isArray(parsed)) return parsed;
+        }
+        return SAMPLE_GAMES;
       } catch {
         return SAMPLE_GAMES;
       }
     })();
-    const covers = (initialGames as Game[]).map((g) => g.cover).filter(Boolean);
+    const safeList = Array.isArray(initialGames) ? initialGames : SAMPLE_GAMES;
+    const covers = safeList.map((g) => g.cover).filter(Boolean);
     const pool = covers.length > 0 ? covers : COVER_BANK;
     return pool[Math.floor(Math.random() * pool.length)];
   });
@@ -396,7 +416,7 @@ export default function App() {
     });
     playRetroSound("statusChange");
     showToast({
-      title: "Entrada Restaurada 🔄",
+      title: "Entrada Restaurada ������",
       message: `A entrada do diário foi restaurada.`,
       type: "success",
     });
@@ -510,7 +530,7 @@ export default function App() {
   useEffect(() => {
     mediaUploadQueueManager.setGameUpdateCallback((gameId, updateFn) => {
       setGames((prevGames) =>
-        prevGames.map((g) => (g.id === gameId ? updateFn(g) : g))
+        (Array.isArray(prevGames) ? prevGames : []).map((g) => (g.id === gameId ? updateFn(g) : g))
       );
     });
   }, []);
@@ -610,6 +630,20 @@ export default function App() {
   const [gmailTargetGame, setGmailTargetGame] = useState<Game | null>(null);
   const [imgBBModalOpen, setImgBBModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [adminInitialCategory, setAdminInitialCategory] = useState<AdminCategory>("blizzard");
+  const [adminInitialBlizzardSubTab, setAdminInitialBlizzardSubTab] = useState<BlizzardSubTab>("auth");
+
+  useEffect(() => {
+    const handleOpenAdminBlizzard = (e: any) => {
+      setAdminInitialCategory("blizzard");
+      if (e.detail?.subTab) {
+        setAdminInitialBlizzardSubTab(e.detail.subTab);
+      }
+      setSettingsModalOpen(true);
+    };
+    window.addEventListener("open_admin_blizzard", handleOpenAdminBlizzard);
+    return () => window.removeEventListener("open_admin_blizzard", handleOpenAdminBlizzard);
+  }, []);
   const [steamModalOpen, setSteamModalOpen] = useState(false);
 
   const handleImportSteamGame = (newGameData: Partial<Game>) => {
@@ -1032,22 +1066,14 @@ export default function App() {
         console.warn("Could not fetch remote WoW characters from Blizzard API:", err);
       }
 
-      // Check if any Blizzard game is in library
-      const existingBlizzardGame = games.find(
-        (g) =>
-          g.integrationPlatform === "battlenet" ||
-          (g.integrationPlatform as any) === "blizzard" ||
-          g.platform?.toLowerCase().includes("blizzard") ||
-          g.platform?.toLowerCase().includes("battle.net") ||
-          g.name?.toLowerCase().includes("warcraft") ||
-          g.name?.toLowerCase().includes("world of warcraft")
-      );
+      // Check if user already has an actual WoW game in library
+      const existingWoWGame = games.find((g) => isWorldOfWarcraftGame(g));
 
       let gamesList = [...games];
 
-      // If user has no WoW game yet, create World of Warcraft entry automatically
-      if (!existingBlizzardGame) {
-        const topChar = userChars.length > 0 ? [...userChars].sort((a, b) => (b.level || 0) - (a.level || 0))[0] : null;
+      // If user has no WoW game yet and has remote WoW characters, create World of Warcraft entry automatically
+      if (!existingWoWGame && userChars.length > 0) {
+        const topChar = [...userChars].sort((a, b) => (b.level || 0) - (a.level || 0))[0];
         const initialGame: Game = {
           id: `game-blizzard-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           name: "World of Warcraft",
@@ -1102,8 +1128,9 @@ export default function App() {
           updated.integrationPlatform = "battlenet";
           updatedCount++;
 
-          const isWoW = updated.isWow || updated.name.toLowerCase().includes("warcraft");
+          const isWoW = isWorldOfWarcraftGame(updated);
           if (isWoW) {
+            updated.isWow = true;
             if (userChars.length > 0) {
               updated.blizzardCharacters = userChars;
             }
@@ -1147,6 +1174,15 @@ export default function App() {
                 console.warn("Could not fetch detailed profile for character:", targetChar.name, profErr);
               }
             }
+          } else {
+            // Strictly exclude WoW characters from non-WoW Blizzard games (Diablo, Overwatch, StarCraft, Hearthstone, etc.)
+            delete (updated as any).blizzardCharacters;
+            delete (updated as any).blizzardSelectedCharacter;
+            delete (updated as any).blizzardCharacterName;
+            delete (updated as any).blizzardRealm;
+            delete (updated as any).blizzardProfileData;
+            delete (updated as any).wowVersion;
+            updated.isWow = false;
           }
 
           return updated;
@@ -1584,10 +1620,10 @@ export default function App() {
 
       isIncomingFirebaseUpdate.current = true;
       
-      if (remoteGames.length > 0 || remoteTags.length > 0 || remoteGenres.length > 0) {
-        setGames(remoteGames);
-        setGlobalTags(sortAlphabetically(remoteTags));
-        setGlobalGenres(sortAlphabetically(remoteGenres));
+      if ((Array.isArray(remoteGames) && remoteGames.length > 0) || (Array.isArray(remoteTags) && remoteTags.length > 0) || (Array.isArray(remoteGenres) && remoteGenres.length > 0)) {
+        setGames(Array.isArray(remoteGames) ? remoteGames : []);
+        setGlobalTags(sortAlphabetically(Array.isArray(remoteTags) ? remoteTags : []));
+        setGlobalGenres(sortAlphabetically(Array.isArray(remoteGenres) ? remoteGenres : []));
       } else {
         // If Firebase is empty, initialize it with current local/default data
         console.log("[FirebaseSync] Firebase retornou array vazio. Inicializando com estado local.");
@@ -1783,35 +1819,40 @@ export default function App() {
 
   // Distinct platform options inside games list sorted alphabetically
   const platformOptions = useMemo(() => {
-    const platforms = games.flatMap((g) => splitEntities(g.platform)).filter(Boolean);
+    const safeGames = Array.isArray(games) ? games : [];
+    const platforms = safeGames.flatMap((g) => splitEntities(g.platform)).filter(Boolean);
     const unique = Array.from(new Set(platforms)).map(String).sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
     return ["All", ...unique];
   }, [games]);
 
   // Distinct publisher options inside games list sorted alphabetically
   const publisherOptions = useMemo(() => {
-    const publishers = games.flatMap((g) => splitEntities(g.publisher)).filter(Boolean);
+    const safeGames = Array.isArray(games) ? games : [];
+    const publishers = safeGames.flatMap((g) => splitEntities(g.publisher)).filter(Boolean);
     const unique = Array.from(new Set(publishers)).map(String).sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
     return ["All", ...unique];
   }, [games]);
 
   // Distinct series options inside games list sorted alphabetically
   const seriesOptions = useMemo(() => {
-    const seriesList = games.flatMap((g) => splitEntities(g.series)).filter(Boolean);
+    const safeGames = Array.isArray(games) ? games : [];
+    const seriesList = safeGames.flatMap((g) => splitEntities(g.series)).filter(Boolean);
     const unique = Array.from(new Set(seriesList)).map(String).sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" }));
     return ["All", ...unique];
   }, [games]);
 
   // Distinct tag options inside games list sorted alphabetically
   const tagOptions = useMemo(() => {
-    const tags = games.flatMap((g) => g.tags || []).filter(Boolean);
+    const safeGames = Array.isArray(games) ? games : [];
+    const tags = safeGames.flatMap((g) => g.tags || []).filter(Boolean);
     const unique = Array.from(new Set(tags)).sort((a, b) => (a as string).localeCompare(b as string, "pt", { sensitivity: "base" }));
     return ["All", ...unique];
   }, [games]);
 
   // Actions
   const handleRandomCover = () => {
-    const covers = games.map((g) => g.cover).filter(Boolean);
+    const safeGames = Array.isArray(games) ? games : [];
+    const covers = safeGames.map((g) => g.cover).filter(Boolean);
     const pool = covers.length > 0 ? covers : COVER_BANK;
     
     // Filter out the current cover to guarantee it changes if possible
@@ -1858,9 +1899,9 @@ export default function App() {
         () => {
           setGlobalTags((prev) => sortAlphabetically(prev.filter((t) => t !== tagToDelete)));
           setGames((prev) =>
-            prev.map((g) => ({
+            (Array.isArray(prev) ? prev : []).map((g) => ({
               ...g,
-              tags: g.tags ? g.tags.filter((t) => t !== tagToDelete) : []
+              tags: Array.isArray(g.tags) ? g.tags.filter((t) => t !== tagToDelete) : []
             }))
           );
           triggerAlert("Excluída", `A tag "${tagToDelete}" foi removida.`);
@@ -1877,9 +1918,9 @@ export default function App() {
         () => {
           setGlobalGenres((prev) => sortAlphabetically(prev.filter((g) => g !== genreToDelete)));
           setGames((prev) =>
-            prev.map((g) => ({
+            (Array.isArray(prev) ? prev : []).map((g) => ({
               ...g,
-              genre: g.genre ? g.genre.filter((gen) => gen !== genreToDelete) : []
+              genre: Array.isArray(g.genre) ? g.genre.filter((gen) => gen !== genreToDelete) : []
             }))
           );
           triggerAlert("Excluído", `O gênero "${genreToDelete}" foi removido.`);
@@ -1897,8 +1938,8 @@ export default function App() {
         return sortAlphabetically([...filtered, newTag]);
       });
       setGames((prev) =>
-        prev.map((g) => {
-          if (g.tags && g.tags.includes(oldTag)) {
+        (Array.isArray(prev) ? prev : []).map((g) => {
+          if (Array.isArray(g.tags) && g.tags.includes(oldTag)) {
             const updatedTags = g.tags.map((t) => (t === oldTag ? newTag : t));
             return {
               ...g,
@@ -1921,8 +1962,8 @@ export default function App() {
         return sortAlphabetically([...filtered, newGenre]);
       });
       setGames((prev) =>
-        prev.map((g) => {
-          if (g.genre && g.genre.includes(oldGenre)) {
+        (Array.isArray(prev) ? prev : []).map((g) => {
+          if (Array.isArray(g.genre) && g.genre.includes(oldGenre)) {
             const updatedGenres = g.genre.map((gen) => (gen === oldGenre ? newGenre : gen));
             return {
               ...g,
@@ -2021,7 +2062,7 @@ export default function App() {
 
     if (sanitizedGameData.id) {
       // Edit mode
-      setGames((prev) => prev.map((g) => (g.id === sanitizedGameData.id ? ({ ...g, ...sanitizedGameData } as Game) : g)));
+      setGames((prev) => (Array.isArray(prev) ? prev : []).map((g) => (g.id === sanitizedGameData.id ? ({ ...g, ...sanitizedGameData } as Game) : g)));
       console.log(`[handleSaveGame] Jogo editado com sucesso: "${sanitizedGameData.name}" (ID: ${sanitizedGameData.id})`);
     } else {
       // Add mode
@@ -2030,7 +2071,7 @@ export default function App() {
         id: "game-" + Date.now(),
         diary: sanitizedGameData.diary || []
       } as Game;
-      setGames((prev) => [newGame, ...prev]);
+      setGames((prev) => [newGame, ...(Array.isArray(prev) ? prev : [])]);
       console.log(`[handleSaveGame] Novo jogo criado: "${newGame.name}" (ID: ${newGame.id})`);
     }
 
@@ -2086,7 +2127,7 @@ export default function App() {
             });
           }
 
-          setGames((prev) => prev.filter((g) => g.id !== gameId));
+          setGames((prev) => (Array.isArray(prev) ? prev : []).filter((g) => g.id !== gameId));
           setDetailGameId(null);
           showToast({
             title: "Movido para a Lixeira 🗑️",
@@ -2118,7 +2159,7 @@ export default function App() {
   const handleSaveDiaryEntry = (gameId: string, entry: DiaryEntry) => {
     ensureAdmin("salvar entrada no diário", () => {
       setGames((prev) =>
-        prev.map((g) => {
+        (Array.isArray(prev) ? prev : []).map((g) => {
           if (g.id === gameId) {
             const diary = g.diary || [];
             const exists = diary.some((d) => d.id === entry.id);
@@ -2154,7 +2195,7 @@ export default function App() {
       }
 
       setGames((prev) =>
-        prev.map((g) => {
+        (Array.isArray(prev) ? prev : []).map((g) => {
           if (g.id === gameId) {
             const updatedDiary = (g.diary || []).filter((d) => d.id !== entryId);
             return { ...g, diary: updatedDiary };
@@ -2190,7 +2231,7 @@ export default function App() {
       }
 
       setGames((prev) =>
-        prev.map((g) => {
+        (Array.isArray(prev) ? prev : []).map((g) => {
           if (g.id === gameId) {
             const updatedDiary = (g.diary || []).filter((d) => !entryIdsSet.has(d.id));
             return { ...g, diary: updatedDiary };
@@ -2230,7 +2271,8 @@ export default function App() {
 
   // Sorting & Filtering Algorithm
   const filteredGames = useMemo(() => {
-    let result = games.filter((game) => {
+    const safeGames = Array.isArray(games) ? games : [];
+    let result = safeGames.filter((game) => {
       // Filter by active tab (status matches)
       const gameStatusList = Array.isArray(game.status) ? game.status : typeof game.status === "string" ? [game.status] : [];
       const matchesTab = activeTab === "Todos" || gameStatusList.includes(activeTab);
@@ -2244,8 +2286,8 @@ export default function App() {
           game.publisher,
           game.studio || "",
           game.developer || "",
-          ...game.genre,
-          ...game.tags
+          ...(Array.isArray(game.genre) ? game.genre : []),
+          ...(Array.isArray(game.tags) ? game.tags : [])
         ]
           .join(" ")
           .toLowerCase()
@@ -2388,7 +2430,7 @@ export default function App() {
                 onClick={() => {
                   setIsRepositioning(false);
                   if (matchedGameForCover) {
-                    const updatedGames = games.map((g) =>
+                    const updatedGames = (Array.isArray(games) ? games : []).map((g) =>
                       g.id === matchedGameForCover.id ? { 
                        ...g, 
                         coverPosition: bannerY,
@@ -3052,6 +3094,8 @@ export default function App() {
         onBatchSyncBlizzard={handleBatchSyncBlizzard}
         isSyncingBlizzardBatch={isBatchSyncingBlizzard}
         triggerAlert={triggerAlert}
+        initialCategory={adminInitialCategory}
+        initialBlizzardSubTab={adminInitialBlizzardSubTab}
       />
 
       {/* Trash / Soft Delete Modal */}

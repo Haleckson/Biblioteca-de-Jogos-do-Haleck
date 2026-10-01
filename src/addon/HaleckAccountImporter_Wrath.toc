@@ -1,0 +1,13 @@
+## Interface: 30403
+## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura (WotLK Classic)
+## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for WotLK Classic.
+## Author: Haleck
+## Version: 4.0.0
+## SavedVariables: HaleckAccountImporterDB
+## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\Icons\INV_Misc_Book_09
+
+HaleckAccountImporter.lua
+AddonInterface.lua

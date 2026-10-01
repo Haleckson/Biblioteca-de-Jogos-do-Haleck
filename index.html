@@ -67,15 +67,55 @@
           str === "error" ||
           str === "[object Event]" ||
           str === "undefined" ||
+          str.indexOf("getAttribLocation") !== -1 ||
+          str.indexOf("getUniformLocation") !== -1 ||
+          str.indexOf("WebGLProgram") !== -1 ||
+          str.indexOf("parameter 1 is not of type 'WebGLProgram'") !== -1 ||
+          str.indexOf("WebGLRenderingContext") !== -1 ||
+          str.indexOf("Failed to create program") !== -1 ||
+          str.indexOf("setting 'f'") !== -1 ||
           str.indexOf("ZamModelViewer") !== -1 ||
           str.indexOf("zamimg") !== -1 ||
           str.indexOf("modelviewer") !== -1 ||
           str.indexOf("webgl") !== -1 ||
           str.indexOf("WebGL") !== -1 ||
           str.indexOf("createTexture") !== -1 ||
-          str.indexOf("css") !== -1
+          str.indexOf("createProgram") !== -1 ||
+          str.indexOf("css") !== -1 ||
+          str.indexOf("reading 'map'") !== -1 ||
+          str.indexOf("reading 'program'") !== -1 ||
+          str.indexOf("uniformSetters") !== -1 ||
+          str.indexOf("attribSetters") !== -1 ||
+          str.indexOf("Cannot read properties of null") !== -1
         ) {
           event.preventDefault();
+        }
+      });
+      window.addEventListener("error", function (event) {
+        var str = String((event && (event.message || (event.error && event.error.message))) || "");
+        var filename = String((event && event.filename) || "");
+        if (
+          filename.indexOf("viewer.min.js") !== -1 ||
+          str.indexOf("getAttribLocation") !== -1 ||
+          str.indexOf("getUniformLocation") !== -1 ||
+          str.indexOf("WebGLProgram") !== -1 ||
+          str.indexOf("parameter 1 is not of type 'WebGLProgram'") !== -1 ||
+          str.indexOf("WebGLRenderingContext") !== -1 ||
+          str.indexOf("Failed to create program") !== -1 ||
+          str.indexOf("setting 'f'") !== -1 ||
+          str.indexOf("reading 'map'") !== -1 ||
+          str.indexOf("reading 'program'") !== -1 ||
+          str.indexOf("uniformSetters") !== -1 ||
+          str.indexOf("attribSetters") !== -1 ||
+          str.indexOf("Cannot read properties of null") !== -1 ||
+          str.indexOf("ZamModelViewer") !== -1 ||
+          str.indexOf("WebGL") !== -1 ||
+          str.indexOf("webgl") !== -1 ||
+          str.indexOf("modelviewer") !== -1 ||
+          str.indexOf("createProgram") !== -1
+        ) {
+          event.preventDefault();
+          return true;
         }
       });
     </script>
@@ -86,6 +126,373 @@
         window.jQuery.support = window.jQuery.support || {};
         window.jQuery.support.cors = true;
       }
+
+      // Defensive WebGL context guardian for 3D Model Viewer
+      (function() {
+        function patchWebGLProto(Proto) {
+          if (!Proto || Proto.__zamGuardInstalled) return;
+          Proto.__zamGuardInstalled = true;
+
+          var origCreateShader = Proto.createShader;
+          var origShaderSource = Proto.shaderSource;
+          var origCompileShader = Proto.compileShader;
+          var origAttachShader = Proto.attachShader;
+          var origDetachShader = Proto.detachShader;
+          var origGetShaderParameter = Proto.getShaderParameter;
+          var origGetShaderInfoLog = Proto.getShaderInfoLog;
+          var origGetShaderSource = Proto.getShaderSource;
+          var origGetShaderPrecisionFormat = Proto.getShaderPrecisionFormat;
+          var origGetAttachedShaders = Proto.getAttachedShaders;
+          var origDeleteShader = Proto.deleteShader;
+          var origIsShader = Proto.isShader;
+          var origCreateProgram = Proto.createProgram;
+          var origLinkProgram = Proto.linkProgram;
+          var origGetProgramParameter = Proto.getProgramParameter;
+          var origGetProgramInfoLog = Proto.getProgramInfoLog;
+          var origGetAttribLocation = Proto.getAttribLocation;
+          var origGetUniformLocation = Proto.getUniformLocation;
+          var origUseProgram = Proto.useProgram;
+          var origGetActiveAttrib = Proto.getActiveAttrib;
+          var origGetActiveUniform = Proto.getActiveUniform;
+          var origGetUniform = Proto.getUniform;
+          var origValidateProgram = Proto.validateProgram;
+          var origBindAttribLocation = Proto.bindAttribLocation;
+          var origDeleteProgram = Proto.deleteProgram;
+          var origIsProgram = Proto.isProgram;
+
+          // Helper to verify existence and type of a shader safely without GPU stalls
+          function isExistingShader(gl, shader) {
+            if (!shader || typeof shader !== "object") return false;
+            try {
+              if (typeof WebGLShader !== "undefined" && !(shader instanceof WebGLShader)) return false;
+            } catch (_) {}
+            return true;
+          }
+
+          // Helper to verify existence and type of a program safely without GPU stalls
+          function isExistingProgram(gl, program) {
+            if (!program || typeof program !== "object") return false;
+            try {
+              if (typeof WebGLProgram !== "undefined" && !(program instanceof WebGLProgram)) {
+                if (Object.prototype.toString.call(program) !== "[object WebGLProgram]") return false;
+              }
+            } catch (_) {}
+            return true;
+          }
+
+          if (origGetAttribLocation) {
+            Proto.getAttribLocation = function(program, name) {
+              if (!isExistingProgram(this, program) || typeof name !== "string") {
+                return -1;
+              }
+              try {
+                var loc = origGetAttribLocation.call(this, program, name);
+                return typeof loc === "number" ? loc : -1;
+              } catch (_) {
+                return -1;
+              }
+            };
+          }
+
+          if (origGetUniformLocation) {
+            Proto.getUniformLocation = function(program, name) {
+              if (!isExistingProgram(this, program) || typeof name !== "string") {
+                return null;
+              }
+              try {
+                return origGetUniformLocation.call(this, program, name);
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origUseProgram) {
+            Proto.useProgram = function(program) {
+              if (program === null) {
+                try {
+                  return origUseProgram.call(this, null);
+                } catch (_) {
+                  return;
+                }
+              }
+              if (!isExistingProgram(this, program)) {
+                return;
+              }
+              try {
+                return origUseProgram.call(this, program);
+              } catch (_) {}
+            };
+          }
+
+          if (origGetActiveAttrib) {
+            Proto.getActiveAttrib = function(program, index) {
+              if (!isExistingProgram(this, program)) {
+                return null;
+              }
+              try {
+                return origGetActiveAttrib.call(this, program, index);
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origGetActiveUniform) {
+            Proto.getActiveUniform = function(program, index) {
+              if (!isExistingProgram(this, program)) {
+                return null;
+              }
+              try {
+                return origGetActiveUniform.call(this, program, index);
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origGetUniform) {
+            Proto.getUniform = function(program, location) {
+              if (!isExistingProgram(this, program) || !location) {
+                return null;
+              }
+              try {
+                return origGetUniform.call(this, program, location);
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origValidateProgram) {
+            Proto.validateProgram = function(program) {
+              if (!isExistingProgram(this, program)) return;
+              try {
+                return origValidateProgram.call(this, program);
+              } catch (_) {}
+            };
+          }
+
+          if (origCreateShader) {
+            Proto.createShader = function(type) {
+              try {
+                return origCreateShader.call(this, type);
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origShaderSource) {
+            Proto.shaderSource = function(shader, source) {
+              if (!isExistingShader(this, shader) || typeof source !== "string") return;
+              try {
+                return origShaderSource.call(this, shader, source);
+              } catch (_) {}
+            };
+          }
+
+          if (origCompileShader) {
+            Proto.compileShader = function(shader) {
+              if (!isExistingShader(this, shader)) return;
+              try {
+                return origCompileShader.call(this, shader);
+              } catch (_) {}
+            };
+          }
+
+          if (origCreateProgram) {
+            Proto.createProgram = function() {
+              try {
+                var prog = origCreateProgram.call(this);
+                return prog || null;
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origAttachShader) {
+            Proto.attachShader = function(program, shader) {
+              if (!isExistingProgram(this, program) || !isExistingShader(this, shader)) return;
+              try {
+                return origAttachShader.call(this, program, shader);
+              } catch (_) {}
+            };
+          }
+
+          if (origLinkProgram) {
+            Proto.linkProgram = function(program) {
+              if (!isExistingProgram(this, program)) return;
+              try {
+                return origLinkProgram.call(this, program);
+              } catch (_) {}
+            };
+          }
+
+          if (origGetProgramParameter) {
+            Proto.getProgramParameter = function(program, pname) {
+              if (!isExistingProgram(this, program)) return false;
+              try {
+                return origGetProgramParameter.call(this, program, pname);
+              } catch (_) {
+                return false;
+              }
+            };
+          }
+
+          if (origGetProgramInfoLog) {
+            Proto.getProgramInfoLog = function(program) {
+              if (!isExistingProgram(this, program)) return "";
+              try {
+                return origGetProgramInfoLog.call(this, program) || "";
+              } catch (_) {
+                return "";
+              }
+            };
+          }
+
+          if (origBindAttribLocation) {
+            Proto.bindAttribLocation = function(program, index, name) {
+              if (!isExistingProgram(this, program)) return;
+              try {
+                return origBindAttribLocation.call(this, program, index, name);
+              } catch (_) {}
+            };
+          }
+
+          if (origDetachShader) {
+            Proto.detachShader = function(program, shader) {
+              if (!isExistingProgram(this, program) || !isExistingShader(this, shader)) return;
+              try {
+                if (origGetAttachedShaders) {
+                  var attached = origGetAttachedShaders.call(this, program);
+                  if (attached && Array.isArray(attached)) {
+                    var isAttached = false;
+                    for (var i = 0; i < attached.length; i++) {
+                      if (attached[i] === shader) {
+                        isAttached = true;
+                        break;
+                      }
+                    }
+                    if (!isAttached) return;
+                  }
+                }
+                return origDetachShader.call(this, program, shader);
+              } catch (_) {}
+            };
+          }
+
+          if (origGetAttachedShaders) {
+            Proto.getAttachedShaders = function(program) {
+              if (!isExistingProgram(this, program)) return [];
+              try {
+                var res = origGetAttachedShaders.call(this, program);
+                if (!res || !Array.isArray(res)) return [];
+                var safeShaders = [];
+                for (var i = 0; i < res.length; i++) {
+                  var s = res[i];
+                  if (isExistingShader(this, s)) {
+                    safeShaders.push(s);
+                  }
+                }
+                return safeShaders;
+              } catch (_) {
+                return [];
+              }
+            };
+          }
+
+          if (origGetShaderParameter) {
+            Proto.getShaderParameter = function(shader, pname) {
+              if (!isExistingShader(this, shader)) return false;
+              try {
+                return origGetShaderParameter.call(this, shader, pname);
+              } catch (_) {
+                return false;
+              }
+            };
+          }
+
+          if (origGetShaderInfoLog) {
+            Proto.getShaderInfoLog = function(shader) {
+              if (!isExistingShader(this, shader)) return "";
+              try {
+                return origGetShaderInfoLog.call(this, shader) || "";
+              } catch (_) {
+                return "";
+              }
+            };
+          }
+
+          if (origGetShaderSource) {
+            Proto.getShaderSource = function(shader) {
+              if (!isExistingShader(this, shader)) return "";
+              try {
+                return origGetShaderSource.call(this, shader) || "";
+              } catch (_) {
+                return "";
+              }
+            };
+          }
+
+          if (origGetShaderPrecisionFormat) {
+            Proto.getShaderPrecisionFormat = function(shaderType, precisionType) {
+              try {
+                if (this && this.isContextLost && this.isContextLost()) return null;
+                return origGetShaderPrecisionFormat.call(this, shaderType, precisionType);
+              } catch (_) {
+                return null;
+              }
+            };
+          }
+
+          if (origDeleteShader) {
+            Proto.deleteShader = function(shader) {
+              if (!isExistingShader(this, shader)) return;
+              try {
+                return origDeleteShader.call(this, shader);
+              } catch (_) {}
+            };
+          }
+
+          if (origDeleteProgram) {
+            Proto.deleteProgram = function(program) {
+              if (!isExistingProgram(this, program)) return;
+              try {
+                return origDeleteProgram.call(this, program);
+              } catch (_) {}
+            };
+          }
+
+          if (origIsShader) {
+            Proto.isShader = function(shader) {
+              if (!shader || !(shader instanceof WebGLShader)) return false;
+              try {
+                return origIsShader.call(this, shader);
+              } catch (_) {
+                return false;
+              }
+            };
+          }
+
+          if (origIsProgram) {
+            Proto.isProgram = function(program) {
+              if (!program || !(program instanceof WebGLProgram)) return false;
+              try {
+                return origIsProgram.call(this, program);
+              } catch (_) {
+                return false;
+              }
+            };
+          }
+        }
+
+        if (typeof window !== "undefined") {
+          patchWebGLProto(window.WebGLRenderingContext && window.WebGLRenderingContext.prototype);
+          patchWebGLProto(window.WebGL2RenderingContext && window.WebGL2RenderingContext.prototype);
+        }
+      })();
     </script>
     <script src="/vendor/viewer.min.js"></script>
     <script>

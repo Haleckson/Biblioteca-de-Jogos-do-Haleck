@@ -855,7 +855,7 @@ export default function KanbanView({
                                   {/* Custom Tags / Folders */}
                                   {Array.isArray(game.tags) && game.tags.filter(Boolean).length > 0 && (
                                     <div className="mt-1 flex flex-wrap gap-1 items-center">
-                                      {game.tags.filter(Boolean).slice(0, 2).map((t, idx) => (
+                                      {(Array.isArray(game.tags) ? game.tags : []).filter(Boolean).slice(0, 2).map((t, idx) => (
                                         <span
                                           key={`tag-${t}-${idx}`}
                                           className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-zinc-900 text-zinc-400 border border-zinc-800 flex items-center gap-1"

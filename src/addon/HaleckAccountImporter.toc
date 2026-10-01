@@ -1,0 +1,21 @@
+## Interface: 160001, 16001, 11506, 50400, 20504, 110100, 110200
+## Interface-Forever: 160001, 16001
+## Interface-Vanilla: 11506
+## Interface-Classic: 11506
+## Interface-TBC: 20504
+## Interface-Wrath: 30403
+## Interface-Cata: 40400
+## Interface-MoP: 50400
+## Interface-Retail: 110100, 110200
+## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
+## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections & Adventure Journal ("Meu Diário de Aventura") for Haleck GameLog.
+## Author: Haleck
+## Version: 4.0.0
+## SavedVariables: HaleckAccountImporterDB
+## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\Icons\INV_Misc_Book_09
+
+HaleckAccountImporter.lua
+AddonInterface.lua

@@ -13,6 +13,7 @@ import { formatHoursAndMinutes, getTotalGamePlaytimeHours, getGameTimeBreakdown 
 import { startLiveSessionForGame } from "./LiveSessionWidget";
 import { formatSteamPlaytime } from "../utils/steamApi";
 import { formatGogPlaytime } from "../utils/gogApi";
+import { isWorldOfWarcraftGame } from "../utils/blizzardApi";
 import CachedImage from "./CachedImage";
 
 export interface GameCardProps {
@@ -968,21 +969,33 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
               </span>
             )}
 
-            {game.integrationPlatform === "battlenet" && (
-              <span 
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-sky-950/80 text-sky-300 border border-sky-500/40 shadow-sm shadow-sky-500/20"
-                title={`Integrado com Battle.net API (${game.blizzardGameName || game.blizzardGameId || 'Blizzard'})`}
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
-                <span>Battle.net</span>
-                {((game.blizzardProfileData?.selectedCharacter) || game.blizzardCharacterName || game.blizzardProfileData?.name) && (
-                  <span className="text-[9px] font-mono font-normal text-sky-200 opacity-90">
-                    ({game.blizzardProfileData?.name || game.blizzardProfileData?.selectedCharacter?.name || game.blizzardCharacterName}
-                    {(game.blizzardProfileData?.equippedItemLevel || game.blizzardProfileData?.selectedCharacter?.equippedItemLevel) ? ` • ilvl ${game.blizzardProfileData?.equippedItemLevel || game.blizzardProfileData?.selectedCharacter?.equippedItemLevel}` : (game.blizzardProfileData?.level || game.blizzardProfileData?.selectedCharacter?.level) ? ` • lvl ${game.blizzardProfileData?.level || game.blizzardProfileData?.selectedCharacter?.level}` : ""})
-                  </span>
-                )}
-              </span>
-            )}
+            {game.integrationPlatform === "battlenet" && (() => {
+              const isWoW = isWorldOfWarcraftGame(game);
+              const charName = isWoW
+                ? (game.blizzardProfileData?.name || game.blizzardProfileData?.selectedCharacter?.name || game.blizzardCharacterName)
+                : null;
+              const ilvl = isWoW
+                ? (game.blizzardProfileData?.equippedItemLevel || game.blizzardProfileData?.selectedCharacter?.equippedItemLevel)
+                : null;
+              const lvl = isWoW
+                ? (game.blizzardProfileData?.level || game.blizzardProfileData?.selectedCharacter?.level)
+                : null;
+
+              return (
+                <span 
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-extrabold uppercase tracking-wider bg-sky-950/80 text-sky-300 border border-sky-500/40 shadow-sm shadow-sky-500/20"
+                  title={`Integrado com Battle.net API (${game.blizzardGameName || game.blizzardGameId || 'Blizzard'})`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
+                  <span>Battle.net</span>
+                  {charName && (
+                    <span className="text-[9px] font-mono font-normal text-sky-200 opacity-90">
+                      ({charName}{ilvl ? ` • ilvl ${ilvl}` : lvl ? ` • lvl ${lvl}` : ""})
+                    </span>
+                  )}
+                </span>
+              );
+            })()}
             {game.difficulty && splitEntities(game.difficulty).map((d, dIdx) => {
               const parsed = parseContextNote(d);
               return (
@@ -1007,7 +1020,7 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
                 </div>
               );
             })}
-            {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
+            {[...(Array.isArray(game.genre) ? game.genre : [])].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
               <span 
                 key={`${g}-${idx}`} 
                 className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-semibold bg-purple-950/40 text-purple-300 border border-purple-500/20"
@@ -1018,9 +1031,9 @@ function GameCardComponent({ game, onClick, isAdmin, onUpdateGame, onOpenZoom, o
               </span>
             ))}
           </div>
-          {game.tags && game.tags.length > 0 && (
+          {Array.isArray(game.tags) && game.tags.length > 0 && (
             <div className="mt-2.5 max-h-[48px] overflow-y-auto flex flex-wrap gap-1 pr-1 scrollbar-thin scrollbar-thumb-zinc-800 scrollbar-track-transparent">
-              {[...game.tags].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
+              {[...(Array.isArray(game.tags) ? game.tags : [])].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
                 <span
                   key={`${t}-${idx}`}
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[10px] font-medium bg-zinc-950 text-cyan-400 border border-cyan-500/10 whitespace-nowrap"

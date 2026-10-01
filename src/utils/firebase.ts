@@ -1,12 +1,30 @@
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getDatabase, ref, onValue, set, update } from "firebase/database";
 import { getAuth } from "firebase/auth";
-import { getFirestore, doc, getDocFromServer } from "firebase/firestore";
+import {
+  getFirestore,
+  doc,
+  getDocFromServer,
+  setDoc,
+  getDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  limit,
+  writeBatch,
+  setLogLevel,
+} from "firebase/firestore";
 import { Game } from "../types";
 import { summarizeError } from "./logger";
 
+// Suppress benign internal gRPC idle stream warnings
+try {
+  setLogLevel("error");
+} catch (_) {}
+
 // Read Firebase configuration from environment variables with provided fallbacks
-const env = (import.meta as any).env || {};
+const env = (typeof process !== "undefined" && process?.env) || import.meta.env || {};
 
 const defaultProjectId = "biblioteca-jogos-haleck";
 const defaultFirestoreDbId = "ai-studio-catlogodevideojo-04422a0f-88da-4c05-958f-0eb7d1c78b7b";
@@ -22,7 +40,7 @@ const firebaseConfig = {
   firestoreDatabaseId: env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || defaultFirestoreDbId,
 };
 
-// Check if Firebase is configured
+// Check if Firebase is configured and running in a client browser
 export const isFirebaseConfigured = (): boolean => {
   return !!(
     firebaseConfig.apiKey &&
@@ -34,7 +52,8 @@ export let db: any = null;
 export let auth: any = null;
 export let firestoreDb: any = null;
 
-if (isFirebaseConfigured()) {
+// Only initialize Firebase in the browser environment to prevent Node.js gRPC idle stream errors
+if (isFirebaseConfigured() && typeof window !== "undefined") {
   try {
     const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
     db = getDatabase(app);
@@ -565,6 +584,127 @@ export const syncBlizzardAuthFromFirebase = (
   } catch (err) {
     console.warn("Erro ao configurar listener da Battle.net no Firebase:", summarizeError(err));
     return () => {};
+  }
+};
+
+// =========================================================================
+// FIRESTORE SYNC FOR WOW ID & RELATIONS DATABASE (/wow_database_ids)
+// Stores every Item ID, Display ID, Spell ID, Mount ID, Creature ID, Pet ID,
+// and relationships into Google Cloud Firestore permanently.
+// =========================================================================
+
+export interface WoWIdFirestoreEntity {
+  idType: string;
+  id: string;
+  name?: string;
+  displayId?: number;
+  spellId?: number;
+  relations?: any[];
+  lastUpdated?: string;
+  metadata?: Record<string, any>;
+}
+
+/**
+ * Recursively strips any undefined values from an object before saving to Firestore,
+ * preventing '[invalid-argument] Function setDoc() called with invalid data. Unsupported field value: undefined'
+ */
+export function removeUndefinedFields<T extends Record<string, any>>(obj: T): Partial<T> {
+  if (!obj || typeof obj !== "object") return obj;
+  try {
+    // JSON.stringify inherently omits any undefined property at any nesting level
+    return JSON.parse(
+      JSON.stringify(obj, (_k, v) => (v === undefined ? undefined : v))
+    ) as Partial<T>;
+  } catch (_) {
+    const cleaned: Record<string, any> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (value !== undefined) {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned as Partial<T>;
+  }
+}
+
+/**
+ * Saves or updates a WoW ID entity in Firestore collection /wow_database_ids/{docId}
+ */
+export const saveWoWIdEntityToFirestore = async (entity: WoWIdFirestoreEntity): Promise<boolean> => {
+  if (!firestoreDb || !entity.idType || !entity.id) return false;
+  try {
+    const docId = `${entity.idType}_${entity.id}`;
+    const docRef = doc(firestoreDb, "wow_database_ids", docId);
+    const cleanedPayload = removeUndefinedFields({
+      ...entity,
+      lastUpdated: entity.lastUpdated || new Date().toISOString(),
+    });
+    await setDoc(docRef, cleanedPayload, { merge: true });
+    return true;
+  } catch (err) {
+    console.warn("[Firebase] Aviso ao salvar wow_database_id:", summarizeError(err));
+    return false;
+  }
+};
+
+/**
+ * Batch saves multiple WoW ID entities to Firestore using WriteBatch (up to 450 per batch)
+ */
+export const batchSaveWoWIdEntitiesToFirestore = async (
+  entities: WoWIdFirestoreEntity[]
+): Promise<number> => {
+  if (!firestoreDb || !Array.isArray(entities) || entities.length === 0) return 0;
+  try {
+    const batch = writeBatch(firestoreDb);
+    let count = 0;
+    const now = new Date().toISOString();
+
+    for (const entity of entities.slice(0, 450)) {
+      if (entity && entity.idType && entity.id) {
+        const docId = `${entity.idType}_${entity.id}`;
+        const docRef = doc(firestoreDb, "wow_database_ids", docId);
+        const cleanedPayload = removeUndefinedFields({
+          ...entity,
+          lastUpdated: entity.lastUpdated || now,
+        });
+        batch.set(docRef, cleanedPayload, { merge: true });
+        count++;
+      }
+    }
+
+    if (count > 0) {
+      await batch.commit();
+      console.log(`[Firebase] ${count} entidades de WoW ID salvas no Firestore.`);
+    }
+    return count;
+  } catch (err) {
+    console.warn("[Firebase] Aviso no batchSaveWoWIdEntitiesToFirestore:", summarizeError(err));
+    return 0;
+  }
+};
+
+/**
+ * Queries WoW ID entities from Firestore with optional filtering by idType
+ */
+export const queryWoWIdEntitiesFromFirestore = async (
+  idType?: string,
+  maxResults = 100
+): Promise<WoWIdFirestoreEntity[]> => {
+  if (!firestoreDb) return [];
+  try {
+    const collRef = collection(firestoreDb, "wow_database_ids");
+    const q = idType
+      ? query(collRef, where("idType", "==", idType), limit(maxResults))
+      : query(collRef, limit(maxResults));
+
+    const snap = await getDocs(q);
+    const results: WoWIdFirestoreEntity[] = [];
+    snap.forEach((d) => {
+      results.push(d.data() as WoWIdFirestoreEntity);
+    });
+    return results;
+  } catch (err) {
+    console.warn("[Firebase] Aviso ao consultar wow_database_ids no Firestore:", summarizeError(err));
+    return [];
   }
 };
 

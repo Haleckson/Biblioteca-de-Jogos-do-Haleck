@@ -126,7 +126,7 @@ export function TrophiesList({
   mode?: "card" | "detail" | "form";
   className?: string;
 }) {
-  if (!trophies || trophies.length === 0) return null;
+  if (!Array.isArray(trophies) || trophies.length === 0) return null;
 
   return (
     <div className={`inline-flex items-center gap-1.5 flex-wrap ${className}`}>

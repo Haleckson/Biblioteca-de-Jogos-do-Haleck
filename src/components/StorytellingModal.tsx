@@ -443,7 +443,7 @@ export default function StorytellingModal({ isOpen, onClose, game }: Storytellin
                               <span>{currentEntry.period || "Registro de Jogatina"}</span>
                             </span>
 
-                            {currentEntry.keyMoments &&
+                            {Array.isArray(currentEntry.keyMoments) &&
                               currentEntry.keyMoments.map((km) => (
                                 <span
                                   key={km}

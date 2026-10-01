@@ -620,6 +620,93 @@ export function isBattlenetGame(game?: {
   return game.integrationPlatform === "battlenet";
 }
 
+// Check if a game is specifically a World of Warcraft release (Retail, Forever, Classic, TBC, MoP, etc.)
+export function isWorldOfWarcraftGame(game?: {
+  isWow?: boolean;
+  wowVersion?: string;
+  blizzardGameId?: string;
+  blizzardGameName?: string;
+  title?: string;
+  name?: string;
+} | null): boolean {
+  if (!game) return false;
+
+  // 1. Strict exclusion of non-WoW Blizzard games (Diablo, Overwatch, StarCraft, Hearthstone, Warcraft III RTS)
+  if (game.blizzardGameId) {
+    const bgId = game.blizzardGameId.toLowerCase().trim();
+    if (
+      bgId.startsWith("diablo") ||
+      bgId.startsWith("overwatch") ||
+      bgId.startsWith("starcraft") ||
+      bgId.startsWith("hearthstone") ||
+      bgId.startsWith("warcraft-3") ||
+      bgId.startsWith("warcraft3")
+    ) {
+      return false;
+    }
+    if (bgId.startsWith("wow")) {
+      return true;
+    }
+  }
+
+  const bName = (game.blizzardGameName || "").toLowerCase().trim();
+  if (
+    bName.includes("diablo") ||
+    bName.includes("overwatch") ||
+    bName.includes("starcraft") ||
+    bName.includes("hearthstone") ||
+    bName.includes("warcraft iii") ||
+    bName.includes("warcraft 3")
+  ) {
+    return false;
+  }
+
+  const t = (game.title || (game as any).name || "").toLowerCase().trim();
+  if (
+    t.includes("diablo") ||
+    t.includes("overwatch") ||
+    t.includes("starcraft") ||
+    t.includes("hearthstone") ||
+    t.includes("warcraft iii") ||
+    t.includes("warcraft 3")
+  ) {
+    return false;
+  }
+
+  // 2. Explicit WoW title or Blizzard name detection
+  if (
+    bName.includes("world of warcraft") ||
+    bName.includes("warcraft: retail") ||
+    bName.includes("warcraft: classic") ||
+    bName.includes("warcraft: forever")
+  ) {
+    return true;
+  }
+
+  if (
+    t.includes("world of warcraft") ||
+    t.startsWith("wow ") ||
+    t.startsWith("wow:") ||
+    t.startsWith("wow -") ||
+    t.includes("warcraft: retail") ||
+    t.includes("warcraft: classic") ||
+    t.includes("warcraft: forever")
+  ) {
+    return true;
+  }
+
+  // 3. Fallback to flags only if valid and not contradictory
+  if (game.isWow) return true;
+  if (game.wowVersion && typeof game.wowVersion === "string" && game.wowVersion.trim() !== "") {
+    const wv = game.wowVersion.toLowerCase().trim();
+    if (["retail", "forever", "classic", "tbc", "mop", "beta", "classic_beta"].includes(wv)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Group characters by their WoW version (retail, classic, forever, tbc)
 export function groupCharactersByVersion(
   characters: BlizzardCharacterSummary[]
@@ -908,6 +995,20 @@ export async function fetchBlizzardCharacterProfile(
     } catch (cacheErr) {
       console.warn("[BlizzardApiCache] Erro ao consultar cache local de perfil:", cacheErr);
     }
+  }
+
+  // Para WoW Forever ou personagens originados do Addon, consultar snapshot sincronizado prioritariamente
+  if (gameId === "wow-forever" || version === "forever" || (summary as any)?.source === "addon") {
+    try {
+      const addonRes = await fetch(`/api/blizzard/wow/addon-sync/${encodeURIComponent(realmSlug || "wow-forever-beta")}/${encodeURIComponent(characterName)}`);
+      if (addonRes.ok) {
+        const addonData = await addonRes.json();
+        const prof = addonData.profile || addonData.payload?.character;
+        if (prof && prof.name) {
+          return enrichBlizzardProfileData(JSON.parse(JSON.stringify(prof)));
+        }
+      }
+    } catch (_) {}
   }
 
   const params = new URLSearchParams({

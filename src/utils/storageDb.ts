@@ -13,23 +13,45 @@ const DB_NAME = "haleck_gamelog_idb";
 const DB_VERSION = 1;
 const STORE_NAME = "keyval";
 
-let dbPromise: Promise<IDBDatabase> | null = null;
+let dbPromise: Promise<IDBDatabase | null> | null = null;
+let idbUnavailable = false;
 
-function getDb(): Promise<IDBDatabase> {
+// Fast in-memory backing store for fallback and synchronous/SSR safety
+const inMemoryStore = new Map<string, any>();
+
+/**
+ * Checks if IndexedDB is supported and accessible in the current browser/runtime context
+ */
+export function isIndexedDBAvailable(): boolean {
+  if (typeof window === "undefined") return false;
+  if (idbUnavailable) return false;
+  try {
+    return !!window.indexedDB;
+  } catch {
+    idbUnavailable = true;
+    return false;
+  }
+}
+
+function getDb(): Promise<IDBDatabase | null> {
+  if (idbUnavailable) return Promise.resolve(null);
   if (dbPromise) return dbPromise;
   if (typeof window === "undefined" || !window.indexedDB) {
-    return Promise.reject(new Error("IndexedDB is not available in this environment"));
+    idbUnavailable = true;
+    return Promise.resolve(null);
   }
 
-  dbPromise = new Promise((resolve, reject) => {
+  dbPromise = new Promise((resolve) => {
     try {
       const request = window.indexedDB.open(DB_NAME, DB_VERSION);
 
       request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME);
-        }
+        try {
+          const db = request.result;
+          if (!db.objectStoreNames.contains(STORE_NAME)) {
+            db.createObjectStore(STORE_NAME);
+          }
+        } catch (_) {}
       };
 
       request.onsuccess = () => {
@@ -37,12 +59,17 @@ function getDb(): Promise<IDBDatabase> {
       };
 
       request.onerror = () => {
-        console.warn("[StorageDB] Falha ao abrir IndexedDB:", request.error);
-        reject(request.error);
+        idbUnavailable = true;
+        resolve(null);
       };
-    } catch (err) {
-      console.warn("[StorageDB] Erro inesperado ao inicializar IndexedDB:", err);
-      reject(err);
+
+      request.onblocked = () => {
+        idbUnavailable = true;
+        resolve(null);
+      };
+    } catch (_) {
+      idbUnavailable = true;
+      resolve(null);
     }
   });
 
@@ -50,38 +77,84 @@ function getDb(): Promise<IDBDatabase> {
 }
 
 /**
- * Persists an item asynchronously into IndexedDB
+ * Persists an item asynchronously into IndexedDB (with graceful memory fallback)
  */
 export async function saveToIndexedDB<T>(key: string, value: T): Promise<void> {
+  if (!key) return;
+
+  // Always mirror in memory for instant retrieval even if IndexedDB is restricted
+  inMemoryStore.set(key, value);
+
+  if (!isIndexedDBAvailable()) {
+    return;
+  }
+
   try {
     const db = await getDb();
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readwrite");
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.put(value, key);
-      req.onsuccess = () => resolve();
-      req.onerror = () => reject(req.error);
+    if (!db) return;
+
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_NAME, "readwrite");
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.put(value, key);
+        req.onsuccess = () => resolve();
+        req.onerror = () => {
+          idbUnavailable = true;
+          resolve();
+        };
+      } catch (txErr) {
+        idbUnavailable = true;
+        resolve();
+      }
     });
-  } catch (err) {
-    console.warn(`[StorageDB] Erro ao salvar chave '${key}' no IndexedDB:`, err);
+  } catch (err: any) {
+    idbUnavailable = true;
   }
 }
 
 /**
- * Loads an item asynchronously from IndexedDB
+ * Loads an item asynchronously from IndexedDB (with memory fallback)
  */
 export async function loadFromIndexedDB<T>(key: string): Promise<T | null> {
+  if (!key) return null;
+
+  // Check in-memory store first
+  if (inMemoryStore.has(key)) {
+    return inMemoryStore.get(key) as T;
+  }
+
+  if (!isIndexedDBAvailable()) {
+    return null;
+  }
+
   try {
     const db = await getDb();
-    return await new Promise<T | null>((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, "readonly");
-      const store = tx.objectStore(STORE_NAME);
-      const req = store.get(key);
-      req.onsuccess = () => resolve(req.result !== undefined ? req.result : null);
-      req.onerror = () => reject(req.error);
+    if (!db) return null;
+
+    return await new Promise<T | null>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_NAME, "readonly");
+        const store = tx.objectStore(STORE_NAME);
+        const req = store.get(key);
+        req.onsuccess = () => {
+          const res = req.result !== undefined ? req.result : null;
+          if (res !== null) {
+            inMemoryStore.set(key, res);
+          }
+          resolve(res);
+        };
+        req.onerror = () => {
+          idbUnavailable = true;
+          resolve(null);
+        };
+      } catch (txErr) {
+        idbUnavailable = true;
+        resolve(null);
+      }
     });
-  } catch (err) {
-    console.warn(`[StorageDB] Erro ao ler chave '${key}' do IndexedDB:`, err);
+  } catch (err: any) {
+    idbUnavailable = true;
     return null;
   }
 }

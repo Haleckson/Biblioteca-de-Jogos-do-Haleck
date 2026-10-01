@@ -1,0 +1,6 @@
+{
+  "summary": "Plano de implementação para a reestruturação completa do Painel de Admin em 95% do viewport com navegação em barra lateral fixa à esquerda, abas dedicadas por categoria (Blizzard, Steam, GOG, Mídia & Metadados, e Sistema) e migração de todo o ecossistema do Addon WoW e Simulador In-Game para a sub-aba técnica da Blizzard.",
+  "updatedAt": "2026-09-30T12:58:16.498515102Z",
+  "requestFeedback": true,
+  "userFacing": true
+}

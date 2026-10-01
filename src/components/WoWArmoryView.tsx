@@ -42,6 +42,13 @@ import {
   Landmark,
   ShieldAlert,
   CheckCircle2,
+  Database,
+  BookOpen,
+  Footprints,
+  MapPin,
+  Calendar,
+  HeartHandshake,
+  Settings,
 } from "lucide-react";
 import {
   BlizzardProfileData,
@@ -62,6 +69,8 @@ import { WoWInventoryView } from "./WoWInventoryView";
 import { WoWCollectionsView } from "./WoWCollectionsView";
 import { WoWModelViewer3D } from "./WoWModelViewer3D";
 import { WoWAchievementsView } from "./WoWAchievementsView";
+import { WoWIdDatabaseExplorerModal } from "./WoWIdDatabaseExplorerModal";
+import { resolveDisplayIdForArmoryItem, ingestBatchWoWItems, batchIngestWoWRecords } from "../utils/wowIdDatabase";
 import {
   resolveWowheadUrl,
   getWowheadItemUrl,
@@ -82,6 +91,7 @@ interface WoWArmoryViewProps {
   onSelectCharacter?: (char: BlizzardCharacterSummary) => void;
   filterVersion?: string;
   onFilterVersionChange?: (version: string) => void;
+  onOpenAdminBlizzard?: () => void;
 }
 
 // Paperdoll standard equipment slots (authentic English terms)
@@ -125,15 +135,22 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
   onSelectCharacter,
   filterVersion,
   onFilterVersionChange,
+  onOpenAdminBlizzard,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    "armory" | "inventory" | "collections" | "talents" | "reputations" | "achievements" | "stats" | "professions" | "pvp" | "lockouts" | "bank" | "endgame"
+    "armory" | "journal" | "inventory" | "collections" | "talents" | "reputations" | "achievements" | "stats" | "professions" | "pvp" | "lockouts" | "bank" | "endgame"
   >("armory");
+
+  // Adventure Journal ("Meu Diário de Aventura") Sub-Tab State
+  const [journalSubTab, setJournalSubTab] = useState<"timeline" | "bosses" | "exploration" | "companions" | "stats" | "deaths">("timeline");
+  const [journalSearch, setJournalSearch] = useState("");
 
   // Character Selector Dropdown State for Unified Header
   const [isCharSelectorOpen, setIsCharSelectorOpen] = useState(false);
   const [charSearchQuery, setCharSearchQuery] = useState("");
   const [showDeathCertModal, setShowDeathCertModal] = useState(false);
+  const [showIdDatabaseModal, setShowIdDatabaseModal] = useState(false);
+  const [inspectDatabaseId, setInspectDatabaseId] = useState<string | number | undefined>(undefined);
 
   // Determine effective expansion version strictly for this game
   const resolvedVersion = useMemo(() => {
@@ -216,7 +233,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
   const factionInfo = getWoWFactionInfo(charFaction);
   const versionInfo = getWoWVersionInfo(profile.wow_version || profile.gameMode || "retail");
 
-  // Map equipped items by slot
+  // Map equipped items by slot with guaranteed Item ID and Display ID
   const gearMap = useMemo(() => {
     const map = new Map<string, BlizzardGearItem>();
     const items = profile.equippedItems || profile.gear || [];
@@ -228,11 +245,111 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
         if (!enrichedItem.transmog && profile.transmogs && profile.transmogs[slotKey]) {
           enrichedItem.transmog = profile.transmogs[slotKey];
         }
+        // Guarantee valid itemId and displayId for every single item without exception
+        let numItemId = Number(enrichedItem.itemId || enrichedItem.id || 0);
+        if (!numItemId || numItemId <= 0) {
+          const fallbackHash = Math.abs((enrichedItem.name || slotKey).split("").reduce((acc, c) => (acc * 31 + c.charCodeAt(0)) | 0, 0)) % 9000;
+          numItemId = 100000 + fallbackHash;
+        }
+        enrichedItem.itemId = numItemId;
+        enrichedItem.id = numItemId;
+        enrichedItem.displayId = resolveDisplayIdForArmoryItem(enrichedItem);
         map.set(slotKey, enrichedItem);
       }
     }
     return map;
   }, [profile.equippedItems, profile.gear, profile.transmogs]);
+
+  // Auto-archive and ingest all character items, collections, achievements and titles into the server universal ID database
+  useEffect(() => {
+    const equipped = profile.equippedItems || profile.gear || [];
+    const inventoryItems: any[] = [];
+    if (profile.inventory?.backpack?.slots) {
+      inventoryItems.push(...profile.inventory.backpack.slots);
+    }
+    if (profile.inventory?.bags) {
+      for (const b of profile.inventory.bags) {
+        if (b?.slots) inventoryItems.push(...b.slots);
+      }
+    }
+    const bankItems: any[] = [];
+    if (profile.bank?.mainBank) bankItems.push(...profile.bank.mainBank);
+    if (profile.bank?.reagentBank) bankItems.push(...profile.bank.reagentBank);
+    if (profile.bank?.warbandBank) bankItems.push(...profile.bank.warbandBank);
+
+    const allItemsToIngest: any[] = [];
+    for (const it of [...equipped, ...inventoryItems, ...bankItems]) {
+      if (!it) continue;
+      const itId = Number(it.itemId || it.id || 0);
+      if (itId > 0) {
+        const dId = it.displayId || resolveDisplayIdForArmoryItem(it);
+        allItemsToIngest.push({
+          id: itId,
+          displayId: dId,
+          name: it.name,
+          slotId: it.slotId,
+          quality: it.quality,
+          iconUrl: it.iconUrl,
+          version: profile.wow_version || profile.gameMode,
+        });
+      }
+    }
+
+    const mountsToIngest = (profile.collections?.mounts || []).map((m: any) => ({
+      mountId: Number(m.mountId || m.id || 0),
+      name: m.name,
+      creatureDisplayId: Number(m.creatureDisplayId || m.displayId || 0),
+      spellId: Number(m.spellId || 0),
+      itemId: Number(m.itemId || 0),
+    })).filter((m: any) => m.mountId > 0);
+
+    const petsToIngest = (profile.collections?.pets || []).map((p: any) => ({
+      speciesId: Number(p.speciesId || p.id || 0),
+      name: p.name,
+      creatureId: Number(p.creatureId || 0),
+      creatureDisplayId: Number(p.creatureDisplayId || p.displayId || 0),
+      spellId: Number(p.spellId || 0),
+    })).filter((p: any) => p.speciesId > 0);
+
+    const achievementsToIngest = (profile.achievements || []).map((a: any) => ({
+      achievementId: Number(a.id || a.achievementId || 0),
+      title: a.title || a.name || "Conquista",
+      points: Number(a.points || 0),
+      category: a.category,
+      iconUrl: a.iconUrl,
+      description: a.description,
+    })).filter((a: any) => a.achievementId > 0);
+
+    const titlesToIngest = (profile.collections?.titles || []).map((t: any) => ({
+      titleId: Number(t.id || t.titleId || 0),
+      name: t.name || t.titleFormat || "Título",
+    })).filter((t: any) => t.titleId > 0);
+
+    if (
+      allItemsToIngest.length > 0 ||
+      mountsToIngest.length > 0 ||
+      petsToIngest.length > 0 ||
+      achievementsToIngest.length > 0 ||
+      titlesToIngest.length > 0
+    ) {
+      batchIngestWoWRecords({
+        items: allItemsToIngest,
+        mounts: mountsToIngest,
+        pets: petsToIngest,
+        achievements: achievementsToIngest,
+        titles: titlesToIngest,
+      }).catch(() => {});
+    }
+  }, [
+    profile.name,
+    profile.realm,
+    profile.equippedItems,
+    profile.gear,
+    profile.inventory,
+    profile.bank,
+    profile.collections,
+    profile.achievements,
+  ]);
 
   const stats = profile.stats || {};
 
@@ -367,6 +484,35 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
             <span className="text-[9px] text-zinc-400 font-mono truncate block leading-none mt-0.5">
               {item.stats[0]}
             </span>
+          )}
+          {item && (
+            <div className={`flex items-center gap-1.5 mt-0.5 text-[8.5px] font-mono ${isRight ? "justify-end" : "justify-start"}`}>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setInspectDatabaseId(item.itemId || item.id);
+                  setShowIdDatabaseModal(true);
+                }}
+                className="text-zinc-500 hover:text-cyan-300 transition-colors cursor-pointer"
+                title="Abrir no Banco de IDs Universais"
+              >
+                ID: <span className="font-bold text-zinc-300">#{item.itemId || item.id}</span>
+              </button>
+              <span className="text-zinc-700">•</span>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setInspectDatabaseId(item.displayId);
+                  setShowIdDatabaseModal(true);
+                }}
+                className="text-zinc-500 hover:text-cyan-200 transition-colors cursor-pointer"
+                title="Abrir Display ID no Banco de IDs"
+              >
+                Disp: <span className="font-bold text-cyan-400">#{item.displayId}</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -632,6 +778,25 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
 
         <button
           type="button"
+          id="wow-tab-journal"
+          onClick={() => setActiveTab("journal")}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+            activeTab === "journal"
+              ? "bg-cyan-600 text-white shadow-md shadow-cyan-600/30"
+              : "text-zinc-400 hover:text-white bg-zinc-900 border border-zinc-800"
+          }`}
+        >
+          <BookOpen size={13} />
+          <span>Meu Diário de Aventura</span>
+          {((profile.adventureJournal?.timeline?.length || 0) > 0 || (profile.adventureJournal?.steps || 0) > 0) && (
+            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-cyan-950 text-cyan-200">
+              {profile.adventureJournal?.timeline?.length || 0}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
           id="wow-tab-inventory"
           onClick={() => setActiveTab("inventory")}
           className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
@@ -816,6 +981,35 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
         >
           <Layers size={13} />
           <span>Detailed Stats</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setInspectDatabaseId(undefined);
+            setShowIdDatabaseModal(true);
+          }}
+          className="px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 bg-cyan-950/80 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-300 hover:text-white shadow-sm ml-auto"
+          title="Abrir o Banco de Dados Universal de IDs do WoW (Item IDs, Display IDs, Spell IDs, Mount IDs)"
+        >
+          <Database size={13} />
+          <span>WoW ID Database & Explorer</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (onOpenAdminBlizzard) {
+              onOpenAdminBlizzard();
+            } else {
+              window.dispatchEvent(new CustomEvent("open_admin_blizzard", { detail: { subTab: "addon_sync" } }));
+            }
+          }}
+          className="px-2.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 bg-zinc-900/90 hover:bg-zinc-800 border border-zinc-800 hover:border-sky-500/50 text-zinc-400 hover:text-sky-300 shadow-sm"
+          title="Gerenciar credenciais Battle.net, pacote do Addon v4.0.0 e Simulador no Painel de Admin"
+        >
+          <Settings size={13} className="text-sky-400" />
+          <span className="hidden md:inline">Admin Blizzard & Addon</span>
         </button>
       </div>
 
@@ -1103,12 +1297,9 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                           <img
                             src={profile.mainRawUrl || profile.renderUrl}
                             alt={profile.name}
-                            onError={(e) => {
-                              // If full render fails, fall back to avatar portrait
-                              const target = e.currentTarget;
-                              target.style.display = "none";
-                              const fallbackDiv = document.getElementById("wow-paperdoll-portrait-fallback");
-                              if (fallbackDiv) fallbackDiv.style.display = "flex";
+                            onError={() => {
+                              // If 2D render from Blizzard fails (e.g. 404), seamlessly switch to 3D interactive model
+                              setArmoryDisplayMode("3d");
                             }}
                             style={{
                               transform: `scale(${paperdollScale}) translateY(${paperdollOffsetY}%)`,
@@ -1116,89 +1307,20 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                             }}
                             className="relative h-full w-full max-h-[780px] min-h-[560px] object-contain drop-shadow-[0_25px_50px_rgba(0,0,0,0.95)] z-10 transition-transform duration-200 pointer-events-auto select-none"
                           />
-
-                          {/* Fallback container if full-body image fails */}
-                          <div
-                            id="wow-paperdoll-portrait-fallback"
-                            style={{ display: "none" }}
-                            className="flex-col items-center justify-center p-4 w-full h-full"
-                          >
-                            <div
-                              className="relative w-56 h-56 sm:w-64 sm:h-64 rounded-2xl p-2 shadow-2xl border-4 bg-zinc-950 flex items-center justify-center"
-                              style={{
-                                borderColor: classInfo.color,
-                                boxShadow: `0 0 45px ${classInfo.color}50`,
-                              }}
-                            >
-                              <img
-                                src={profile.avatarUrl || raceInfo.iconUrl || classInfo.iconUrl}
-                                alt={profile.name}
-                                className="w-full h-full object-cover rounded-xl"
-                              />
-                            </div>
-                            <div className="mt-4 text-center">
-                              <button
-                                type="button"
-                                onClick={() => setArmoryDisplayMode("3d")}
-                                className="px-4 py-2 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs shadow-lg transition-colors flex items-center gap-2 mx-auto cursor-pointer"
-                              >
-                                <Box size={14} /> Carregar Modelo 3D Interativo
-                              </button>
-                            </div>
-                          </div>
                         </div>
                       ) : (
-                        <div className="relative w-full h-full flex flex-col items-center justify-center p-4">
-                          <div className="w-full max-w-sm p-6 rounded-2xl bg-zinc-900/90 border border-zinc-800 shadow-2xl text-center space-y-4">
-                            <div
-                              className="relative mx-auto w-40 h-40 sm:w-48 sm:h-48 rounded-2xl border-2 p-1 bg-zinc-950 overflow-hidden shadow-2xl"
-                              style={{ borderColor: classInfo.color }}
-                            >
-                              <img
-                                src={profile.avatarUrl || raceInfo.iconUrl || classInfo.iconUrl}
-                                alt={profile.name}
-                                className="w-full h-full object-cover rounded-xl"
-                              />
-                              <div
-                                className="absolute -bottom-1 -right-1 w-10 h-10 rounded-full border-2 overflow-hidden shadow-lg bg-black"
-                                style={{ borderColor: classInfo.color }}
-                              >
-                                <img
-                                  src={classInfo.iconUrl}
-                                  alt={classInfo.name}
-                                  className="w-full h-full object-cover"
-                                />
-                              </div>
-                              <div
-                                className="absolute -top-1 -left-1 w-9 h-9 rounded-full border border-zinc-700 bg-zinc-950 overflow-hidden shadow-lg flex items-center justify-center p-1"
-                              >
-                                <WoWFactionCrest faction={profile.faction} size={22} glow={false} />
-                              </div>
-                            </div>
-
-                            <div>
-                              <span className="text-xs font-mono font-bold text-amber-300 tracking-wider">
-                                Nível {profile.level || 1} • {raceInfo.name}
-                              </span>
-                              <h3
-                                className="text-2xl font-black text-white tracking-wide mt-0.5"
-                                style={{ color: classInfo.color }}
-                              >
-                                {profile.name}
-                              </h3>
-                              <span className="text-xs font-mono text-zinc-400 block mt-0.5">
-                                {charSpec} {classInfo.name} {profile.guild ? `• <${profile.guild}>` : ""}
-                              </span>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={() => setArmoryDisplayMode("3d")}
-                              className="w-full py-2.5 px-4 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-all shadow-lg flex items-center justify-center gap-2 cursor-pointer"
-                            >
-                              <Box size={15} />
-                              <span>Ativar Modelo 3D de Corpo Completo</span>
-                            </button>
+                        <div className="w-full h-full flex flex-col items-center justify-between space-y-2">
+                          <div className="w-full flex items-center justify-between px-3 py-1.5 bg-zinc-900/90 border border-zinc-800 rounded-xl text-xs">
+                            <span className="text-zinc-300 font-bold flex items-center gap-1.5">
+                              <Box size={13} className="text-cyan-400" />
+                              Modelo 3D Interativo Wowhead (Visualização Real 360°)
+                            </span>
+                            <span className="text-[10px] text-amber-400/90 font-mono">
+                              Render 2D da Blizzard indisponível na API pública
+                            </span>
+                          </div>
+                          <div className="w-full h-[580px] sm:h-[660px] lg:h-[740px] rounded-2xl overflow-hidden shadow-2xl border border-zinc-800/80 bg-black/60">
+                            <WoWModelViewer3D profile={profile} height={740} aspect={0.82} />
                           </div>
                         </div>
                       )}
@@ -1335,6 +1457,508 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
             <Info size={12} />
             <span>Hover over equipment to view authentic Wowhead stats, enchantments, gems, and bonuses.</span>
           </p>
+        </div>
+      )}
+
+      {/* TAB: MEU DIÁRIO DE AVENTURA */}
+      {activeTab === "journal" && (
+        <div className="space-y-4">
+          {/* Header Stats Bar */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+            <div className="bg-zinc-900/90 border border-cyan-500/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-cyan-400 flex items-center gap-1.5">
+                <Footprints size={12} />
+                Passos Dados
+              </span>
+              <span className="text-xl font-black font-mono text-cyan-300 mt-1">
+                {(profile.adventureJournal?.steps || 0).toLocaleString()}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                ~{(((profile.adventureJournal?.distanceYards || (profile.adventureJournal?.steps || 0) * 0.75) * 0.9144) / 1000).toFixed(1)} km percorridos
+              </span>
+            </div>
+
+            <div className="bg-zinc-900/90 border border-amber-500/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-amber-400 flex items-center gap-1.5">
+                <Swords size={12} />
+                Chefes & Raros
+              </span>
+              <span className="text-xl font-black font-mono text-amber-300 mt-1">
+                {profile.adventureJournal?.bosses?.length || 0}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                Derrotados pela 1ª vez
+              </span>
+            </div>
+
+            <div className="bg-zinc-900/90 border border-blue-500/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-blue-400 flex items-center gap-1.5">
+                <HeartHandshake size={12} />
+                Companheiros
+              </span>
+              <span className="text-xl font-black font-mono text-blue-300 mt-1">
+                {profile.adventureJournal?.companions?.length || 0}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                Aventureiros em grupo
+              </span>
+            </div>
+
+            <div className="bg-zinc-900/90 border border-emerald-500/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-emerald-400 flex items-center gap-1.5">
+                <FileText size={12} />
+                Quests Concluídas
+              </span>
+              <span className="text-xl font-black font-mono text-emerald-300 mt-1">
+                {profile.quests?.completedCount || profile.adventureJournal?.totalQuestsCompleted || 0}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                Scan ATT completo
+              </span>
+            </div>
+
+            <div className="bg-zinc-900/90 border border-purple-500/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-purple-400 flex items-center gap-1.5">
+                <Compass size={12} />
+                Zonas Exploradas
+              </span>
+              <span className="text-xl font-black font-mono text-purple-300 mt-1">
+                {profile.adventureJournal?.exploration?.length || 0}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                Regiões cartografadas
+              </span>
+            </div>
+
+            <div className="bg-zinc-900/90 border border-rose-500/30 rounded-xl p-3 shadow-sm flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-rose-400 flex items-center gap-1.5">
+                <Skull size={12} />
+                Mortes Sofridas
+              </span>
+              <span className="text-xl font-black font-mono text-rose-300 mt-1">
+                {profile.adventureJournal?.deaths?.length || (profile.hardcore?.isDead ? 1 : 0)}
+              </span>
+              <span className="text-[10px] text-zinc-500 mt-0.5">
+                Livro dos Caídos
+              </span>
+            </div>
+          </div>
+
+          {/* Sub-Tabs Navigation & Search */}
+          <div className="bg-zinc-900/80 border border-zinc-800 rounded-2xl p-3 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
+            <div className="flex items-center gap-1 overflow-x-auto scrollbar-none pb-1 md:pb-0">
+              <button
+                type="button"
+                onClick={() => setJournalSubTab("timeline")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  journalSubTab === "timeline"
+                    ? "bg-cyan-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white bg-zinc-800/60"
+                }`}
+              >
+                <BookOpen size={12} />
+                <span>Linha do Tempo</span>
+                <span className="text-[10px] px-1 rounded bg-black/40 text-cyan-200">
+                  {profile.adventureJournal?.timeline?.length || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setJournalSubTab("bosses")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  journalSubTab === "bosses"
+                    ? "bg-amber-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white bg-zinc-800/60"
+                }`}
+              >
+                <Swords size={12} />
+                <span>Chefes & Raros</span>
+                <span className="text-[10px] px-1 rounded bg-black/40 text-amber-200">
+                  {profile.adventureJournal?.bosses?.length || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setJournalSubTab("exploration")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  journalSubTab === "exploration"
+                    ? "bg-purple-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white bg-zinc-800/60"
+                }`}
+              >
+                <MapPin size={12} />
+                <span>Exploração & Zonas</span>
+                <span className="text-[10px] px-1 rounded bg-black/40 text-purple-200">
+                  {profile.adventureJournal?.exploration?.length || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setJournalSubTab("companions")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  journalSubTab === "companions"
+                    ? "bg-blue-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white bg-zinc-800/60"
+                }`}
+              >
+                <Users size={12} />
+                <span>Companheiros</span>
+                <span className="text-[10px] px-1 rounded bg-black/40 text-blue-200">
+                  {profile.adventureJournal?.companions?.length || 0}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setJournalSubTab("stats")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  journalSubTab === "stats"
+                    ? "bg-teal-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white bg-zinc-800/60"
+                }`}
+              >
+                <Layers size={12} />
+                <span>Estatísticas</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setJournalSubTab("deaths")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                  journalSubTab === "deaths"
+                    ? "bg-rose-600 text-white shadow-sm"
+                    : "text-zinc-400 hover:text-white bg-zinc-800/60"
+                }`}
+              >
+                <Skull size={12} />
+                <span>Livro dos Caídos</span>
+                <span className="text-[10px] px-1 rounded bg-black/40 text-rose-200">
+                  {profile.adventureJournal?.deaths?.length || 0}
+                </span>
+              </button>
+            </div>
+
+            <div className="relative w-full md:w-64 shrink-0">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500" />
+              <input
+                type="text"
+                value={journalSearch}
+                onChange={(e) => setJournalSearch(e.target.value)}
+                placeholder="Filtrar eventos, chefes, amigos..."
+                className="w-full pl-8 pr-3 py-1.5 bg-black/50 border border-zinc-700/60 rounded-lg text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-cyan-500/80"
+              />
+            </div>
+          </div>
+
+          {/* Sub-Tab 1: TIMELINE */}
+          {journalSubTab === "timeline" && (
+            <div className="space-y-2.5">
+              {(!profile.adventureJournal?.timeline || profile.adventureJournal.timeline.length === 0) ? (
+                <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-8 text-center space-y-3">
+                  <BookOpen size={36} className="mx-auto text-cyan-400/60" />
+                  <h4 className="text-base font-bold text-white">Nenhum evento registrado ainda no Diário</h4>
+                  <p className="text-xs text-zinc-400 max-w-md mx-auto">
+                    Conforme você joga com o Addon <strong className="text-cyan-300">Haleck Account Importer v4.0.0</strong> ativo, cada level up, vitória sobre chefe, quest concluída, descoberta e formação de grupo é gravada automaticamente aqui!
+                  </p>
+                  <p className="text-xs text-zinc-500">
+                    Comandos no WoW: <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-cyan-300">/hai</code> ou <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-cyan-300">/diario</code>.
+                  </p>
+                  <p className="text-[11px] text-zinc-400 font-mono">
+                    Para configurar o Addon, baixar o pacote .ZIP ou testar o Simulador In-Game, acesse o <strong>Painel de Admin &gt; Blizzard</strong>.
+                  </p>
+                </div>
+              ) : (
+                <div className="relative border-l-2 border-cyan-500/30 ml-4 pl-4 space-y-3">
+                  {profile.adventureJournal.timeline
+                    .filter((entry) => {
+                      if (!journalSearch) return true;
+                      const q = journalSearch.toLowerCase();
+                      return (
+                        entry.title.toLowerCase().includes(q) ||
+                        entry.desc.toLowerCase().includes(q) ||
+                        (entry.zone || "").toLowerCase().includes(q)
+                      );
+                    })
+                    .map((entry, idx) => {
+                      const badgeColors: Record<string, string> = {
+                        level: "bg-emerald-500/20 text-emerald-300 border-emerald-500/40",
+                        boss: "bg-amber-500/20 text-amber-300 border-amber-500/40",
+                        quest: "bg-cyan-500/20 text-cyan-300 border-cyan-500/40",
+                        discovery: "bg-purple-500/20 text-purple-300 border-purple-500/40",
+                        group: "bg-blue-500/20 text-blue-300 border-blue-500/40",
+                        death: "bg-rose-500/20 text-rose-300 border-rose-500/40",
+                        spell: "bg-indigo-500/20 text-indigo-300 border-indigo-500/40",
+                        milestone: "bg-zinc-500/20 text-zinc-300 border-zinc-500/40",
+                      };
+
+                      return (
+                        <div
+                          key={entry.id || idx}
+                          className="relative bg-zinc-900/90 border border-zinc-800 hover:border-cyan-500/40 rounded-xl p-3.5 transition-all shadow-sm flex items-start gap-3"
+                        >
+                          {/* Dot indicator on timeline */}
+                          <div className="absolute -left-[23px] top-4 w-3 h-3 rounded-full bg-cyan-400 border-2 border-zinc-950 shadow-sm" />
+
+                          {entry.icon ? (
+                            <img
+                              src={entry.icon.startsWith("http") ? entry.icon : `https://wow.zamimg.com/images/wow/icons/large/${entry.icon.replace(/.*\\/, "").toLowerCase()}.jpg`}
+                              alt={entry.title}
+                              onError={(e) => {
+                                (e.currentTarget as HTMLImageElement).src = "https://wow.zamimg.com/images/wow/icons/large/inv_misc_book_09.jpg";
+                              }}
+                              className="w-10 h-10 rounded-lg border border-zinc-700 shrink-0 object-cover mt-0.5"
+                            />
+                          ) : (
+                            <div className="w-10 h-10 rounded-lg bg-zinc-800 border border-zinc-700 flex items-center justify-center shrink-0 mt-0.5">
+                              <BookOpen size={18} className="text-cyan-400" />
+                            </div>
+                          )}
+
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 flex-wrap">
+                              <div className="flex items-center gap-2">
+                                <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${badgeColors[entry.type] || badgeColors.milestone}`}>
+                                  {entry.type}
+                                </span>
+                                <h4 className="text-sm font-bold text-white">{entry.title}</h4>
+                              </div>
+                              <span className="text-[11px] font-mono text-zinc-500 flex items-center gap-1">
+                                <Calendar size={11} />
+                                {entry.timestamp}
+                              </span>
+                            </div>
+
+                            <p className="text-xs text-zinc-300 mt-1 leading-relaxed">{entry.desc}</p>
+
+                            {entry.zone && (
+                              <div className="flex items-center gap-1.5 mt-2 text-[11px] text-cyan-400/90 font-medium">
+                                <MapPin size={11} />
+                                <span>{entry.zone}</span>
+                                {entry.level && (
+                                  <span className="text-zinc-500">• Nível {entry.level}</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Sub-Tab 2: BOSSES & RARES */}
+          {journalSubTab === "bosses" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {(!profile.adventureJournal?.bosses || profile.adventureJournal.bosses.length === 0) ? (
+                <div className="col-span-full bg-zinc-900/60 border border-zinc-800 rounded-2xl p-8 text-center space-y-2">
+                  <Swords size={32} className="mx-auto text-amber-400/60" />
+                  <p className="text-xs text-zinc-400">Nenhum chefe registrado ainda. Ao derrotar qualquer masmorra, raide ou monstro raro, a vitória é gravada imutavelmente!</p>
+                </div>
+              ) : (
+                profile.adventureJournal.bosses
+                  .filter((b) => !journalSearch || b.name.toLowerCase().includes(journalSearch.toLowerCase()) || (b.zone || "").toLowerCase().includes(journalSearch.toLowerCase()))
+                  .map((boss, idx) => (
+                    <div
+                      key={boss.id || idx}
+                      className="bg-zinc-900/90 border border-zinc-800 hover:border-amber-500/40 rounded-xl p-3.5 transition-all shadow-sm flex items-start gap-3"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-amber-950/40 border border-amber-500/40 flex items-center justify-center shrink-0 text-amber-400 font-bold">
+                        <Swords size={18} />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-1">
+                          <h4 className="text-xs font-bold text-white truncate">{boss.name}</h4>
+                          {boss.isWorldBoss && (
+                            <span className="text-[9px] font-black uppercase px-1.5 py-0.2 rounded bg-rose-950 text-rose-300 border border-rose-500/40">
+                              World Boss
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          Local: <span className="text-zinc-200">{boss.zone || "Azeroth"}</span>
+                        </p>
+                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-800 text-[10px] text-zinc-500">
+                          <span>1ª Vitória: {boss.firstKillDate}</span>
+                          <span className="font-bold text-amber-400 font-mono">{boss.killCount} {boss.killCount === 1 ? "abate" : "abates"}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+          )}
+
+          {/* Sub-Tab 3: EXPLORATION & REGIONS */}
+          {journalSubTab === "exploration" && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2.5">
+                {(!profile.adventureJournal?.exploration || profile.adventureJournal.exploration.length === 0) ? (
+                  <div className="col-span-full bg-zinc-900/60 border border-zinc-800 rounded-2xl p-8 text-center text-xs text-zinc-400">
+                    Explore os continentes de Kalimdor e Eastern Kingdoms para registrar suas primeiras visitas!
+                  </div>
+                ) : (
+                  profile.adventureJournal.exploration
+                    .filter((exp) => !journalSearch || exp.zone.toLowerCase().includes(journalSearch.toLowerCase()))
+                    .map((exp, idx) => (
+                      <div
+                        key={exp.zone || idx}
+                        className="bg-zinc-900/90 border border-zinc-800 hover:border-purple-500/40 rounded-xl p-3 transition-all shadow-sm"
+                      >
+                        <div className="flex items-center gap-2">
+                          <MapPin size={14} className="text-purple-400 shrink-0" />
+                          <h4 className="text-xs font-bold text-white truncate">{exp.zone}</h4>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400 mt-2">
+                          <span>Descoberta:</span>
+                          <span className="font-mono text-zinc-300">{exp.firstVisited}</span>
+                        </div>
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400 mt-1">
+                          <span>Visitas:</span>
+                          <span className="font-mono font-bold text-purple-400">{exp.visitCount} vezes</span>
+                        </div>
+                      </div>
+                    ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Sub-Tab 4: COMPANIONS & SOCIAL */}
+          {journalSubTab === "companions" && (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {(!profile.adventureJournal?.companions || profile.adventureJournal.companions.length === 0) ? (
+                <div className="col-span-full bg-zinc-900/60 border border-zinc-800 rounded-2xl p-8 text-center space-y-2">
+                  <Users size={32} className="mx-auto text-blue-400/60" />
+                  <p className="text-xs text-zinc-400">Nenhum companheiro de grupo catalogado ainda. Ao entrar em qualquer grupo ou raide, os aventureiros são memorizados automaticamente!</p>
+                </div>
+              ) : (
+                profile.adventureJournal.companions
+                  .filter((comp) => !journalSearch || comp.name.toLowerCase().includes(journalSearch.toLowerCase()) || (comp.class || "").toLowerCase().includes(journalSearch.toLowerCase()) || (comp.zone || "").toLowerCase().includes(journalSearch.toLowerCase()))
+                  .map((comp, idx) => (
+                    <div
+                      key={comp.name + idx}
+                      className="bg-zinc-900/90 border border-zinc-800 hover:border-blue-500/40 rounded-xl p-3.5 transition-all shadow-sm flex items-start gap-3"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-blue-950/40 border border-blue-500/40 flex items-center justify-center shrink-0">
+                        <Users size={18} className="text-blue-400" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <h4 className="text-xs font-bold text-white truncate">
+                          {comp.name} <span className="text-zinc-500 font-normal">({comp.realm})</span>
+                        </h4>
+                        <p className="text-[11px] text-zinc-400 mt-0.5">
+                          {comp.class} • Nível {comp.level}
+                        </p>
+                        <div className="flex items-center justify-between mt-2 pt-2 border-t border-zinc-800 text-[10px] text-zinc-500">
+                          <span>Conhecido em: {comp.zone || "Azeroth"}</span>
+                          <span className="font-bold text-blue-400 font-mono">{comp.timesGrouped} {comp.timesGrouped === 1 ? "grupo" : "grupos"}</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+              )}
+            </div>
+          )}
+
+          {/* Sub-Tab 5: STATS */}
+          {journalSubTab === "stats" && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-2">
+                <span className="text-[10px] font-bold uppercase text-cyan-400 tracking-wider">Locomoção & Viagens</span>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Passos Estimados:</span>
+                  <span className="font-mono font-bold text-cyan-300">{(profile.adventureJournal?.steps || 0).toLocaleString()}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Distância em Azeroth:</span>
+                  <span className="font-mono font-bold text-zinc-200">
+                    {(((profile.adventureJournal?.distanceYards || 0) * 0.9144) / 1000).toFixed(2)} km
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Pontos de Voo Conhecidos:</span>
+                  <span className="font-mono font-bold text-zinc-200">{profile.spells?.flightPathsCount || 0} rotas</span>
+                </div>
+              </div>
+
+              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-2">
+                <span className="text-[10px] font-bold uppercase text-amber-400 tracking-wider">Combate & Caçadas</span>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Chefes & Raros Derrotados:</span>
+                  <span className="font-mono font-bold text-amber-300">{profile.adventureJournal?.bosses?.length || 0}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Mortes com Honra (HKs):</span>
+                  <span className="font-mono font-bold text-zinc-200">{profile.pvp?.lifetimeHK || 0}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Patente PvP Atual:</span>
+                  <span className="font-mono font-bold text-zinc-200">{profile.pvp?.rankName || "Recruta"}</span>
+                </div>
+              </div>
+
+              <div className="bg-zinc-900/90 border border-zinc-800 rounded-xl p-4 space-y-2">
+                <span className="text-[10px] font-bold uppercase text-emerald-400 tracking-wider">Missões & Grimório</span>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Missões Concluídas:</span>
+                  <span className="font-mono font-bold text-emerald-300">{profile.quests?.completedCount || 0}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Magias no Grimório:</span>
+                  <span className="font-mono font-bold text-zinc-200">{profile.spells?.totalSpells || 0}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs text-zinc-300">
+                  <span>Pontos de Conquista:</span>
+                  <span className="font-mono font-bold text-amber-400">{profile.achievementPoints || 0}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Sub-Tab 6: LIVRO DOS CAÍDOS */}
+          {journalSubTab === "deaths" && (
+            <div className="space-y-3">
+              {(!profile.adventureJournal?.deaths || profile.adventureJournal.deaths.length === 0) ? (
+                <div className="bg-zinc-900/60 border border-zinc-800 rounded-2xl p-8 text-center space-y-2">
+                  <Heart size={32} className="mx-auto text-emerald-400/60" />
+                  <h4 className="text-sm font-bold text-white">Nenhuma morte registrada!</h4>
+                  <p className="text-xs text-zinc-400">Seu personagem permanece invicto até o momento. Caso sofra uma derrota em combate, as circunstâncias exatas ficarão eternizadas aqui.</p>
+                </div>
+              ) : (
+                profile.adventureJournal.deaths.map((death, idx) => (
+                  <div
+                    key={death.id || idx}
+                    className="bg-zinc-900/90 border border-rose-500/30 rounded-xl p-4 shadow-sm flex items-start gap-3.5"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-rose-950/60 border border-rose-500/50 flex items-center justify-center shrink-0 text-rose-400 font-bold">
+                      <Skull size={20} />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <h4 className="text-sm font-bold text-white">
+                          Caiu perante: <span className="text-amber-400">{death.killerName}</span>
+                        </h4>
+                        <span className="text-xs font-mono text-zinc-500">{death.timestamp}</span>
+                      </div>
+                      <p className="text-xs text-zinc-300 mt-1">
+                        Local: <strong className="text-zinc-100">{death.zone}</strong> {death.subZone ? `(${death.subZone})` : ""} • Nível no óbito: <span className="text-rose-400 font-bold">{death.level}</span>
+                      </p>
+                      {death.lastWords && (
+                        <p className="text-xs text-zinc-400 italic mt-2 border-l-2 border-rose-500/40 pl-2.5">
+                          "{death.lastWords}"
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1586,7 +2210,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                 <span className="text-[10px] font-mono text-zinc-500">Max: 2</span>
               </div>
 
-              {profile.professions?.primary && profile.professions.primary.length > 0 ? (
+              {Array.isArray(profile.professions?.primary) && profile.professions.primary.length > 0 ? (
                 <div className="space-y-3">
                   {profile.professions.primary.map((prof: any, idx: number) => {
                     const current = Number(prof.skillLevel) || 0;
@@ -1641,7 +2265,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                 <span className="text-[10px] font-mono text-zinc-500">Culinária, Pesca, Primeiros Socorros</span>
               </div>
 
-              {profile.professions?.secondary && profile.professions.secondary.length > 0 ? (
+              {Array.isArray(profile.professions?.secondary) && profile.professions.secondary.length > 0 ? (
                 <div className="space-y-3">
                   {profile.professions.secondary.map((prof: any, idx: number) => {
                     const current = Number(prof.skillLevel) || 0;
@@ -1758,7 +2382,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
             </span>
           </div>
 
-          {profile.lockouts && profile.lockouts.length > 0 ? (
+          {Array.isArray(profile.lockouts) && profile.lockouts.length > 0 ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {profile.lockouts.map((lockout: any, idx: number) => {
                 const resetHours = lockout.resetInSeconds
@@ -1841,7 +2465,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                   <span className="text-xs text-amber-300">g</span>
                 </h4>
                 <p className="text-[11px] text-zinc-500">
-                  {profile.accountEconomy?.charactersGold?.length || 1} personagens rastreados
+                  {Array.isArray(profile.accountEconomy?.charactersGold) ? profile.accountEconomy.charactersGold.length : 1} personagens rastreados
                 </p>
               </div>
               <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400">
@@ -1869,7 +2493,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
           </div>
 
           {/* Account Economy / Alt Gold Breakdown */}
-          {profile.accountEconomy?.charactersGold && profile.accountEconomy.charactersGold.length > 0 && (
+          {Array.isArray(profile.accountEconomy?.charactersGold) && profile.accountEconomy.charactersGold.length > 0 && (
             <div className="p-4 rounded-2xl bg-zinc-900/80 border border-zinc-800 space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -1884,7 +2508,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-                {profile.accountEconomy.charactersGold.map((alt, idx) => {
+                {(Array.isArray(profile.accountEconomy?.charactersGold) ? profile.accountEconomy.charactersGold : []).map((alt, idx) => {
                   const total = profile.accountEconomy?.totalGold || 1;
                   const percent = Math.min(100, Math.max(1, Math.round(((alt.gold || 0) / total) * 100)));
                   return (
@@ -1932,7 +2556,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                 </span>
               </div>
 
-              {profile.bank?.warbandBank && profile.bank.warbandBank.length > 0 ? (
+              {Array.isArray(profile.bank?.warbandBank) && profile.bank.warbandBank.length > 0 ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
                   {profile.bank.warbandBank.map((item: any, idx: number) => (
                     <div
@@ -1984,7 +2608,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                 </span>
               </div>
 
-              {profile.bank?.mainBank && profile.bank.mainBank.length > 0 ? (
+              {Array.isArray(profile.bank?.mainBank) && profile.bank.mainBank.length > 0 ? (
                 <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-72 overflow-y-auto custom-scrollbar p-1">
                   {profile.bank.mainBank.map((item: any, idx: number) => (
                     <div
@@ -2030,7 +2654,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
                 </span>
               </div>
 
-              {profile.bank?.reagentBank && profile.bank.reagentBank.length > 0 ? (
+              {Array.isArray(profile.bank?.reagentBank) && profile.bank.reagentBank.length > 0 ? (
                 <div className="grid grid-cols-4 sm:grid-cols-6 gap-2 max-h-72 overflow-y-auto custom-scrollbar p-1">
                   {profile.bank.reagentBank.map((item: any, idx: number) => (
                     <div
@@ -2503,7 +3127,7 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
           )}
 
           {/* Primary & Secondary Stats */}
-          {hoveredItem.item.stats && hoveredItem.item.stats.length > 0 && (
+          {Array.isArray(hoveredItem.item.stats) && hoveredItem.item.stats.length > 0 && (
             <div className="mt-1.5 space-y-0.5 text-xs">
               {hoveredItem.item.stats.map((s, idx) => (
                 <p
@@ -2556,12 +3180,42 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
 
           {/* Technical Item IDs & Display IDs for 3D Armoury / Dressing Room */}
           <div className="mt-2 pt-1 border-t border-zinc-800/80 flex flex-wrap items-center justify-between text-[10px] font-mono text-zinc-400 gap-1.5">
-            <span>Item ID: <strong className="text-zinc-200">#{hoveredItem.item.itemId || hoveredItem.item.id || "?"}</strong></span>
-            <span>Display ID: <strong className="text-cyan-400">#{hoveredItem.item.displayId || "?"}</strong></span>
+            <button
+              type="button"
+              onClick={() => {
+                setInspectDatabaseId(hoveredItem.item.itemId || hoveredItem.item.id);
+                setShowIdDatabaseModal(true);
+              }}
+              className="hover:text-cyan-300 transition-colors cursor-pointer text-left"
+              title="Inspecionar Item ID no Banco de Dados Universal de IDs"
+            >
+              <span>Item ID: <strong className="text-zinc-200 underline decoration-cyan-500/40">#{hoveredItem.item.itemId || hoveredItem.item.id || "?"}</strong></span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setInspectDatabaseId(hoveredItem.item.displayId);
+                setShowIdDatabaseModal(true);
+              }}
+              className="hover:text-cyan-200 transition-colors cursor-pointer text-left"
+              title="Inspecionar Modelo 3D e vínculos no Banco de IDs"
+            >
+              <span>Display ID: <strong className="text-cyan-400 underline decoration-cyan-400/40">#{hoveredItem.item.displayId || "?"}</strong></span>
+            </button>
+
             {hoveredItem.item.transmog?.displayId && (
-              <span className="w-full text-purple-300">
-                Transmog Display ID: <strong>#{hoveredItem.item.transmog.displayId}</strong>
-              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setInspectDatabaseId(hoveredItem.item.transmog?.displayId);
+                  setShowIdDatabaseModal(true);
+                }}
+                className="w-full text-purple-300 hover:text-purple-200 transition-colors cursor-pointer text-left"
+                title="Inspecionar Transmog no Banco de IDs"
+              >
+                <span>Transmog Display ID: <strong className="underline decoration-purple-400/40">#{hoveredItem.item.transmog.displayId}</strong></span>
+              </button>
             )}
           </div>
 
@@ -2585,6 +3239,13 @@ export const WoWArmoryView: React.FC<WoWArmoryViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Universal WoW ID Database & Relations Explorer Modal */}
+      <WoWIdDatabaseExplorerModal
+        isOpen={showIdDatabaseModal}
+        onClose={() => setShowIdDatabaseModal(false)}
+        initialSearch={inspectDatabaseId ? String(inspectDatabaseId) : ""}
+      />
     </div>
   );
 };

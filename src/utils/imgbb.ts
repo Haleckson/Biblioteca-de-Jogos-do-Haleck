@@ -11,7 +11,7 @@
 import { compressImageToWebP } from "./mediaWorker";
 import { showToast } from "./toast";
 
-const env = (import.meta as any).env || {};
+const env = (typeof process !== "undefined" && process?.env) || import.meta.env || {};
 // Primary default key provided by the user
 const IMGBB_API_KEY = env.VITE_IMGBB_API_KEY || "d07333dc40c5b1fe0f66d09fa89b5d16";
 

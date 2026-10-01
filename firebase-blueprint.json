@@ -12,6 +12,21 @@
       },
       "required": ["id", "name"]
     },
+    "WoWIdEntity": {
+      "title": "WoWIdEntity",
+      "description": "Comprehensive World of Warcraft ID database entity tracking items, spells, displays, mounts, creatures, pets and relationships",
+      "type": "object",
+      "properties": {
+        "idType": { "type": "string" },
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "displayId": { "type": "number" },
+        "spellId": { "type": "number" },
+        "relations": { "type": "array" },
+        "lastUpdated": { "type": "string" }
+      },
+      "required": ["idType", "id"]
+    },
     "LibraryData": {
       "title": "LibraryData",
       "description": "User game library data container",
@@ -32,6 +47,10 @@
     "/games/{gameId}": {
       "schema": "Game",
       "description": "Individual game records"
+    },
+    "/wow_database_ids/{docId}": {
+      "schema": "WoWIdEntity",
+      "description": "Global World of Warcraft ID database records and relationships"
     },
     "/test/{testId}": {
       "schema": "LibraryData",

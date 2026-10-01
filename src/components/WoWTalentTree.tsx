@@ -350,7 +350,7 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 flex-1 w-full">
-                  {tierRow.talents.map((talent) => {
+                  {(Array.isArray(tierRow.talents) ? tierRow.talents : []).map((talent) => {
                     const isSelected = talent.selected;
                     return (
                       <div
@@ -434,7 +434,7 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
 
                 {/* Nodes Grid */}
                 <div className="grid grid-cols-3 gap-2">
-                  {tree.nodes.map((node) => {
+                  {(Array.isArray(tree.nodes) ? tree.nodes : []).map((node) => {
                     const isMaxed = node.rank >= node.maxRank;
                     const hasPoints = node.rank > 0;
                     return (
@@ -535,7 +535,7 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                 </div>
 
                 <div className="grid grid-cols-3 gap-2">
-                  {tree.nodes.map((node) => {
+                  {(Array.isArray(tree.nodes) ? tree.nodes : []).map((node) => {
                     const isMaxed = node.rank >= node.maxRank;
                     const hasPoints = node.rank > 0;
                     return (
@@ -623,7 +623,7 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                {retailTrees.classTree.nodes.map((node) => (
+                {(Array.isArray(retailTrees.classTree?.nodes) ? retailTrees.classTree.nodes : []).map((node) => (
                   <div
                     key={node.id}
                     onMouseEnter={(e) => handleNodeMouseEnter(node, retailTrees.classTree.title, e)}
@@ -650,7 +650,7 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                {retailTrees.specTree.nodes.map((node) => (
+                {(Array.isArray(retailTrees.specTree?.nodes) ? retailTrees.specTree.nodes : []).map((node) => (
                   <div
                     key={node.id}
                     onMouseEnter={(e) => handleNodeMouseEnter(node, retailTrees.specTree.title, e)}
@@ -683,7 +683,7 @@ export const WoWTalentTree: React.FC<WoWTalentTreeProps> = ({
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
-                  {retailTrees.heroTree.nodes.map((node) => (
+                  {(Array.isArray(retailTrees.heroTree?.nodes) ? retailTrees.heroTree.nodes : []).map((node) => (
                     <div
                       key={node.id}
                       onMouseEnter={(e) => handleNodeMouseEnter(node, retailTrees.heroTree?.heroTreeName, e)}

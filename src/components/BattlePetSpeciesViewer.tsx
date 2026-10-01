@@ -736,7 +736,7 @@ export const BattlePetSpeciesViewer: React.FC<BattlePetSpeciesViewerProps> = ({
               )}
 
               {/* Abilities */}
-              {inspectingPet.abilities && inspectingPet.abilities.length > 0 && (
+              {Array.isArray(inspectingPet.abilities) && inspectingPet.abilities.length > 0 && (
                 <div className="p-3 rounded-xl bg-zinc-900/50 border border-zinc-800">
                   <span className="text-zinc-400 font-bold block mb-2">Habilidades de Mascote:</span>
                   <div className="flex flex-wrap gap-1.5">

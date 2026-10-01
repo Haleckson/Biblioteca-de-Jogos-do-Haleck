@@ -82,7 +82,8 @@ export const WoWCharacterGrid: React.FC<WoWCharacterGridProps> = ({
     const seen = new Set<string>();
     const deduplicated: BlizzardCharacterSummary[] = [];
 
-    for (const c of characters) {
+    const safeCharacters = Array.isArray(characters) ? characters : [];
+    for (const c of safeCharacters) {
       const v = (c.wow_version || c.gameMode || "retail").toLowerCase();
       const r = (c.realmSlug || c.realm || "").toLowerCase();
       const k = `${c.name.toLowerCase()}#${r}#${v}`;

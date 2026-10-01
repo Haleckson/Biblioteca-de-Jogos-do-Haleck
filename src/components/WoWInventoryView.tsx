@@ -77,9 +77,9 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
   }, [inventory]);
 
   // Compute total slots and used slots
-  const totalSlots = allContainers.reduce((sum, b) => sum + b.slotCount, 0);
+  const totalSlots = allContainers.reduce((sum, b) => sum + (b.slotCount || 0), 0);
   const totalUsedSlots = allContainers.reduce(
-    (sum, b) => sum + b.items.filter((it) => it !== null).length,
+    (sum, b) => sum + (Array.isArray(b.items) ? b.items.filter((it) => it !== null).length : 0),
     0
   );
 
@@ -93,7 +93,7 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
     }[] = [];
 
     allContainers.forEach((container, bIdx) => {
-      container.items.forEach((item, sIdx) => {
+      (Array.isArray(container.items) ? container.items : []).forEach((item, sIdx) => {
         slots.push({
           bagIndex: bIdx,
           slotIndex: sIdx,
@@ -270,7 +270,7 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
       </div>
 
       {/* 2. Currencies Row */}
-      {inventory?.currencies && inventory.currencies.length > 0 && (
+      {Array.isArray(inventory?.currencies) && inventory.currencies.length > 0 && (
         <div className="p-2.5 rounded-xl bg-zinc-950/70 border border-zinc-800/80 shadow-sm flex items-center justify-between gap-2 overflow-x-auto">
           <div className="flex items-center gap-3">
             {inventory.currencies.map((curr) => (
@@ -318,7 +318,7 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
             {/* Mini Equipped Bags Icons */}
             <div className="flex items-center gap-1.5">
               {allContainers.map((bag, i) => {
-                const used = bag.items.filter((it) => it !== null).length;
+                const used = (Array.isArray(bag.items) ? bag.items : []).filter((it) => it !== null).length;
                 return (
                   <div
                     key={bag.id}
@@ -394,7 +394,7 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
         /* SPLIT BAGS COMPACT VIEW */
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {allContainers.map((container, bIdx) => {
-            const used = container.items.filter((it) => it !== null).length;
+            const used = (Array.isArray(container.items) ? container.items : []).filter((it) => it !== null).length;
             return (
               <div
                 key={container.id}
@@ -424,7 +424,7 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
 
                 {/* Compact grid for individual bag */}
                 <div className="grid grid-cols-4 sm:grid-cols-4 gap-1.5">
-                  {container.items.map((item, sIdx) => {
+                  {(Array.isArray(container.items) ? container.items : []).map((item, sIdx) => {
                     const matchesSearch =
                       !searchTerm ||
                       (item && item.name.toLowerCase().includes(searchTerm.toLowerCase()));
@@ -526,7 +526,7 @@ export const WoWInventoryView: React.FC<WoWInventoryViewProps> = ({ profile }) =
             <p className="text-white text-[11px]">{hoveredItem.item.binding}</p>
           )}
 
-          {hoveredItem.item.stats && hoveredItem.item.stats.length > 0 && (
+          {Array.isArray(hoveredItem.item.stats) && hoveredItem.item.stats.length > 0 && (
             <div className="space-y-0.5 text-emerald-400 font-mono text-[11px]">
               {hoveredItem.item.stats.map((st, sI) => (
                 <p key={sI}>{st}</p>

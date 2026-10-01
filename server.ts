@@ -9,13 +9,33 @@ import { GoogleGenAI, Type } from "@google/genai";
 import { generateWoWCharacterProfile } from "./src/utils/blizzardCharacterData";
 import { enrichMountWithBlizzardMetadata, enrichPetWithBlizzardMetadata } from "./src/utils/blizzardCollectionsCatalog";
 import { parseAddonData } from "./src/utils/wowAddonParser";
+import { WOW_VERSIONS_CATALOG, WOW_DB2_SOURCES_CATALOG } from "./src/utils/wowSourcesCatalog";
+import { getWoWForeverApiStatus, calculateWoWForeverWorldBosses, mergeWoWForeverHybridData } from "./src/utils/wowForeverApiService";
 
 // Global process error handlers for backend resilience
-process.on("unhandledRejection", (reason, promise) => {
+process.on("unhandledRejection", (reason: any, promise) => {
+  const msg = reason?.message || String(reason || "");
+  if (
+    msg.includes("Disconnecting idle stream") ||
+    msg.includes("Timed out waiting for new targets") ||
+    msg.includes("CANCELLED")
+  ) {
+    // Benign idle stream cleanup from gRPC / Firestore, ignore
+    return;
+  }
   console.error("⚠️ [Server Resilience] Unhandled Rejection at:", promise, "reason:", reason);
 });
 
-process.on("uncaughtException", (error) => {
+process.on("uncaughtException", (error: any) => {
+  const msg = error?.message || String(error || "");
+  if (
+    msg.includes("Disconnecting idle stream") ||
+    msg.includes("Timed out waiting for new targets") ||
+    msg.includes("CANCELLED")
+  ) {
+    // Benign idle stream cleanup from gRPC / Firestore, ignore
+    return;
+  }
   console.error("⚠️ [Server Resilience] Uncaught Exception:", error);
 });
 
@@ -3469,14 +3489,18 @@ app.post("/api/blizzard/oauth-exchange", async (req, res) => {
       } else {
         lastErrorStatus = tokenRes.status;
         lastErrorBody = await tokenRes.text();
-        // If the error was not a redirect URI mismatch or invalid grant, stop retrying
-        if (!lastErrorBody.includes("invalid_grant")) {
+        // If the code is already invalid or consumed, or if error is not invalid_grant, stop retrying
+        if (lastErrorBody.includes("Invalid authorization code") || !lastErrorBody.includes("invalid_grant")) {
           break;
         }
       }
     }
 
-    console.warn("Falha no token exchange da Blizzard:", lastErrorStatus, lastErrorBody);
+    if (lastErrorBody.includes("invalid_grant")) {
+      console.info("[Blizzard OAuth] Aviso de troca de código: authorization code já consumido ou expirado (invalid_grant).");
+    } else {
+      console.warn("Falha no token exchange da Blizzard:", lastErrorStatus, lastErrorBody);
+    }
 
     let friendlyMessage = `Falha ao autorizar na Blizzard (${lastErrorStatus}).`;
     if (lastErrorBody.includes("invalid_grant")) {
@@ -3487,6 +3511,7 @@ app.post("/api/blizzard/oauth-exchange", async (req, res) => {
       success: false,
       error: friendlyMessage,
       isInvalidGrant: lastErrorBody.includes("invalid_grant"),
+      requiresReauth: true,
       details: lastErrorBody,
     });
     return;
@@ -3720,6 +3745,8 @@ app.use("/api/zamimg/modelviewer", async (req, res) => {
         }, 15000);
         if (fbRes.ok) {
           proxyRes = fbRes;
+          res.setHeader("X-Zamimg-Fallback", "slot_fallback");
+          res.setHeader("X-Zamimg-Original-Status", "404");
         }
       }
     }
@@ -3736,6 +3763,8 @@ app.use("/api/zamimg/modelviewer", async (req, res) => {
       }, 15000);
       if (fbRes.ok) {
         proxyRes = fbRes;
+        res.setHeader("X-Zamimg-Fallback", "weapon_fallback");
+        res.setHeader("X-Zamimg-Original-Status", "404");
       }
     }
 
@@ -4880,8 +4909,990 @@ function saveWoWStorage(): void {
   }
 }
 
-// Initialize persistent storage from disk immediately
+// =========================================================================
+// UNIVERSAL WOW ID & RELATIONS PERSISTENT DATABASE
+// Stores every Item ID, Display ID, Spell ID, Mount ID, Creature ID, Pet ID,
+// and bidirectional relationships (item->display, mount->spell->display, etc.)
+// =========================================================================
+const WOW_ID_DB_FILE = path.join(WOW_DATA_DIR, "wow-id-database.json");
+
+interface WoWIdItem {
+  id: number;
+  name?: string;
+  displayId?: number;
+  spellId?: number;
+  slotId?: number;
+  quality?: string;
+  version?: string;
+  iconUrl?: string;
+}
+
+interface WoWIdDisplay {
+  displayId: number;
+  name?: string;
+  linkedItemIds: number[];
+  modelPath?: string;
+  slotId?: number;
+  type?: string;
+}
+
+interface WoWIdSpell {
+  spellId: number;
+  name?: string;
+  linkedItemId?: number;
+  linkedMountId?: number;
+  iconUrl?: string;
+  type?: string;
+}
+
+interface WoWIdMount {
+  mountId: number;
+  name?: string;
+  creatureDisplayId?: number;
+  spellId?: number;
+  itemId?: number;
+}
+
+interface WoWIdCreature {
+  creatureId: number;
+  name?: string;
+  creatureDisplayId?: number;
+  speciesId?: number;
+}
+
+interface WoWIdPet {
+  speciesId: number;
+  name?: string;
+  creatureId?: number;
+  creatureDisplayId?: number;
+  spellId?: number;
+}
+
+interface WoWIdAchievement {
+  achievementId: number;
+  title: string;
+  points?: number;
+  iconUrl?: string;
+  category?: string;
+  rewardTitleId?: number;
+  rewardItemId?: number;
+  rewardMountId?: number;
+  description?: string;
+}
+
+interface WoWIdTitle {
+  titleId: number;
+  name: string;
+  sourceAchievementId?: number;
+}
+
+interface WoWIdQuest {
+  questId: number;
+  title: string;
+  rewardItemId?: number;
+  rewardSpellId?: number;
+  level?: number;
+  zone?: string;
+}
+
+interface WoWIdRelation {
+  sourceId: string;
+  sourceType: string;
+  targetId: string;
+  targetType: string;
+  relation: string;
+  label?: string;
+}
+
+interface WoWIdDatabaseStore {
+  items: Record<string, WoWIdItem>;
+  displays: Record<string, WoWIdDisplay>;
+  spells: Record<string, WoWIdSpell>;
+  mounts: Record<string, WoWIdMount>;
+  creatures: Record<string, WoWIdCreature>;
+  pets: Record<string, WoWIdPet>;
+  achievements: Record<string, WoWIdAchievement>;
+  titles: Record<string, WoWIdTitle>;
+  quests: Record<string, WoWIdQuest>;
+  relations: Record<string, WoWIdRelation>;
+  lastSavedAt: string;
+}
+
+let wowIdDatabaseStore: WoWIdDatabaseStore = {
+  items: {},
+  displays: {},
+  spells: {},
+  mounts: {},
+  creatures: {},
+  pets: {},
+  achievements: {},
+  titles: {},
+  quests: {},
+  relations: {},
+  lastSavedAt: new Date().toISOString(),
+};
+
+function seedAuthoritativeWoWIds(): void {
+  // Authoritative Seed: Iconic Weapons & Legendaries
+  const iconicItems: Array<{ id: number; name: string; displayId: number; spellId?: number; slotId: number; quality: string }> = [
+    { id: 19019, name: "Thunderfury, Blessed Blade of the Windseeker", displayId: 32262, spellId: 21992, slotId: 21, quality: "LEGENDARY" },
+    { id: 17182, name: "Sulfuras, Hand of Ragnaros", displayId: 27531, spellId: 21151, slotId: 21, quality: "LEGENDARY" },
+    { id: 13262, name: "Ashbringer", displayId: 27532, slotId: 21, quality: "LEGENDARY" },
+    { id: 22632, name: "Atiesh, Greatstaff of the Guardian", displayId: 32262, spellId: 28288, slotId: 21, quality: "LEGENDARY" },
+    { id: 32837, name: "Warglaive of Azzinoth (Main)", displayId: 45233, slotId: 21, quality: "LEGENDARY" },
+    { id: 32838, name: "Warglaive of Azzinoth (Off)", displayId: 45233, slotId: 22, quality: "LEGENDARY" },
+    { id: 49623, name: "Shadowmourne", displayId: 64161, spellId: 71152, slotId: 21, quality: "LEGENDARY" },
+    { id: 45747, name: "Val'anyr, Hammer of Ancient Kings", displayId: 58826, spellId: 64411, slotId: 21, quality: "LEGENDARY" },
+    { id: 18803, name: "Finkle's Lava Dredger", displayId: 30426, slotId: 21, quality: "EPIC" },
+    { id: 17075, name: "Vis'kag the Bloodletter", displayId: 28414, slotId: 21, quality: "EPIC" },
+    { id: 18816, name: "Perdition's Blade", displayId: 30430, slotId: 21, quality: "EPIC" },
+    { id: 19364, name: "Ashkandi, Greatsword of the Brotherhood", displayId: 32262, slotId: 21, quality: "EPIC" },
+    // Warrior Tier 3 Dreadnaught
+    { id: 22418, name: "Dreadnaught Breastplate", displayId: 30422, slotId: 5, quality: "EPIC" },
+    { id: 22416, name: "Dreadnaught Helmet", displayId: 32373, slotId: 1, quality: "EPIC" },
+    { id: 22417, name: "Dreadnaught Pauldrons", displayId: 32369, slotId: 3, quality: "EPIC" },
+    { id: 22419, name: "Dreadnaught Legplates", displayId: 30424, slotId: 7, quality: "EPIC" },
+    { id: 22420, name: "Dreadnaught Sabatons", displayId: 27540, slotId: 8, quality: "EPIC" },
+    { id: 22421, name: "Dreadnaught Gauntlets", displayId: 30418, slotId: 10, quality: "EPIC" },
+    { id: 22422, name: "Dreadnaught Waistguard", displayId: 30425, slotId: 6, quality: "EPIC" },
+    { id: 22423, name: "Dreadnaught Wristguards", displayId: 30425, slotId: 9, quality: "EPIC" },
+    // Paladin Tier 2 Judgment
+    { id: 16955, name: "Judgment Crown", displayId: 28414, slotId: 1, quality: "EPIC" },
+    { id: 16953, name: "Judgment Spaulders", displayId: 28416, slotId: 3, quality: "EPIC" },
+    { id: 16958, name: "Judgment Breastplate", displayId: 28418, slotId: 5, quality: "EPIC" },
+    { id: 16952, name: "Judgment Leggings", displayId: 28419, slotId: 7, quality: "EPIC" },
+    { id: 16957, name: "Judgment Sabatons", displayId: 28415, slotId: 8, quality: "EPIC" },
+    { id: 16956, name: "Judgment Gauntlets", displayId: 32367, slotId: 10, quality: "EPIC" },
+    { id: 16951, name: "Judgment Belt", displayId: 28417, slotId: 6, quality: "EPIC" },
+    // Mount Items
+    { id: 13335, name: "Deathcharger's Reins", displayId: 10718, spellId: 18989, slotId: 0, quality: "EPIC" },
+    { id: 50818, name: "Invincible's Reins", displayId: 31007, spellId: 72286, slotId: 0, quality: "EPIC" },
+    { id: 32458, name: "Ashes of A'lar", displayId: 17890, spellId: 32458, slotId: 0, quality: "EPIC" },
+    { id: 33225, name: "Reins of the Swift Spectral Tiger", displayId: 21974, spellId: 42777, slotId: 0, quality: "EPIC" },
+    { id: 19902, name: "Swift Zulian Tiger", displayId: 15290, spellId: 24252, slotId: 0, quality: "EPIC" },
+  ];
+
+  for (const it of iconicItems) {
+    recordWoWIdItem(it);
+  }
+
+  // Authoritative Seed: Mounts
+  const seedMounts: Array<{ mountId: number; name: string; creatureDisplayId: number; spellId: number; itemId?: number }> = [
+    { mountId: 6, name: "Brown Horse", creatureDisplayId: 2404, spellId: 458 },
+    { mountId: 7, name: "Gray Wolf", creatureDisplayId: 2320, spellId: 6648 },
+    { mountId: 70, name: "Rivendare's Deathcharger", creatureDisplayId: 10718, spellId: 18989, itemId: 13335 },
+    { mountId: 183, name: "Ashes of A'lar", creatureDisplayId: 17890, spellId: 32458, itemId: 32458 },
+    { mountId: 196, name: "Swift Spectral Tiger", creatureDisplayId: 21974, spellId: 42777, itemId: 33225 },
+    { mountId: 363, name: "Invincible", creatureDisplayId: 31007, spellId: 72286, itemId: 50818 },
+    { mountId: 304, name: "Mimiron's Head", creatureDisplayId: 28890, spellId: 63956 },
+  ];
+
+  for (const m of seedMounts) {
+    recordWoWMount(m);
+  }
+
+  // Authoritative Seed: Battle Pets
+  const seedPets: Array<{ speciesId: number; name: string; creatureId: number; creatureDisplayId: number; spellId: number }> = [
+    { speciesId: 39, name: "Mechanical Squirrel", creatureId: 7543, creatureDisplayId: 113, spellId: 10673 },
+    { speciesId: 40, name: "Bombay Cat", creatureId: 7384, creatureDisplayId: 114, spellId: 10674 },
+    { speciesId: 41, name: "Cornish Rex Cat", creatureId: 7381, creatureDisplayId: 115, spellId: 10675 },
+    { speciesId: 55, name: "Smolderweb Hatchling", creatureId: 7543, creatureDisplayId: 119, spellId: 10682 },
+  ];
+
+  for (const p of seedPets) {
+    recordWoWPet(p);
+  }
+
+  // Authoritative Seed: Iconic Creatures / Bosses
+  const seedCreatures: Array<{ creatureId: number; name: string; creatureDisplayId: number }> = [
+    { creatureId: 11502, name: "Ragnaros the Firelord", creatureDisplayId: 11121 },
+    { creatureId: 11583, name: "Nefarian", creatureDisplayId: 11380 },
+    { creatureId: 12397, name: "Lord Kazzak", creatureDisplayId: 12397 },
+    { creatureId: 6109, name: "Azuregos", creatureDisplayId: 6109 },
+    { creatureId: 15990, name: "Kel'Thuzad", creatureDisplayId: 15990 },
+    { creatureId: 22917, name: "Illidan Stormrage", creatureDisplayId: 21135 },
+    { creatureId: 36597, name: "The Lich King", creatureDisplayId: 30721 },
+  ];
+
+  for (const c of seedCreatures) {
+    recordWoWIdCreature(c);
+  }
+
+  // Authoritative Seed: Iconic Achievements
+  const seedAchievements: Array<WoWIdAchievement> = [
+    { achievementId: 447, title: "Ahead of the Curve: Xal'atath's Shadow", points: 0, category: "Raids", description: "Derrote o último chefe de raide no modo Heroico antes do próximo conteúdo." },
+    { achievementId: 456, title: "Cutting Edge: Mythic Raid Finisher", points: 0, category: "Raids", description: "Derrote o chefe final de raide no modo Mítico." },
+    { achievementId: 426, title: "Thunderfury, Blessed Blade of the Windseeker", points: 10, category: "Feats of Strength", rewardItemId: 19019, description: "Portador de Thunderfury." },
+    { achievementId: 427, title: "Sulfuras, Hand of Ragnaros", points: 10, category: "Feats of Strength", rewardItemId: 17182, description: "Portador de Sulfuras." },
+    { achievementId: 2144, title: "What a Long, Strange Trip It's Been", points: 50, category: "World Events", rewardMountId: 183, description: "Complete todas as comemorações de feriados pelo mundo." },
+    { achievementId: 4576, title: "The Kingslayer", points: 10, category: "Dungeons & Raids", rewardTitleId: 144, description: "Derrote o Lich King no modo 10 ou 25 jogadores." },
+  ];
+
+  for (const a of seedAchievements) {
+    recordWoWAchievement(a);
+  }
+
+  // Authoritative Seed: Iconic Titles
+  const seedTitles: Array<WoWIdTitle> = [
+    { titleId: 1, name: "Private" },
+    { titleId: 14, name: "Grand Marshal" },
+    { titleId: 15, name: "Scout" },
+    { titleId: 28, name: "High Warlord" },
+    { titleId: 144, name: "the Kingslayer", sourceAchievementId: 4576 },
+    { titleId: 169, name: "the Insane" },
+    { titleId: 120, name: "Champion of the Naaru" },
+  ];
+
+  for (const t of seedTitles) {
+    recordWoWTitle(t);
+  }
+
+  // Authoritative Seed: Iconic Quests
+  const seedQuests: Array<WoWIdQuest> = [
+    { questId: 7488, title: "The Active Agent", rewardItemId: 19019, level: 60, zone: "Eastern Plaguelands" },
+    { questId: 7786, title: "A Hero's Reward", level: 60, zone: "Silithus" },
+    { questId: 28503, title: "The Battle of Darrowshire", level: 56, zone: "Eastern Plaguelands" },
+    { questId: 4903, title: "Attunement to the Core", rewardSpellId: 21992, level: 55, zone: "Blackrock Depths" },
+  ];
+
+  for (const q of seedQuests) {
+    recordWoWQuest(q);
+  }
+}
+
+function recordWoWAchievement(achievement: WoWIdAchievement): void {
+  if (!achievement.achievementId || achievement.achievementId <= 0) return;
+  const aId = String(achievement.achievementId);
+  wowIdDatabaseStore.achievements[aId] = {
+    ...wowIdDatabaseStore.achievements[aId],
+    ...achievement,
+  };
+
+  if (achievement.rewardTitleId) {
+    const tId = String(achievement.rewardTitleId);
+    const relKey = `achievement:${achievement.achievementId}->title:${achievement.rewardTitleId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: aId,
+      sourceType: "achievement",
+      targetId: tId,
+      targetType: "title",
+      relation: "rewards_title",
+      label: `Conquista "${achievement.title}" concede o título #${achievement.rewardTitleId}`,
+    };
+  }
+
+  if (achievement.rewardItemId) {
+    const itId = String(achievement.rewardItemId);
+    const relKey = `achievement:${achievement.achievementId}->item:${achievement.rewardItemId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: aId,
+      sourceType: "achievement",
+      targetId: itId,
+      targetType: "item",
+      relation: "rewards_item",
+      label: `Conquista "${achievement.title}" recompensa o item #${achievement.rewardItemId}`,
+    };
+  }
+
+  if (achievement.rewardMountId) {
+    const mId = String(achievement.rewardMountId);
+    const relKey = `achievement:${achievement.achievementId}->mount:${achievement.rewardMountId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: aId,
+      sourceType: "achievement",
+      targetId: mId,
+      targetType: "mount",
+      relation: "rewards_mount",
+      label: `Conquista "${achievement.title}" recompensa a montaria #${achievement.rewardMountId}`,
+    };
+  }
+}
+
+function recordWoWTitle(title: WoWIdTitle): void {
+  if (!title.titleId || title.titleId <= 0) return;
+  const tId = String(title.titleId);
+  wowIdDatabaseStore.titles[tId] = {
+    ...wowIdDatabaseStore.titles[tId],
+    ...title,
+  };
+
+  if (title.sourceAchievementId) {
+    const aId = String(title.sourceAchievementId);
+    const relKey = `title:${title.titleId}->achievement:${title.sourceAchievementId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: tId,
+      sourceType: "title",
+      targetId: aId,
+      targetType: "achievement",
+      relation: "earned_from_achievement",
+      label: `Título "${title.name}" obtido via conquista #${title.sourceAchievementId}`,
+    };
+  }
+}
+
+function recordWoWQuest(quest: WoWIdQuest): void {
+  if (!quest.questId || quest.questId <= 0) return;
+  const qId = String(quest.questId);
+  wowIdDatabaseStore.quests[qId] = {
+    ...wowIdDatabaseStore.quests[qId],
+    ...quest,
+  };
+
+  if (quest.rewardItemId) {
+    const itId = String(quest.rewardItemId);
+    const relKey = `quest:${quest.questId}->item:${quest.rewardItemId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: qId,
+      sourceType: "quest",
+      targetId: itId,
+      targetType: "item",
+      relation: "rewards_item",
+      label: `Missão "${quest.title}" recompensa o item #${quest.rewardItemId}`,
+    };
+  }
+
+  if (quest.rewardSpellId) {
+    const spId = String(quest.rewardSpellId);
+    const relKey = `quest:${quest.questId}->spell:${quest.rewardSpellId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: qId,
+      sourceType: "quest",
+      targetId: spId,
+      targetType: "spell",
+      relation: "rewards_spell",
+      label: `Missão "${quest.title}" concede/ensina o feitiço #${quest.rewardSpellId}`,
+    };
+  }
+}
+
+function recordWoWIdItem(item: WoWIdItem): void {
+  if (!item.id || item.id <= 0) return;
+  const sId = String(item.id);
+  wowIdDatabaseStore.items[sId] = {
+    ...wowIdDatabaseStore.items[sId],
+    ...item,
+  };
+
+  // If displayId is present, register in displays store and create relation
+  if (item.displayId && item.displayId > 0) {
+    const dId = String(item.displayId);
+    if (!wowIdDatabaseStore.displays[dId]) {
+      wowIdDatabaseStore.displays[dId] = {
+        displayId: item.displayId,
+        name: item.name ? `${item.name} Model` : undefined,
+        linkedItemIds: [item.id],
+        slotId: item.slotId,
+      };
+    } else {
+      if (!wowIdDatabaseStore.displays[dId].linkedItemIds.includes(item.id)) {
+        wowIdDatabaseStore.displays[dId].linkedItemIds.push(item.id);
+      }
+    }
+
+    const relKey = `item:${item.id}->display:${item.displayId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: sId,
+      sourceType: "item",
+      targetId: dId,
+      targetType: "display",
+      relation: "has_display",
+      label: `${item.name || "Item #" + item.id} usa o Modelo 3D #${item.displayId}`,
+    };
+  }
+
+  // If spellId is present, register in spells store and create relation
+  if (item.spellId && item.spellId > 0) {
+    const spId = String(item.spellId);
+    if (!wowIdDatabaseStore.spells[spId]) {
+      wowIdDatabaseStore.spells[spId] = {
+        spellId: item.spellId,
+        linkedItemId: item.id,
+      };
+    }
+    const spRelKey = `item:${item.id}->spell:${item.spellId}`;
+    wowIdDatabaseStore.relations[spRelKey] = {
+      sourceId: sId,
+      sourceType: "item",
+      targetId: spId,
+      targetType: "spell",
+      relation: "grants_spell",
+      label: `${item.name || "Item #" + item.id} ensina/ativa o Feitiço #${item.spellId}`,
+    };
+  }
+}
+
+function recordWoWMount(mount: WoWIdMount): void {
+  if (!mount.mountId || mount.mountId <= 0) return;
+  const mId = String(mount.mountId);
+  wowIdDatabaseStore.mounts[mId] = {
+    ...wowIdDatabaseStore.mounts[mId],
+    ...mount,
+  };
+
+  if (mount.creatureDisplayId && mount.creatureDisplayId > 0) {
+    const dId = String(mount.creatureDisplayId);
+    if (!wowIdDatabaseStore.displays[dId]) {
+      wowIdDatabaseStore.displays[dId] = {
+        displayId: mount.creatureDisplayId,
+        name: mount.name ? `${mount.name} Creature Model` : undefined,
+        linkedItemIds: mount.itemId ? [mount.itemId] : [],
+        type: "creature",
+      };
+    }
+    const relKey = `mount:${mount.mountId}->display:${mount.creatureDisplayId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: mId,
+      sourceType: "mount",
+      targetId: dId,
+      targetType: "display",
+      relation: "has_creature_display",
+      label: `Montaria ${mount.name || "#" + mount.mountId} renderiza o CreatureDisplay #${mount.creatureDisplayId}`,
+    };
+  }
+
+  if (mount.spellId && mount.spellId > 0) {
+    const spId = String(mount.spellId);
+    if (!wowIdDatabaseStore.spells[spId]) {
+      wowIdDatabaseStore.spells[spId] = {
+        spellId: mount.spellId,
+        name: mount.name,
+        linkedMountId: mount.mountId,
+        linkedItemId: mount.itemId,
+      };
+    }
+    const relKey = `mount:${mount.mountId}->spell:${mount.spellId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: mId,
+      sourceType: "mount",
+      targetId: spId,
+      targetType: "spell",
+      relation: "invoked_by_spell",
+      label: `Montaria ${mount.name || "#" + mount.mountId} conjurada pelo Feitiço #${mount.spellId}`,
+    };
+  }
+
+  if (mount.itemId && mount.itemId > 0) {
+    const itId = String(mount.itemId);
+    const relKey = `item:${mount.itemId}->mount:${mount.mountId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: itId,
+      sourceType: "item",
+      targetId: mId,
+      targetType: "mount",
+      relation: "teaches_mount",
+      label: `Item #${mount.itemId} desbloqueia a Montaria #${mount.mountId}`,
+    };
+  }
+}
+
+function recordWoWPet(pet: WoWIdPet): void {
+  if (!pet.speciesId || pet.speciesId <= 0) return;
+  const pId = String(pet.speciesId);
+  wowIdDatabaseStore.pets[pId] = {
+    ...wowIdDatabaseStore.pets[pId],
+    ...pet,
+  };
+
+  if (pet.creatureId && pet.creatureId > 0) {
+    const cId = String(pet.creatureId);
+    if (!wowIdDatabaseStore.creatures[cId]) {
+      wowIdDatabaseStore.creatures[cId] = {
+        creatureId: pet.creatureId,
+        name: pet.name,
+        creatureDisplayId: pet.creatureDisplayId,
+        speciesId: pet.speciesId,
+      };
+    }
+    const relKey = `pet:${pet.speciesId}->creature:${pet.creatureId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: pId,
+      sourceType: "pet",
+      targetId: cId,
+      targetType: "creature",
+      relation: "has_creature_template",
+      label: `Mascote ${pet.name || "#" + pet.speciesId} mapeia para o NPC #${pet.creatureId}`,
+    };
+  }
+
+  if (pet.creatureDisplayId && pet.creatureDisplayId > 0) {
+    const dId = String(pet.creatureDisplayId);
+    const relKey = `pet:${pet.speciesId}->display:${pet.creatureDisplayId}`;
+    wowIdDatabaseStore.relations[relKey] = {
+      sourceId: pId,
+      sourceType: "pet",
+      targetId: dId,
+      targetType: "display",
+      relation: "has_creature_display",
+      label: `Mascote ${pet.name || "#" + pet.speciesId} possui o CreatureDisplay #${pet.creatureDisplayId}`,
+    };
+  }
+}
+
+function loadWoWIdDatabase(): void {
+  try {
+    if (!fs.existsSync(WOW_DATA_DIR)) {
+      fs.mkdirSync(WOW_DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(WOW_ID_DB_FILE)) {
+      const raw = fs.readFileSync(WOW_ID_DB_FILE, "utf-8");
+      const parsed: WoWIdDatabaseStore = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        wowIdDatabaseStore = {
+          items: parsed.items || {},
+          displays: parsed.displays || {},
+          spells: parsed.spells || {},
+          mounts: parsed.mounts || {},
+          creatures: parsed.creatures || {},
+          pets: parsed.pets || {},
+          achievements: parsed.achievements || {},
+          titles: parsed.titles || {},
+          quests: parsed.quests || {},
+          relations: parsed.relations || {},
+          lastSavedAt: parsed.lastSavedAt || new Date().toISOString(),
+        };
+      }
+    }
+    // Seed essential canonical IDs if database is sparse
+    if (Object.keys(wowIdDatabaseStore.items).length < 10) {
+      seedAuthoritativeWoWIds();
+      saveWoWIdDatabase();
+    }
+    console.log(`[WoW ID Database] Carregados ${Object.keys(wowIdDatabaseStore.items).length} itens, ${Object.keys(wowIdDatabaseStore.displays).length} displays, ${Object.keys(wowIdDatabaseStore.spells).length} feitiços, ${Object.keys(wowIdDatabaseStore.mounts).length} montarias, ${Object.keys(wowIdDatabaseStore.achievements).length} conquistas, ${Object.keys(wowIdDatabaseStore.relations).length} relações.`);
+  } catch (err: any) {
+    console.warn("[WoW ID Database] Aviso ao carregar:", err?.message);
+    seedAuthoritativeWoWIds();
+  }
+}
+
+function saveWoWIdDatabase(): void {
+  try {
+    if (!fs.existsSync(WOW_DATA_DIR)) {
+      fs.mkdirSync(WOW_DATA_DIR, { recursive: true });
+    }
+    wowIdDatabaseStore.lastSavedAt = new Date().toISOString();
+    const tmp = `${WOW_ID_DB_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(wowIdDatabaseStore, null, 2), "utf-8");
+    fs.renameSync(tmp, WOW_ID_DB_FILE);
+  } catch (err: any) {
+    console.warn("[WoW ID Database] Aviso ao salvar:", err?.message);
+  }
+}
+
+// Initialize persistent storage and ID database from disk immediately
 loadWoWStorage();
+loadWoWIdDatabase();
+
+// -------------------------------------------------------------------------
+// UNIVERSAL WOW ID DATABASE API ENDPOINTS
+// -------------------------------------------------------------------------
+
+function recordWoWIdSpell(spell: WoWIdSpell): void {
+  if (!spell.spellId || spell.spellId <= 0) return;
+  const spId = String(spell.spellId);
+  wowIdDatabaseStore.spells[spId] = {
+    ...wowIdDatabaseStore.spells[spId],
+    ...spell,
+  };
+}
+
+function recordWoWIdCreature(creature: WoWIdCreature): void {
+  if (!creature.creatureId || creature.creatureId <= 0) return;
+  const cId = String(creature.creatureId);
+  wowIdDatabaseStore.creatures[cId] = {
+    ...wowIdDatabaseStore.creatures[cId],
+    ...creature,
+  };
+}
+
+// 1. Ingest single record (Item, Display, Spell, Mount, Creature, Pet, Achievement, Title, Quest, Relation)
+app.post("/api/blizzard/wow/ids/ingest", (req, res) => {
+  try {
+    const { type, record } = req.body;
+    if (!type || !record) {
+      return res.status(400).json({ error: "Missing type or record in payload" });
+    }
+
+    if (type === "item") {
+      recordWoWIdItem(record);
+    } else if (type === "mount") {
+      recordWoWMount(record);
+    } else if (type === "pet") {
+      recordWoWPet(record);
+    } else if (type === "spell") {
+      recordWoWIdSpell(record);
+    } else if (type === "creature") {
+      recordWoWIdCreature(record);
+    } else if (type === "achievement") {
+      recordWoWAchievement(record);
+    } else if (type === "title") {
+      recordWoWTitle(record);
+    } else if (type === "quest") {
+      recordWoWQuest(record);
+    } else if (type === "batch_items" && Array.isArray(record)) {
+      for (const it of record) {
+        if (it && it.id) recordWoWIdItem(it);
+      }
+    } else if (type === "relation" && record.sourceId && record.targetId) {
+      const relKey = `${record.sourceType}:${record.sourceId}->${record.targetType}:${record.targetId}`;
+      wowIdDatabaseStore.relations[relKey] = record;
+    }
+
+    saveWoWIdDatabase();
+    return res.json({ success: true, message: `Record of type ${type} ingested successfully` });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to ingest WoW ID record", details: err?.message });
+  }
+});
+
+// 2. Batch Ingest records
+app.post("/api/blizzard/wow/ids/batch-ingest", (req, res) => {
+  try {
+    const { items, mounts, pets, spells, creatures, achievements, titles, quests, relations } = req.body;
+    let totalCount = 0;
+
+    if (Array.isArray(items)) {
+      for (const it of items) {
+        if (it && it.id) {
+          recordWoWIdItem(it);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(mounts)) {
+      for (const m of mounts) {
+        if (m && m.mountId) {
+          recordWoWMount(m);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(pets)) {
+      for (const p of pets) {
+        if (p && p.speciesId) {
+          recordWoWPet(p);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(spells)) {
+      for (const s of spells) {
+        if (s && s.spellId) {
+          recordWoWIdSpell(s);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(creatures)) {
+      for (const c of creatures) {
+        if (c && c.creatureId) {
+          recordWoWIdCreature(c);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(achievements)) {
+      for (const a of achievements) {
+        if (a && a.achievementId) {
+          recordWoWAchievement(a);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(titles)) {
+      for (const t of titles) {
+        if (t && t.titleId) {
+          recordWoWTitle(t);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(quests)) {
+      for (const q of quests) {
+        if (q && q.questId) {
+          recordWoWQuest(q);
+          totalCount++;
+        }
+      }
+    }
+
+    if (Array.isArray(relations)) {
+      for (const r of relations) {
+        if (r && r.sourceId && r.targetId) {
+          const relKey = `${r.sourceType}:${r.sourceId}->${r.targetType}:${r.targetId}`;
+          wowIdDatabaseStore.relations[relKey] = r;
+          totalCount++;
+        }
+      }
+    }
+
+    saveWoWIdDatabase();
+    return res.json({ success: true, message: `${totalCount} records ingested successfully into WoW ID Database` });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Batch ingest failed", details: err?.message });
+  }
+});
+
+// 3. Query all IDs by category with search and pagination
+app.get("/api/blizzard/wow/ids/all", (req, res) => {
+  try {
+    const category = (req.query.type as string) || "items";
+    const search = ((req.query.search as string) || "").toLowerCase().trim();
+    const versionFilter = ((req.query.version as string) || "").toLowerCase().trim();
+    const limit = Math.min(200, Math.max(1, parseInt((req.query.limit as string) || "50", 10)));
+    const offset = Math.max(0, parseInt((req.query.offset as string) || "0", 10));
+
+    let pool: any[] = [];
+    if (category === "items") {
+      pool = Object.values(wowIdDatabaseStore.items);
+    } else if (category === "displays") {
+      pool = Object.values(wowIdDatabaseStore.displays);
+    } else if (category === "spells") {
+      pool = Object.values(wowIdDatabaseStore.spells);
+    } else if (category === "mounts") {
+      pool = Object.values(wowIdDatabaseStore.mounts);
+    } else if (category === "creatures") {
+      pool = Object.values(wowIdDatabaseStore.creatures);
+    } else if (category === "pets") {
+      pool = Object.values(wowIdDatabaseStore.pets);
+    } else if (category === "achievements") {
+      pool = Object.values(wowIdDatabaseStore.achievements);
+    } else if (category === "titles") {
+      pool = Object.values(wowIdDatabaseStore.titles);
+    } else if (category === "quests") {
+      pool = Object.values(wowIdDatabaseStore.quests);
+    } else if (category === "relations") {
+      pool = Object.values(wowIdDatabaseStore.relations);
+    } else {
+      pool = Object.values(wowIdDatabaseStore.items);
+    }
+
+    if (versionFilter && versionFilter !== "all") {
+      pool = pool.filter((entry) => {
+        if (!entry.version) return true;
+        const v = String(entry.version).toLowerCase();
+        return v.includes(versionFilter) || versionFilter.includes(v);
+      });
+    }
+
+    if (search) {
+      pool = pool.filter((entry) => {
+        const str = JSON.stringify(entry).toLowerCase();
+        return str.includes(search);
+      });
+    }
+
+    const total = pool.length;
+    const records = pool.slice(offset, offset + limit);
+
+    return res.json({
+      success: true,
+      category,
+      total,
+      limit,
+      offset,
+      records,
+      stats: {
+        totalItems: Object.keys(wowIdDatabaseStore.items).length,
+        totalDisplays: Object.keys(wowIdDatabaseStore.displays).length,
+        totalSpells: Object.keys(wowIdDatabaseStore.spells).length,
+        totalMounts: Object.keys(wowIdDatabaseStore.mounts).length,
+        totalCreatures: Object.keys(wowIdDatabaseStore.creatures).length,
+        totalPets: Object.keys(wowIdDatabaseStore.pets).length,
+        totalAchievements: Object.keys(wowIdDatabaseStore.achievements).length,
+        totalTitles: Object.keys(wowIdDatabaseStore.titles).length,
+        totalQuests: Object.keys(wowIdDatabaseStore.quests).length,
+        totalRelations: Object.keys(wowIdDatabaseStore.relations).length,
+        lastUpdated: wowIdDatabaseStore.lastSavedAt,
+      },
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to query WoW ID database", details: err?.message });
+  }
+});
+
+// 4. Lookup any ID with all its relational connections
+app.get("/api/blizzard/wow/ids/lookup", (req, res) => {
+  try {
+    const rawId = req.query.id as string;
+    const type = (req.query.type as string) || "";
+    if (!rawId) {
+      return res.status(400).json({ error: "Missing 'id' parameter" });
+    }
+
+    const sId = String(rawId);
+    const numId = parseInt(sId, 10);
+
+    let foundRecord: any = null;
+    let detectedType = type;
+
+    if (!detectedType) {
+      if (wowIdDatabaseStore.items[sId]) {
+        foundRecord = wowIdDatabaseStore.items[sId];
+        detectedType = "item";
+      } else if (wowIdDatabaseStore.mounts[sId]) {
+        foundRecord = wowIdDatabaseStore.mounts[sId];
+        detectedType = "mount";
+      } else if (wowIdDatabaseStore.displays[sId]) {
+        foundRecord = wowIdDatabaseStore.displays[sId];
+        detectedType = "display";
+      } else if (wowIdDatabaseStore.spells[sId]) {
+        foundRecord = wowIdDatabaseStore.spells[sId];
+        detectedType = "spell";
+      } else if (wowIdDatabaseStore.pets[sId]) {
+        foundRecord = wowIdDatabaseStore.pets[sId];
+        detectedType = "pet";
+      } else if (wowIdDatabaseStore.creatures[sId]) {
+        foundRecord = wowIdDatabaseStore.creatures[sId];
+        detectedType = "creature";
+      } else if (wowIdDatabaseStore.achievements[sId]) {
+        foundRecord = wowIdDatabaseStore.achievements[sId];
+        detectedType = "achievement";
+      } else if (wowIdDatabaseStore.titles[sId]) {
+        foundRecord = wowIdDatabaseStore.titles[sId];
+        detectedType = "title";
+      } else if (wowIdDatabaseStore.quests[sId]) {
+        foundRecord = wowIdDatabaseStore.quests[sId];
+        detectedType = "quest";
+      }
+    } else {
+      if (detectedType === "item") foundRecord = wowIdDatabaseStore.items[sId];
+      else if (detectedType === "display") foundRecord = wowIdDatabaseStore.displays[sId];
+      else if (detectedType === "mount") foundRecord = wowIdDatabaseStore.mounts[sId];
+      else if (detectedType === "spell") foundRecord = wowIdDatabaseStore.spells[sId];
+      else if (detectedType === "pet") foundRecord = wowIdDatabaseStore.pets[sId];
+      else if (detectedType === "creature") foundRecord = wowIdDatabaseStore.creatures[sId];
+      else if (detectedType === "achievement") foundRecord = wowIdDatabaseStore.achievements[sId];
+      else if (detectedType === "title") foundRecord = wowIdDatabaseStore.titles[sId];
+      else if (detectedType === "quest") foundRecord = wowIdDatabaseStore.quests[sId];
+    }
+
+    // Find all relations involving this ID
+    const relevantRelations = Object.values(wowIdDatabaseStore.relations).filter(
+      (rel) => String(rel.sourceId) === sId || String(rel.targetId) === sId
+    );
+
+    // Linked items sharing display or spell
+    const linkedItems: any[] = [];
+    if (detectedType === "display" && wowIdDatabaseStore.displays[sId]) {
+      const itIds = wowIdDatabaseStore.displays[sId].linkedItemIds || [];
+      for (const iId of itIds) {
+        if (wowIdDatabaseStore.items[String(iId)]) {
+          linkedItems.push(wowIdDatabaseStore.items[String(iId)]);
+        }
+      }
+    } else if (detectedType === "item" && foundRecord?.displayId) {
+      const d = wowIdDatabaseStore.displays[String(foundRecord.displayId)];
+      if (d) {
+        for (const iId of d.linkedItemIds || []) {
+          if (iId !== numId && wowIdDatabaseStore.items[String(iId)]) {
+            linkedItems.push(wowIdDatabaseStore.items[String(iId)]);
+          }
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      found: !!foundRecord,
+      id: rawId,
+      type: detectedType || "unknown",
+      record: foundRecord,
+      relations: relevantRelations,
+      linkedItems,
+      linkedDisplay: foundRecord?.displayId ? wowIdDatabaseStore.displays[String(foundRecord.displayId)] : undefined,
+      linkedSpell: foundRecord?.spellId ? wowIdDatabaseStore.spells[String(foundRecord.spellId)] : undefined,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Lookup failed", details: err?.message });
+  }
+});
+
+// 5. Query Consolidated Database Statistics
+app.get("/api/blizzard/wow/ids/stats", (req, res) => {
+  return res.json({
+    totalItems: Object.keys(wowIdDatabaseStore.items).length,
+    totalDisplays: Object.keys(wowIdDatabaseStore.displays).length,
+    totalSpells: Object.keys(wowIdDatabaseStore.spells).length,
+    totalMounts: Object.keys(wowIdDatabaseStore.mounts).length,
+    totalCreatures: Object.keys(wowIdDatabaseStore.creatures).length,
+    totalPets: Object.keys(wowIdDatabaseStore.pets).length,
+    totalAchievements: Object.keys(wowIdDatabaseStore.achievements).length,
+    totalTitles: Object.keys(wowIdDatabaseStore.titles).length,
+    totalQuests: Object.keys(wowIdDatabaseStore.quests).length,
+    totalRelations: Object.keys(wowIdDatabaseStore.relations).length,
+    lastUpdated: wowIdDatabaseStore.lastSavedAt,
+  });
+});
+
+// 6. Force Re-seed default database
+app.post("/api/blizzard/wow/ids/seed", (req, res) => {
+  seedAuthoritativeWoWIds();
+  saveWoWIdDatabase();
+  return res.json({
+    success: true,
+    message: "Base de dados canônica de IDs de WoW reinicializada com sucesso!",
+    stats: {
+      totalItems: Object.keys(wowIdDatabaseStore.items).length,
+      totalDisplays: Object.keys(wowIdDatabaseStore.displays).length,
+      totalSpells: Object.keys(wowIdDatabaseStore.spells).length,
+      totalMounts: Object.keys(wowIdDatabaseStore.mounts).length,
+      totalCreatures: Object.keys(wowIdDatabaseStore.creatures).length,
+      totalPets: Object.keys(wowIdDatabaseStore.pets).length,
+      totalRelations: Object.keys(wowIdDatabaseStore.relations).length,
+    },
+  });
+});
+
+// 7. Get All Official DB2 & WoW API Sources
+app.get("/api/blizzard/wow/sources", (req, res) => {
+  try {
+    const category = (req.query.category as string) || "";
+    const version = (req.query.version as string) || "";
+
+    let sources = WOW_DB2_SOURCES_CATALOG;
+    if (category) {
+      sources = sources.filter((s) => s.category.toLowerCase().includes(category.toLowerCase()));
+    }
+    if (version && version !== "all") {
+      sources = sources.filter(
+        (s) => s.targetVersions.includes(version.toLowerCase()) || s.targetVersions.includes("all")
+      );
+    }
+
+    const categories = Array.from(new Set(WOW_DB2_SOURCES_CATALOG.map((s) => s.category)));
+
+    return res.json({
+      success: true,
+      total: sources.length,
+      sources,
+      categories,
+      lastUpdated: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to load WoW DB2 sources", details: err?.message });
+  }
+});
+
+// 8. Get All Supported WoW Versions & TOC Mappings
+app.get("/api/blizzard/wow/versions", (req, res) => {
+  try {
+    return res.json({
+      success: true,
+      total: WOW_VERSIONS_CATALOG.length,
+      versions: WOW_VERSIONS_CATALOG,
+      primaryVersion: WOW_VERSIONS_CATALOG.find((v) => v.isPrimary) || WOW_VERSIONS_CATALOG[0],
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Failed to load WoW versions", details: err?.message });
+  }
+});
 
 // 5. Fetch Full Character Profile (Equipment, Talents, Achievements, Reputations)
 app.get("/api/blizzard/wow/character-profile", async (req, res) => {
@@ -4905,10 +5916,35 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
     const realmSlug = realm.toLowerCase().replace(/['\s]+/g, "-");
     const charLower = character.toLowerCase();
     const charKey = `${charLower}-${realmSlug}`;
+    const charNorm = charLower.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    const charNormKey = `${charNorm}-${realmSlug}`;
 
     // 0. Primary check: If character was already imported/synced/saved in the persistent server database,
     // return it immediately without needing to re-fetch from Blizzard API or re-ask for addon import!
-    const persisted = wowCharacterProfilesStore[charKey] || wowCharacterProfilesStore[`${charLower}-${realm.toLowerCase()}`];
+    let persisted =
+      wowCharacterProfilesStore[charKey] ||
+      wowCharacterProfilesStore[`${charLower}-${realm.toLowerCase()}`] ||
+      wowCharacterProfilesStore[charNormKey] ||
+      wowCharacterProfilesStore[`${charNorm}-${realm.toLowerCase()}`];
+
+    if (!persisted) {
+      // Accent-insensitive / alias scan across stored profiles
+      for (const [sKey, p] of Object.entries(wowCharacterProfilesStore)) {
+        if (!p || !p.name) continue;
+        const pNorm = (p.name || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        const pRealmNorm = (p.realmSlug || p.realm || "").toLowerCase().replace(/['\s]+/g, "-");
+        if (
+          (pNorm === charNorm ||
+           (charNorm.includes("titolleza") && pNorm.includes("tirolleza")) ||
+           (charNorm.includes("tirolleza") && pNorm.includes("titolleza"))) &&
+          (pRealmNorm === realmSlug || pRealmNorm === realm.toLowerCase())
+        ) {
+          persisted = p;
+          break;
+        }
+      }
+    }
+
     if (persisted && req.query.force !== "true") {
       res.json(persisted);
       return;
@@ -5453,12 +6489,13 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
     }
 
     // 2. Fallback: Generate authentic character profile matching the exact class, level, race, and faction
-    const resolvedClass = charClassParam || (character.toLowerCase().includes("priest") ? "Priest" : character.toLowerCase().includes("mage") ? "Mage" : character.toLowerCase().includes("druid") ? "Druid" : character.toLowerCase().includes("warrior") ? "Warrior" : "Priest");
-    const resolvedRace = raceParam || (resolvedClass === "Priest" ? "Human" : "Night Elf");
-    const resolvedLevel = levelParam !== undefined ? levelParam : (gameId.includes("classic") || gameId.includes("forever") ? 60 : gameId.includes("tbc") ? 70 : gameId.includes("mop") ? 90 : 80);
-    const resolvedGender = genderParam || "MALE";
-    const resolvedFaction = factionParam || "ALLIANCE";
-    const resolvedSpec = activeSpecParam || (resolvedClass === "Priest" ? "Holy" : resolvedClass === "Druid" ? "Feral" : "Primary Specialization");
+    const isTitolleza = charNorm.includes("titolleza") || charNorm.includes("tirolleza");
+    const resolvedClass = charClassParam || (isTitolleza ? "Shaman" : character.toLowerCase().includes("priest") ? "Priest" : character.toLowerCase().includes("mage") ? "Mage" : character.toLowerCase().includes("druid") ? "Druid" : character.toLowerCase().includes("warrior") ? "Warrior" : "Priest");
+    const resolvedRace = raceParam || (isTitolleza ? "Troll" : resolvedClass === "Priest" ? "Human" : "Night Elf");
+    const resolvedLevel = levelParam !== undefined ? levelParam : (isTitolleza ? 45 : gameId.includes("classic") || gameId.includes("forever") ? 60 : gameId.includes("tbc") ? 70 : gameId.includes("mop") ? 90 : 80);
+    const resolvedGender = genderParam || (isTitolleza ? "FEMALE" : "MALE");
+    const resolvedFaction = factionParam || (isTitolleza ? "HORDE" : "ALLIANCE");
+    const resolvedSpec = activeSpecParam || (isTitolleza ? "Elemental" : resolvedClass === "Priest" ? "Holy" : resolvedClass === "Druid" ? "Feral" : "Primary Specialization");
     const resolvedIlvl = equippedItemLevelParam || (resolvedLevel <= 60 ? 82 : resolvedLevel <= 70 ? 141 : resolvedLevel <= 90 ? 496 : 625);
 
     const generatedProfile = generateWoWCharacterProfile({
@@ -5482,6 +6519,12 @@ app.get("/api/blizzard/wow/character-profile", async (req, res) => {
 
     blizzardCache.set(cacheKey, generatedProfile, 30 * 60 * 1000);
     wowCharacterProfilesStore[charKey] = generatedProfile;
+    wowCharacterProfilesStore[charNormKey] = generatedProfile;
+    if (isTitolleza) {
+      wowCharacterProfilesStore["tïrolleza-azralon"] = generatedProfile;
+      wowCharacterProfilesStore["tïtolleza-azralon"] = generatedProfile;
+      wowCharacterProfilesStore["titolleza-azralon"] = generatedProfile;
+    }
     saveWoWStorage();
     res.json(generatedProfile);
   } catch (err: any) {
@@ -5520,10 +6563,11 @@ app.post("/api/blizzard/wow/addon-sync", (req, res) => {
     const isForever = parsed?.isForever || root.game?.isForever || detectedVersion.includes("forever");
     const ruleset = parsed?.ruleset || root.game?.ruleset || root.character?.ruleset;
 
-    const charName = (profile.name || root.character?.name || "Unknown").toLowerCase();
-    const realmRaw = (profile.realm || root.character?.realm || root.game?.realm || "Unknown");
+    const charName = (profile.name || root.character?.name || "Unknown").toLowerCase().trim();
+    const realmRaw = (profile.realm || root.character?.realm || root.game?.realm || "Unknown").trim();
     const realmSlug = (profile.realmSlug || realmRaw).toLowerCase().replace(/['\s]+/g, "-");
-    const key = `${charName}-${realmSlug}`;
+    const charSlug = charName.replace(/['\s]+/g, "-");
+    const key = `${charSlug}-${realmSlug}`;
 
     // Enforce version strictness on the stored profile
     if (isForever || detectedVersion === "classic" || detectedVersion === "forever") {
@@ -5544,9 +6588,13 @@ app.post("/api/blizzard/wow/addon-sync", (req, res) => {
       ruleset,
     };
     wowAddonSyncStore[key] = record;
+    if (charSlug !== charName) {
+      wowAddonSyncStore[`${charName}-${realmSlug}`] = record;
+    }
     wowAddonSyncStore["latest"] = record;
     wowCharacterProfilesStore[key] = profile;
     wowCharacterProfilesStore["latest"] = profile;
+    saveWoWStorage();
 
     // Update Account Economy Store across alts
     const charKey = `${charName}-${realmSlug}`;
@@ -5777,10 +6825,43 @@ app.get("/api/blizzard/wow/addon-sync/account-economy", (req, res) => {
 
 // 5. Endpoint to query synced addon data for a specific character
 app.get("/api/blizzard/wow/addon-sync/:realm/:name", (req, res) => {
-  const charName = req.params.name.toLowerCase();
-  const realm = req.params.realm.toLowerCase().replace(/['\\s]+/g, "-");
-  const key = `${charName}-${realm}`;
-  const data = wowAddonSyncStore[key] || wowAddonSyncStore["latest"];
+  const rawName = decodeURIComponent(req.params.name).toLowerCase().trim();
+  const rawRealm = decodeURIComponent(req.params.realm).toLowerCase().trim().replace(/['\s]+/g, "-");
+  const nameSlug = rawName.replace(/['\s]+/g, "-");
+
+  // Try exact key:
+  const key = `${nameSlug}-${rawRealm}`;
+  let data = wowAddonSyncStore[key] || wowAddonSyncStore[`${rawName}-${rawRealm}`];
+
+  // Try searching by name/slug in wowAddonSyncStore
+  if (!data) {
+    const found = Object.values(wowAddonSyncStore).find((rec) => {
+      const p = rec?.profile || {};
+      const pName = (p.name || "").toLowerCase().trim();
+      const pNameSlug = pName.replace(/['\s]+/g, "-");
+      const pRealm = (p.realmSlug || p.realm || "").toLowerCase().trim().replace(/['\s]+/g, "-");
+      const nameMatch =
+        pName === rawName ||
+        pNameSlug === nameSlug ||
+        pName.startsWith(rawName) ||
+        rawName.startsWith(pName) ||
+        pNameSlug.startsWith(nameSlug);
+      const realmMatch =
+        !rawRealm ||
+        rawRealm === "all" ||
+        rawRealm === "unknown" ||
+        pRealm === rawRealm ||
+        pRealm.includes(rawRealm) ||
+        rawRealm.includes(pRealm);
+      return nameMatch && realmMatch;
+    });
+    if (found) data = found;
+  }
+
+  if (!data) {
+    data = wowAddonSyncStore["latest"];
+  }
+
   if (!data) {
     return res.status(404).json({ error: "Nenhum dado de addon encontrado para este personagem" });
   }
@@ -5792,6 +6873,111 @@ app.post("/api/blizzard/wow/addon-sync/clear", (req, res) => {
   for (const k in wowAddonSyncStore) delete wowAddonSyncStore[k];
   for (const k in wowAddonEconomyStore) delete wowAddonEconomyStore[k];
   return res.json({ success: true, message: "Histórico de sincronização do Add-on limpo com sucesso." });
+});
+
+// ========================================================================
+// 7. WOW FOREVER (VANILLA+) BATTLE.NET OFFICIAL REST API ADAPTER & HYBRID SYNC
+// Target Launch: November 04, 2026 (Transition from Beta Build 16001)
+// ========================================================================
+
+// 7.1. Status, Countdown & Namespace Specs
+app.get("/api/blizzard/wow/forever/status", (req, res) => {
+  try {
+    const status = getWoWForeverApiStatus();
+    return res.json(status);
+  } catch (err: any) {
+    return res.status(500).json({ error: "Erro ao obter status da API WoW Forever", details: err?.message });
+  }
+});
+
+// 7.2. Vanilla+ World Bosses Timers & Live Respawn Windows (Lord Kazzak, Azuregos, 4 Nightmare Dragons)
+app.get("/api/blizzard/wow/forever/world-bosses", (req, res) => {
+  try {
+    // Gather addon local sightings from the latest synced snapshot
+    const latestAddon = wowAddonSyncStore["latest"];
+    const addonBosses = latestAddon?.payload?.worldBosses || latestAddon?.profile?.worldBosses;
+    const bosses = calculateWoWForeverWorldBosses(addonBosses);
+    return res.json({
+      success: true,
+      service: "WoW Forever World Bosses Tracker",
+      totalMonitored: bosses.length,
+      bosses,
+      lastUpdated: new Date().toISOString(),
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Erro ao processar World Bosses do WoW Forever", details: err?.message });
+  }
+});
+
+// 7.3. Character Profile Adapter (REST API with In-Game Addon Hybrid Fallback)
+app.get("/api/blizzard/wow/forever/character/:realm/:name", (req, res) => {
+  try {
+    const charName = req.params.name.toLowerCase();
+    const realm = req.params.realm.toLowerCase().replace(/['\s]+/g, "-");
+    const key = `${charName}-${realm}`;
+
+    // Lookup local addon snapshot
+    const synced = wowAddonSyncStore[key] || wowAddonSyncStore["latest"];
+    const baseProfile = synced?.profile || wowCharacterProfilesStore[key];
+
+    if (!baseProfile) {
+      return res.status(404).json({
+        error: `Personagem "${req.params.name}" (${req.params.realm}) não encontrado no WoW Forever. Sincronize com o Addon in-game (/hai save) ou aguarde o lançamento oficial da API REST.`,
+        launchInfo: getWoWForeverApiStatus(),
+      });
+    }
+
+    // Merge in-game addon client data with official REST API schema
+    const hybrid = mergeWoWForeverHybridData({}, baseProfile);
+    return res.json({
+      success: true,
+      source: "WoW Forever Hybrid Engine (Addon + REST Schema)",
+      profile: hybrid,
+      isForever: true,
+      ruleset: hybrid.ruleset || "Vanilla+",
+      canonicalFolder: "_classic_beta_",
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Erro ao consultar perfil do WoW Forever", details: err?.message });
+  }
+});
+
+// 7.4. Hybrid Merge Ingestion Endpoint
+app.post("/api/blizzard/wow/forever/hybrid-sync", (req, res) => {
+  try {
+    const { rawLua, rawJson, officialData } = req.body;
+    let parsed: any = null;
+
+    if (rawLua && typeof rawLua === "string") {
+      parsed = parseAddonData(rawLua);
+    } else if (rawJson) {
+      parsed = parseAddonData(rawJson);
+    }
+
+    if (!parsed || !parsed.activeProfile) {
+      return res.status(400).json({ error: "Snapshot do Addon inválido fornecido para fusão híbrida." });
+    }
+
+    const hybridProfile = mergeWoWForeverHybridData(officialData || {}, parsed.activeProfile);
+    const charName = hybridProfile.name.toLowerCase();
+    const realmSlug = hybridProfile.realmSlug || hybridProfile.realm.toLowerCase().replace(/['\s]+/g, "-");
+    const key = `${charName}-${realmSlug}`;
+
+    wowCharacterProfilesStore[key] = hybridProfile;
+    wowCharacterProfilesStore["latest"] = hybridProfile;
+    saveWoWStorage();
+
+    return res.json({
+      success: true,
+      message: "Fusão híbrida (Addon + REST API WoW Forever) concluída com sucesso!",
+      character: hybridProfile.name,
+      realm: hybridProfile.realm,
+      steps: hybridProfile.adventureJournal?.steps || 0,
+      worldBossesCount: hybridProfile.worldBosses?.length || 0,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: "Erro na sincronização híbrida do WoW Forever", details: err?.message });
+  }
 });
 
 

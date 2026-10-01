@@ -1,0 +1,13 @@
+## Interface: 160001, 16001, 11506
+## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura (Vanilla+ & Classic)
+## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps & Adventure Journal for WoW Forever (Vanilla+) & Classic Era.
+## Author: Haleck
+## Version: 4.0.0
+## SavedVariables: HaleckAccountImporterDB
+## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\Icons\INV_Misc_Book_09
+
+HaleckAccountImporter.lua
+AddonInterface.lua

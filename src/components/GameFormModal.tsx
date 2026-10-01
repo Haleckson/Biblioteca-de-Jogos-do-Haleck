@@ -6,7 +6,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Game, TrophyItem, getDlcMode, getGameTrophyItems, getGameHighestTrophy, parseProConTopic, splitEntities, parseContextNote } from "../types";
 import { motion, AnimatePresence } from "motion/react";
-import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity as InfinityIcon, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star, Edit3, Maximize2, Shield, Copy, ExternalLink, Key } from "lucide-react";
+import { X, Plus, Image as ImageIcon, Upload, Globe, Smile, Check, CheckCircle, Tag, Loader2, Search, Clock, RefreshCw, RotateCcw, Sparkles, Trophy, Layers, ThumbsUp, ThumbsDown, Infinity as InfinityIcon, Gamepad2, Calendar, Monitor, ChevronDown, ChevronRight, DollarSign, Eye, CheckSquare, Square, PackagePlus, ArrowRight, SlidersHorizontal, BookOpen, AlertCircle, Star, Edit3, Maximize2, Shield, Copy, ExternalLink, Key, FolderArchive } from "lucide-react";
 import ProsConsModal from "./ProsConsModal";
 import { detectProConCategory } from "../utils/proConCategories";
 import { COVER_BANK } from "../data";
@@ -60,6 +60,7 @@ import {
   getEffectiveBlizzardRedirectUri,
   verifyAndSaveManualToken,
   registerBlizzardReauthListener,
+  isWorldOfWarcraftGame,
 } from "../utils/blizzardApi";
 import {
   IgdbGameCandidate,
@@ -70,6 +71,8 @@ import {
   BlizzardProfileData,
   BlizzardOfficialGame
 } from "../types";
+import { parseAddonData } from "../utils/wowAddonParser";
+import { getWoWClassIcon, getWoWRaceIcon, getWoWFactionIcon } from "../utils/blizzardIcons";
 
 interface GameFormModalProps {
   isOpen: boolean;
@@ -261,6 +264,10 @@ export default function GameFormModal({
   const [blizzardRegion, setBlizzardRegion] = useState<"us" | "eu" | "kr" | "tw">("us");
   const [blizzardSelectedCharacter, setBlizzardSelectedCharacter] = useState<string>("");
   const [blizzardCharacters, setBlizzardCharacters] = useState<BlizzardCharacterSummary[]>([]);
+  const [addonCharacters, setAddonCharacters] = useState<BlizzardCharacterSummary[]>([]);
+  const [charSourceTab, setCharSourceTab] = useState<"all" | "addon" | "bnet">("all");
+  const [isImportingAddonFile, setIsImportingAddonFile] = useState<boolean>(false);
+  const addonFileFormInputRef = useRef<HTMLInputElement>(null);
   const [blizzardProfileData, setBlizzardProfileData] = useState<BlizzardProfileData | null>(null);
   const [isBlizzardLoggedIn, setIsBlizzardLoggedIn] = useState<boolean>(false);
   const [blizzardBattleTag, setBlizzardBattleTag] = useState<string>("");
@@ -1494,8 +1501,99 @@ export default function GameFormModal({
     }
   };
 
+  // Buscar personagens sincronizados via Addon Haleck Account Importer
+  const handleFetchAddonCharacters = async () => {
+    try {
+      const res = await fetch("/api/blizzard/wow/addon-sync/all");
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data.characters) && data.characters.length > 0) {
+          const addonChars: BlizzardCharacterSummary[] = data.characters.map((c: any) => ({
+            id: Date.now() + Math.random(),
+            name: c.characterName || c.key,
+            realm: c.realm || "WoW Forever Beta",
+            realmSlug: (c.realm || "wow-forever-beta").toLowerCase().replace(/['\s]+/g, "-"),
+            ruleset: c.ruleset || (c.isForever ? "WoW Forever Beta" : undefined),
+            level: c.level || 60,
+            characterClass: c.characterClass || "Warrior",
+            race: c.race || "Orc",
+            gender: c.gender || "MALE",
+            faction: c.faction || "HORDE",
+            equippedItemLevel: c.equippedItemLevel || 0,
+            averageItemLevel: c.equippedItemLevel || 0,
+            activeSpec: "Primary Spec",
+            achievementPoints: 0,
+            gameMode: c.isForever ? "forever" : (c.detectedVersion || "forever"),
+            wow_version: c.isForever ? "forever" : (c.detectedVersion || "forever"),
+            classIconUrl: getWoWClassIcon(c.characterClass || "Warrior"),
+            raceIconUrl: getWoWRaceIcon(c.race || "Orc", c.gender || "MALE"),
+            factionIconUrl: getWoWFactionIcon(c.faction || "HORDE"),
+            avatarUrl: getWoWRaceIcon(c.race || "Orc", c.gender || "MALE"),
+            source: "addon" as any,
+          }));
+          setAddonCharacters(addonChars);
+          return addonChars;
+        }
+      }
+    } catch (err: any) {
+      console.warn("Aviso ao buscar personagens sincronizados do addon:", err?.message);
+    }
+    return [];
+  };
+
+  const handleUploadAddonFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsImportingAddonFile(true);
+
+    const reader = new FileReader();
+    reader.onload = async (event) => {
+      try {
+        const text = String(event.target?.result || "");
+        const parsed = parseAddonData(text);
+
+        // Enviar snapshot para endpoint persistente do servidor
+        try {
+          await fetch("/api/blizzard/wow/addon-sync", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rawLua: text }),
+          });
+        } catch (_) {}
+
+        // Atualizar lista de personagens do addon
+        const updatedAddonChars = await handleFetchAddonCharacters();
+
+        // Aplicar personagem importado imediatamente no formulário
+        const prof = parsed.activeProfile;
+        const charKey = `${prof.name}-${prof.realmSlug || prof.realm}`;
+        setBlizzardProfileData(prof);
+        setBlizzardSelectedCharacter(charKey);
+        setBlizzardGameId(parsed.isForever ? "wow-forever" : "wow-retail");
+        setBlizzardGameName(parsed.isForever ? "World of Warcraft (WoW Forever)" : "World of Warcraft (The War Within)");
+        setSelectedWowVersion(parsed.isForever ? "forever" : "retail");
+
+        triggerAlert(
+          "Addon Importado!",
+          `Personagem ${prof.name} (${prof.realm}) importado com sucesso via Haleck Account Importer!`
+        );
+      } catch (err: any) {
+        triggerAlert("Erro de Importação", err.message || "Falha ao processar arquivo do Addon.");
+      } finally {
+        setIsImportingAddonFile(false);
+        if (addonFileFormInputRef.current) addonFileFormInputRef.current.value = "";
+      }
+    };
+    reader.onerror = () => {
+      setIsImportingAddonFile(false);
+      triggerAlert("Erro", "Falha ao abrir arquivo do disco.");
+    };
+    reader.readAsText(file);
+  };
+
   // Load characters if Blizzard is logged in and game is WoW
   const handleFetchBlizzardCharacters = async (selectedGameId?: string, forceRefresh?: boolean) => {
+    handleFetchAddonCharacters();
     const targetGame = selectedGameId || blizzardGameId || "wow-retail";
     setIsLoadingBlizzardChars(true);
     try {
@@ -2222,15 +2320,16 @@ export default function GameFormModal({
       gogLastPlayedTimestamp: typeof gogLastPlayedTimestamp === "number" && !isNaN(gogLastPlayedTimestamp) ? gogLastPlayedTimestamp : undefined,
       gogAchievementsCount: gogAchieveData ? (!isNaN(gogAchieveData.unlockedCount) ? gogAchieveData.unlockedCount : undefined) : (typeof gogAchievementsCount === "number" && !isNaN(gogAchievementsCount) ? gogAchievementsCount : (game?.gogAchievementsCount && !isNaN(game.gogAchievementsCount) ? game.gogAchievementsCount : undefined)),
       gogAchievementsTotal: gogAchieveData ? (!isNaN(gogAchieveData.totalCount) ? gogAchieveData.totalCount : undefined) : (typeof gogAchievementsTotal === "number" && !isNaN(gogAchievementsTotal) ? gogAchievementsTotal : (game?.gogAchievementsTotal && !isNaN(game.gogAchievementsTotal) ? game.gogAchievementsTotal : undefined)),
-      blizzardGameId: blizzardGameId || (selectedWowVersion ? (selectedWowVersion === "forever_beta" ? "wow-forever" : `wow-${selectedWowVersion}`) : undefined),
-      blizzardGameName: blizzardGameName || (selectedWowVersion === "forever" ? "World of Warcraft: Forever" : (selectedWowVersion === "forever_beta" ? "World of Warcraft: Forever Beta" : (selectedWowVersion === "classic" ? "World of Warcraft: Classic Era" : "World of Warcraft: Retail"))),
+      blizzardGameId: blizzardGameId || (integrationPlatform === "battlenet" && selectedWowVersion ? (selectedWowVersion === "forever_beta" ? "wow-forever" : `wow-${selectedWowVersion}`) : undefined),
+      blizzardGameName: blizzardGameName || (isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? (selectedWowVersion === "forever" ? "World of Warcraft: Forever" : (selectedWowVersion === "forever_beta" ? "World of Warcraft: Forever Beta" : (selectedWowVersion === "classic" ? "World of Warcraft: Classic Era" : "World of Warcraft: Retail"))) : undefined),
       blizzardRegion: blizzardRegion || undefined,
-      blizzardCharacterName: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-")[0] : (game?.blizzardCharacterName || undefined),
-      blizzardRealm: blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-").slice(1).join("-") : (game?.blizzardRealm || undefined),
-      blizzardSelectedCharacter: blizzardSelectedCharacter || game?.blizzardSelectedCharacter || undefined,
-      blizzardProfileData: blizzardProfileData || game?.blizzardProfileData || undefined,
-      blizzardCharacters: blizzardCharacters.length > 0 ? blizzardCharacters : (game?.blizzardCharacters || undefined),
-      wowVersion: (blizzardGameId?.startsWith("wow") || name.toLowerCase().includes("warcraft") || integrationPlatform === "battlenet") ? selectedWowVersion : (game?.wowVersion || undefined),
+      isWow: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }),
+      blizzardCharacterName: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? (blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-")[0] : (game?.blizzardCharacterName || undefined)) : undefined,
+      blizzardRealm: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? (blizzardSelectedCharacter ? blizzardSelectedCharacter.split("-").slice(1).join("-") : (game?.blizzardRealm || undefined)) : undefined,
+      blizzardSelectedCharacter: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? (blizzardSelectedCharacter || game?.blizzardSelectedCharacter || undefined) : undefined,
+      blizzardProfileData: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? (blizzardProfileData || game?.blizzardProfileData || undefined) : undefined,
+      blizzardCharacters: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? (blizzardCharacters.length > 0 ? blizzardCharacters : (game?.blizzardCharacters || undefined)) : undefined,
+      wowVersion: isWorldOfWarcraftGame({ blizzardGameId, blizzardGameName, title: name }) ? selectedWowVersion : undefined,
       igdbId,
       igdbRating,
       igdbSlug,
@@ -2580,7 +2679,7 @@ export default function GameFormModal({
                                   </span>
                                 )}
 
-                                {cand.genres && cand.genres.length > 0 && (
+                                {Array.isArray(cand.genres) && cand.genres.length > 0 && (
                                   <div className="flex flex-wrap gap-1 mt-1">
                                     {cand.genres.slice(0, 2).map((g: string) => (
                                       <span key={g} className="text-[9px] font-medium px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-300 border border-zinc-750 truncate max-w-[110px]">
@@ -2591,7 +2690,7 @@ export default function GameFormModal({
                                 )}
                               </div>
 
-                              {cand.platforms && cand.platforms.length > 0 && (
+                              {Array.isArray(cand.platforms) && cand.platforms.length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-1">
                                   {cand.platforms.slice(0, 3).map((plat: string) => (
                                     <span key={plat} className="text-[8px] font-black uppercase tracking-wider px-1.5 py-0.5 rounded-md bg-zinc-800 border border-zinc-750 text-zinc-300">
@@ -5913,7 +6012,29 @@ export default function GameFormModal({
                             </h5>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="file"
+                              ref={addonFileFormInputRef}
+                              onChange={handleUploadAddonFile}
+                              accept=".lua,.zip,.json,.txt"
+                              className="hidden"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => addonFileFormInputRef.current?.click()}
+                              disabled={isImportingAddonFile}
+                              className="px-2.5 py-1 rounded-lg bg-cyan-950/80 border border-cyan-500/50 text-cyan-300 hover:bg-cyan-900/80 text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shadow-sm shadow-cyan-950/40"
+                              title="Importar arquivo HaleckAccountImporter.lua da pasta SavedVariables"
+                            >
+                              {isImportingAddonFile ? (
+                                <Loader2 size={12} className="animate-spin text-cyan-400" />
+                              ) : (
+                                <FolderArchive size={12} />
+                              )}
+                              <span>📂 Importar do Addon (.lua)</span>
+                            </button>
+
                             <button
                               type="button"
                               onClick={() => handleFetchBlizzardCharacters(blizzardGameId, true)}
@@ -5930,79 +6051,146 @@ export default function GameFormModal({
                           </div>
                         </div>
 
-                        {/* Character selector dropdown */}
-                        {blizzardCharacters.length > 0 ? (
-                          <div className="space-y-2">
-                            <label className="text-[11px] text-zinc-400 font-medium block">
-                              Selecione seu personagem principal ({blizzardCharacters.length} personagem{blizzardCharacters.length > 1 ? "s" : ""} disponível{blizzardCharacters.length > 1 ? "is" : ""}):
-                            </label>
-                            <div className="flex flex-wrap gap-2 items-center">
-                              {(() => {
-                                const matchedOption = blizzardCharacters.find(
-                                  (c) =>
-                                    `${c.name}-${c.realmSlug || c.realm}`.toLowerCase() === (blizzardSelectedCharacter || "").toLowerCase() ||
-                                    c.name.toLowerCase() === (blizzardSelectedCharacter || "").split("-")[0]?.toLowerCase()
-                                );
-                                const effectiveSelectVal = matchedOption
-                                  ? `${matchedOption.name}-${matchedOption.realmSlug || matchedOption.realm}`
-                                  : blizzardSelectedCharacter;
+                        {/* Character selector dropdown com suporte completo a Addon & Battle.net */}
+                        {(() => {
+                          const combinedCharacters = [
+                            ...addonCharacters.map((ac) => ({ ...ac, source: "addon" as const })),
+                            ...blizzardCharacters
+                              .filter(
+                                (bc) =>
+                                  !addonCharacters.some(
+                                    (ac) =>
+                                      ac.name.toLowerCase() === bc.name.toLowerCase() &&
+                                      (ac.realmSlug || ac.realm).toLowerCase() === (bc.realmSlug || bc.realm).toLowerCase()
+                                  )
+                              )
+                              .map((bc) => ({ ...bc, source: "bnet" as const })),
+                          ];
 
-                                return (
-                                  <select
-                                    value={effectiveSelectVal}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setBlizzardSelectedCharacter(val);
-                                      const match = blizzardCharacters.find(
-                                        (c) => `${c.name}-${c.realmSlug || c.realm}`.toLowerCase() === val.toLowerCase()
-                                      );
-                                      if (match) {
-                                        try {
-                                          if (game?.id) {
-                                            localStorage.setItem(`halo_blizzard_selected_char_${game.id}`, val);
-                                            localStorage.setItem(`halo_blizzard_selected_name_${game.id}`, match.name);
-                                          }
-                                          if (blizzardGameId) {
-                                            localStorage.setItem(`halo_blizzard_selected_char_${blizzardGameId}`, val);
-                                            localStorage.setItem(`halo_blizzard_selected_name_${blizzardGameId}`, match.name);
-                                          }
-                                          localStorage.setItem("halo_blizzard_selected_char_global", val);
-                                          localStorage.setItem("halo_blizzard_selected_name_global", match.name);
-                                        } catch {}
-                                        handleFetchBlizzardProfile(match.name, match.realmSlug || match.realm, blizzardGameId, match);
-                                      }
-                                    }}
-                                    className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400 cursor-pointer flex-1 min-w-[200px]"
+                          if (combinedCharacters.length === 0) {
+                            return (
+                              <div className="text-xs text-zinc-400 italic bg-zinc-950/60 p-3.5 rounded-xl border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                                <div>
+                                  <p className="font-medium text-zinc-300">Nenhum personagem carregado no momento.</p>
+                                  <p className="text-[11px] text-zinc-400 mt-0.5">
+                                    Para o <strong>WoW Forever (Vanilla+)</strong>, clique em <strong className="text-cyan-300">📂 Importar do Addon (.lua)</strong> e selecione seu <code>HaleckAccountImporter.lua</code> de SavedVariables.
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2 shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() => addonFileFormInputRef.current?.click()}
+                                    className="px-2.5 py-1 rounded-lg bg-cyan-950 border border-cyan-500/40 text-cyan-300 hover:bg-cyan-900 text-xs font-bold transition-all cursor-pointer"
                                   >
-                                    {blizzardCharacters.map((char) => {
-                                      const verLabel = char.wow_version === "retail" ? "Retail" : (char.wow_version === "mop" ? "Progression (MoP)" : (char.wow_version === "tbc" ? "TBC" : "Classic Era"));
-                                      return (
-                                        <option key={`${char.name}-${char.realmSlug || char.realm}`} value={`${char.name}-${char.realmSlug || char.realm}`}>
-                                          {char.name} — Nvl {char.level} {char.characterClass || ""} ({char.realm}) {char.faction === "HORDE" ? "🔴 Horda" : "🔵 Aliança"} • [{verLabel}]
+                                    Importar .lua
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleFetchBlizzardCharacters(blizzardGameId, true)}
+                                    className="text-xs text-amber-400 hover:text-amber-300 underline font-semibold cursor-pointer"
+                                  >
+                                    Buscar Battle.net
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          const matchedOption = combinedCharacters.find(
+                            (c) =>
+                              `${c.name}-${c.realmSlug || c.realm}`.toLowerCase() === (blizzardSelectedCharacter || "").toLowerCase() ||
+                              c.name.toLowerCase() === (blizzardSelectedCharacter || "").split("-")[0]?.toLowerCase()
+                          );
+                          const effectiveSelectVal = matchedOption
+                            ? `${matchedOption.name}-${matchedOption.realmSlug || matchedOption.realm}`
+                            : blizzardSelectedCharacter;
+
+                          return (
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between">
+                                <label className="text-[11px] text-zinc-400 font-medium block">
+                                  Selecione seu personagem principal ({combinedCharacters.length} personagem{combinedCharacters.length > 1 ? "s" : ""} disponível{combinedCharacters.length > 1 ? "is" : ""}):
+                                </label>
+                                {addonCharacters.length > 0 && (
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-bold">
+                                    {addonCharacters.length} via Addon
+                                  </span>
+                                )}
+                              </div>
+                              <div className="flex flex-wrap gap-2 items-center">
+                                <select
+                                  value={effectiveSelectVal}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    setBlizzardSelectedCharacter(val);
+                                    const match = combinedCharacters.find(
+                                      (c) => `${c.name}-${c.realmSlug || c.realm}`.toLowerCase() === val.toLowerCase()
+                                    );
+                                    if (match) {
+                                      try {
+                                        if (game?.id) {
+                                          localStorage.setItem(`halo_blizzard_selected_char_${game.id}`, val);
+                                          localStorage.setItem(`halo_blizzard_selected_name_${game.id}`, match.name);
+                                        }
+                                        if (blizzardGameId) {
+                                          localStorage.setItem(`halo_blizzard_selected_char_${blizzardGameId}`, val);
+                                          localStorage.setItem(`halo_blizzard_selected_name_${blizzardGameId}`, match.name);
+                                        }
+                                        localStorage.setItem("halo_blizzard_selected_char_global", val);
+                                        localStorage.setItem("halo_blizzard_selected_name_global", match.name);
+                                      } catch {}
+
+                                      const targetGameId = match.source === "addon" || match.wow_version === "forever" ? "wow-forever" : blizzardGameId;
+                                      if (match.source === "addon" || match.wow_version === "forever") {
+                                        setBlizzardGameId("wow-forever");
+                                        setSelectedWowVersion("forever");
+                                      }
+
+                                      handleFetchBlizzardProfile(match.name, match.realmSlug || match.realm, targetGameId, match);
+                                    }
+                                  }}
+                                  className="bg-zinc-950 border border-amber-500/40 rounded-xl px-3 py-2 text-xs text-white font-mono focus:outline-none focus:border-amber-400 cursor-pointer flex-1 min-w-[200px]"
+                                >
+                                  {addonCharacters.length > 0 && (
+                                    <optgroup label="⚔️ Personagens Importados do Addon (WoW Forever / In-Game)">
+                                      {addonCharacters.map((char) => (
+                                        <option
+                                          key={`addon-${char.name}-${char.realmSlug || char.realm}`}
+                                          value={`${char.name}-${char.realmSlug || char.realm}`}
+                                        >
+                                          ⭐ {char.name} — Nvl {char.level} {char.characterClass || ""} ({char.realm}) {char.faction === "HORDE" ? "🔴 Horda" : "🔵 Aliança"} • [ADDON • WoW Forever]
                                         </option>
-                                      );
-                                    })}
-                                  </select>
-                                );
-                              })()}
+                                      ))}
+                                    </optgroup>
+                                  )}
+
+                                  {blizzardCharacters.length > 0 && (
+                                    <optgroup label="🌐 Personagens da Battle.net (API Oficial Online)">
+                                      {blizzardCharacters.map((char) => {
+                                        const verLabel =
+                                          char.wow_version === "retail"
+                                            ? "Retail"
+                                            : char.wow_version === "mop"
+                                            ? "Progression (MoP)"
+                                            : char.wow_version === "tbc"
+                                            ? "TBC"
+                                            : "Classic Era";
+                                        return (
+                                          <option
+                                            key={`bnet-${char.name}-${char.realmSlug || char.realm}`}
+                                            value={`${char.name}-${char.realmSlug || char.realm}`}
+                                          >
+                                            {char.name} — Nvl {char.level} {char.characterClass || ""} ({char.realm}) {char.faction === "HORDE" ? "🔴 Horda" : "🔵 Aliança"} • [{verLabel}]
+                                          </option>
+                                        );
+                                      })}
+                                    </optgroup>
+                                  )}
+                                </select>
+                              </div>
                             </div>
-                          </div>
-                        ) : (
-                          <div className="text-xs text-zinc-400 italic bg-zinc-950/60 p-3 rounded-lg border border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                            <span>
-                              {isBlizzardLoggedIn
-                                ? "Nenhum personagem carregado no momento. Clique para sincronizar ou busque diretamente no Armory abaixo."
-                                : "Faça login com a Battle.net acima ou busque qualquer personagem diretamente pelo Armory oficial abaixo."}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleFetchBlizzardCharacters(blizzardGameId, true)}
-                              className="text-xs text-amber-400 hover:text-amber-300 underline font-semibold cursor-pointer shrink-0"
-                            >
-                              Carregar Personagens
-                            </button>
-                          </div>
-                        )}
+                          );
+                        })()}
 
                         {/* Direct Blizzard Armory Character Search */}
                         <div className="pt-2 border-t border-zinc-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">

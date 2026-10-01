@@ -34,6 +34,192 @@ preloadKnownItemsToIndexedDB().catch(() => {});
 // L1 Fast Synchronous Cache
 const l1DisplayCache = new Map<string, number>();
 const l1MetadataCache = new Map<string, any>();
+const transmogValidityMemoryCache = new Map<string, boolean>();
+const transmogValidityDetailsCache = new Map<string, TransmogModelValidationResult>();
+const gearListMemoryCache = new Map<string, [number, number][]>();
+
+export interface TransmogModelValidationResult {
+  isValid: boolean;
+  slot: number;
+  displayId: number;
+  modelPath?: string;
+  fileDataId?: number;
+  isFallback?: boolean;
+  reason?: string;
+}
+
+/**
+ * Validates if a resolved transmog displayId actually returns a valid 3D model path before passing it to the engine.
+ * Inspects modelviewer JSON metadata for genuine 3D model paths, FileDataIds, or geometries.
+ * Returns detailed validation result including status, modelPath, or failure reason.
+ */
+export async function checkTransmogModelPath(
+  slot: number,
+  displayId: number,
+  locale = "en_US"
+): Promise<TransmogModelValidationResult> {
+  if (!displayId || displayId <= 0 || !slot || slot <= 0) {
+    return {
+      isValid: false,
+      slot: slot || 0,
+      displayId: displayId || 0,
+      reason: "Invalid slot or display ID",
+    };
+  }
+
+  const cacheKey = `${slot}_${displayId}`;
+  if (transmogValidityDetailsCache.has(cacheKey)) {
+    return transmogValidityDetailsCache.get(cacheKey)!;
+  }
+
+  // Check persistent IndexedDB cache
+  try {
+    const cached = await getCachedAssetMetadata<TransmogModelValidationResult>("transmog_valid", cacheKey);
+    if (cached && typeof cached.isValid === "boolean") {
+      transmogValidityMemoryCache.set(cacheKey, cached.isValid);
+      transmogValidityDetailsCache.set(cacheKey, cached);
+      return cached;
+    }
+  } catch (_) {}
+
+  // Determine correct endpoint: armor slots vs weapon/item slots
+  const isArmorSlot = [1, 3, 4, 5, 6, 7, 8, 9, 10, 16, 19, 20].includes(slot);
+  const assetUrl = isArmorSlot
+    ? `/api/zamimg/modelviewer/live/meta/armor/${slot}/${displayId}.json?locale=${locale}`
+    : `/api/zamimg/modelviewer/live/meta/item/${displayId}.json?locale=${locale}`;
+
+  try {
+    const resp = await fetch(assetUrl, { method: "GET" });
+    if (!resp.ok) {
+      const res: TransmogModelValidationResult = {
+        isValid: false,
+        slot,
+        displayId,
+        reason: `HTTP ${resp.status} status from modelviewer endpoint`,
+      };
+      transmogValidityMemoryCache.set(cacheKey, false);
+      transmogValidityDetailsCache.set(cacheKey, res);
+      await setCachedAssetMetadata("transmog_valid", cacheKey, res);
+      return res;
+    }
+
+    // Check if server indicated a fallback was used instead of genuine model
+    const isServerFallback =
+      resp.headers.get("x-zamimg-fallback") !== null ||
+      resp.headers.get("x-zamimg-original-status") === "404";
+
+    const data = await resp.json();
+    if (!data || typeof data !== "object" || data.error) {
+      const res: TransmogModelValidationResult = {
+        isValid: false,
+        slot,
+        displayId,
+        reason: data?.error || "Empty or invalid JSON metadata",
+      };
+      transmogValidityMemoryCache.set(cacheKey, false);
+      transmogValidityDetailsCache.set(cacheKey, res);
+      await setCachedAssetMetadata("transmog_valid", cacheKey, res);
+      return res;
+    }
+
+    if (isServerFallback) {
+      const res: TransmogModelValidationResult = {
+        isValid: false,
+        slot,
+        displayId,
+        isFallback: true,
+        reason: "Server substituted default fallback model; genuine transmog model path missing",
+      };
+      transmogValidityMemoryCache.set(cacheKey, false);
+      transmogValidityDetailsCache.set(cacheKey, res);
+      await setCachedAssetMetadata("transmog_valid", cacheKey, res);
+      return res;
+    }
+
+    // Verify if returned ID matches requested displayId (when present)
+    if (typeof data.Id === "number" && data.Id > 0 && data.Id !== displayId) {
+      const res: TransmogModelValidationResult = {
+        isValid: false,
+        slot,
+        displayId,
+        isFallback: true,
+        reason: `Mismatched returned model ID (${data.Id} !== requested ${displayId})`,
+      };
+      transmogValidityMemoryCache.set(cacheKey, false);
+      transmogValidityDetailsCache.set(cacheKey, res);
+      await setCachedAssetMetadata("transmog_valid", cacheKey, res);
+      return res;
+    }
+
+    // Verify 3D model asset definition: Model string path, FileDataId, Geosets, or Textures
+    const modelPath = typeof data.Model === "string" ? data.Model : undefined;
+    const fileDataId =
+      typeof data.FileDataId === "number"
+        ? data.FileDataId
+        : typeof data.fileDataId === "number"
+        ? data.fileDataId
+        : undefined;
+    const hasModelsArray = Array.isArray(data.Models) && data.Models.length > 0;
+    const hasGeosets =
+      data.Geosets && typeof data.Geosets === "object" && Object.keys(data.Geosets).length > 0;
+    const hasTextures =
+      (Array.isArray(data.Textures) && data.Textures.length > 0) ||
+      (data.Textures && typeof data.Textures === "object" && Object.keys(data.Textures).length > 0);
+    const hasPieces = Array.isArray(data.Pieces) && data.Pieces.length > 0;
+
+    const hasValid3DPath = Boolean(
+      modelPath || fileDataId || hasModelsArray || hasGeosets || hasTextures || hasPieces
+    );
+
+    if (!hasValid3DPath) {
+      const res: TransmogModelValidationResult = {
+        isValid: false,
+        slot,
+        displayId,
+        reason: "Metadata does not contain any valid 3D model file, FileDataId, or geometry path",
+      };
+      transmogValidityMemoryCache.set(cacheKey, false);
+      transmogValidityDetailsCache.set(cacheKey, res);
+      await setCachedAssetMetadata("transmog_valid", cacheKey, res);
+      return res;
+    }
+
+    const res: TransmogModelValidationResult = {
+      isValid: true,
+      slot,
+      displayId,
+      modelPath: modelPath || (fileDataId ? `fileDataId:${fileDataId}` : "valid_3d_geometry"),
+      fileDataId,
+    };
+    transmogValidityMemoryCache.set(cacheKey, true);
+    transmogValidityDetailsCache.set(cacheKey, res);
+    await setCachedAssetMetadata("transmog_valid", cacheKey, res);
+    return res;
+  } catch (err: any) {
+    const res: TransmogModelValidationResult = {
+      isValid: false,
+      slot,
+      displayId,
+      reason: err?.message || "Network exception validating 3D model path",
+    };
+    transmogValidityMemoryCache.set(cacheKey, false);
+    transmogValidityDetailsCache.set(cacheKey, res);
+    return res;
+  }
+}
+
+/**
+ * Validation utility that checks if a resolved transmog displayId actually returns a valid 3D model path
+ * before passing it to the engine, allowing for an automatic fallback to the base item model if the transmog ID is broken.
+ */
+export async function validateTransmogModelPath(
+  slot: number,
+  displayId: number,
+  locale = "en_US"
+): Promise<boolean> {
+  const result = await checkTransmogModelPath(slot, displayId, locale);
+  return result.isValid;
+}
 
 // Storage key prefix
 const IDB_PREFIX = "blizz_cache_v2_";
@@ -76,8 +262,8 @@ export async function getCachedDisplayId(
       l1DisplayCache.set(key, fromDb.displayId);
       return fromDb.displayId;
     }
-  } catch (err) {
-    console.warn(`[BlizzardAssetCache] Failed to load ${key} from IndexedDB:`, err);
+  } catch (_) {
+    // Graceful fallback to L1 in-memory cache
   }
 
   return null;
@@ -105,8 +291,8 @@ export async function setCachedDisplayId(
       metadata: metadata || null,
       timestamp: Date.now(),
     });
-  } catch (err) {
-    console.warn(`[BlizzardAssetCache] Failed to save ${key} to IndexedDB:`, err);
+  } catch (_) {
+    // Graceful fallback
   }
 }
 
@@ -125,8 +311,8 @@ export async function setCachedAssetMetadata<T>(
       data,
       timestamp: Date.now(),
     });
-  } catch (err) {
-    console.warn(`[BlizzardAssetCache] Failed to save metadata for ${fullKey}:`, err);
+  } catch (_) {
+    // Graceful fallback
   }
 }
 
@@ -147,8 +333,8 @@ export async function getCachedAssetMetadata<T>(
       l1MetadataCache.set(fullKey, item.data);
       return item.data;
     }
-  } catch (err) {
-    console.warn(`[BlizzardAssetCache] Failed to load metadata for ${fullKey}:`, err);
+  } catch (_) {
+    // Graceful fallback
   }
   return null;
 }
@@ -345,20 +531,25 @@ export async function resolveBlizzardItemDisplay(
 /**
  * Resolves a full list of character gear items into verified [slot, displayId] tuples,
  * prioritizing transmog appearances and ensuring correct slot mapping (robes = 20, weapons = 21/22).
+ * Handles missing or invalid transmog data by falling back cleanly to the default item ID and displayId.
  */
 export async function resolveCharacterGearItems(
   gearList: any[],
   region = "us",
   profileTransmogs?: Record<string, {
-    slot: string;
+    slot?: string;
     slotId?: number;
     itemId?: number;
+    id?: number;
     displayId?: number;
     name?: string;
     displayString?: string;
   }>
 ): Promise<[number, number][]> {
-  if ((!gearList || !Array.isArray(gearList) || gearList.length === 0) && (!profileTransmogs || Object.keys(profileTransmogs).length === 0)) return [];
+  const safeGearList = Array.isArray(gearList) ? gearList : [];
+  const safeTransmogs = (profileTransmogs && typeof profileTransmogs === "object") ? profileTransmogs : {};
+
+  if (safeGearList.length === 0 && Object.keys(safeTransmogs).length === 0) return [];
 
   const slotMapping: Record<string, number> = {
     HEAD: 1,
@@ -376,17 +567,22 @@ export async function resolveCharacterGearItems(
     MAIN_HAND: 21,
     OFF_HAND: 22,
     RANGED: 26,
+    SHIELD: 22,
+    WEAPON: 21,
+    TWOHWEAPON: 21,
+    ONEHWEAPON: 21,
+    HOLDABLE: 22,
   };
 
   const resolvedTuples: [number, number][] = [];
 
-  for (const item of gearList) {
-    if (!item) continue;
+  for (const item of safeGearList) {
+    if (!item || typeof item !== "object") continue;
 
     // 1. Determine which slot number to use
-    let slotNum = item.slotId;
-    const slotKey = (item.slot || "").toUpperCase();
-    const invType = (item.inventoryType || "").toUpperCase();
+    let slotNum = typeof item.slotId === "number" && item.slotId > 0 ? item.slotId : 0;
+    const slotKey = String(item.slot || "").toUpperCase();
+    const invType = String(item.inventoryType || "").toUpperCase();
 
     if (!slotNum) {
       if (invType === "ROBE" || slotKey === "ROBE") {
@@ -398,39 +594,99 @@ export async function resolveCharacterGearItems(
       slotNum = 20;
     }
 
-    if (!slotNum) continue;
-
-    // 2. Determine displayId: transmog takes precedence over base item
-    const matchedTransmog = profileTransmogs ? (profileTransmogs[slotKey] || profileTransmogs[(item.slot || "").toLowerCase()]) : undefined;
-    let displayId = 0;
-
-    if (matchedTransmog && typeof matchedTransmog.displayId === "number" && matchedTransmog.displayId > 0) {
-      displayId = matchedTransmog.displayId;
-      if (matchedTransmog.slotId) slotNum = matchedTransmog.slotId;
-    } else if (item.transmog && typeof item.transmog.displayId === "number" && item.transmog.displayId > 0) {
-      displayId = item.transmog.displayId;
-    } else if (typeof item.displayId === "number" && item.displayId > 0) {
-      // Validate that displayId is not simply an unconverted itemId
-      const baseItemId = item.itemId || item.id;
-      if (item.displayId !== baseItemId || [127184, 117298, 139244, 66904, 117300, 66395, 66376, 40075].includes(item.displayId)) {
-        displayId = item.displayId;
-      }
+    // Skip non-visual slots (rings, trinkets, neck)
+    if (!slotNum || [2, 11, 12, 13, 14, 15, 17, 18, 28, 29, 30].includes(slotNum)) {
+      continue;
     }
 
-    // 3. If displayId is still missing or equal to itemId, resolve dynamically via API
-    if (!displayId || displayId <= 0) {
-      const targetItemId = matchedTransmog?.itemId || item.transmog?.itemId || item.itemId || item.id;
-      if (targetItemId && targetItemId > 0) {
-        const resolved = await resolveBlizzardItemDisplay(targetItemId, region);
-        if (resolved && resolved.displayId > 0) {
-          displayId = resolved.displayId;
-          if (resolved.slotId) slotNum = resolved.slotId;
+    // 2. Identify Transmog and Base Item references
+    const matchedTransmog = safeTransmogs[slotKey] || safeTransmogs[(item.slot || "").toLowerCase()] || safeTransmogs[String(slotNum)];
+    const transmogCandidate = matchedTransmog || item.transmog;
+
+    let displayId = 0;
+
+    // A. Transmog appearance resolution
+    if (transmogCandidate) {
+      const tDispId = typeof transmogCandidate.displayId === "number" ? transmogCandidate.displayId : Number(transmogCandidate.displayId);
+      if (tDispId > 0 && !isNaN(tDispId)) {
+        displayId = tDispId;
+        if (transmogCandidate.slotId) slotNum = transmogCandidate.slotId;
+      } else {
+        // Transmog displayId is null or invalid -> attempt resolving transmog's itemId
+        const tItemId = typeof transmogCandidate.itemId === "number" ? transmogCandidate.itemId : (typeof transmogCandidate.id === "number" ? transmogCandidate.id : Number(transmogCandidate.itemId || transmogCandidate.id || 0));
+        if (tItemId > 0 && !isNaN(tItemId)) {
+          const syncMap = getItemDisplayMappingSync(tItemId);
+          if (syncMap && syncMap.displayId > 0) {
+            displayId = syncMap.displayId;
+            if (syncMap.slotId) slotNum = syncMap.slotId;
+          } else {
+            const resolved = await resolveBlizzardItemDisplay(tItemId, region);
+            if (resolved && resolved.displayId > 0) {
+              displayId = resolved.displayId;
+              if (resolved.slotId) slotNum = resolved.slotId;
+            }
+          }
+        }
+      }
+
+      // Check if the resolved transmog displayId actually returns a valid 3D model path before passing it to the engine.
+      // If broken, automatically reset displayId to 0 allowing automatic fallback to the base item model below.
+      if (displayId > 0) {
+        const isTransmogValid = await validateTransmogModelPath(slotNum, displayId);
+        if (!isTransmogValid) {
+          console.warn(
+            `[blizzardAssetCache] Transmog displayId ${displayId} for slot ${slotNum} does not return a valid 3D model path. Automatically falling back to base item model.`
+          );
+          displayId = 0;
         }
       }
     }
 
+    // B. FALLBACK: If transmog displayId was null, invalid, or failed resolution,
+    // fall back cleanly to the default/equipped item ID and direct displayId
+    if (!displayId || displayId <= 0) {
+      // Direct item.displayId if valid positive number
+      const directDispId = typeof item.displayId === "number" ? item.displayId : Number(item.displayId || 0);
+      if (directDispId > 0 && !isNaN(directDispId)) {
+        displayId = directDispId;
+      }
+
+      // Default item ID resolution
+      const defaultItemId = typeof item.itemId === "number" && item.itemId > 0
+        ? item.itemId
+        : typeof item.id === "number" && item.id > 0
+        ? item.id
+        : typeof item.item_id === "number" && item.item_id > 0
+        ? item.item_id
+        : typeof item.item?.id === "number" && item.item.id > 0
+        ? item.item.id
+        : typeof item.visualItemId === "number" && item.visualItemId > 0
+        ? item.visualItemId
+        : 0;
+
+      if (defaultItemId > 0) {
+        // Synchronous cache / seed dictionary lookup
+        const syncMap = getItemDisplayMappingSync(defaultItemId);
+        if (syncMap && syncMap.displayId > 0) {
+          displayId = syncMap.displayId;
+          if (syncMap.slotId) slotNum = syncMap.slotId;
+        } else if (!displayId || displayId <= 0) {
+          // Asynchronous resolution via Blizzard API proxy
+          const resolved = await resolveBlizzardItemDisplay(defaultItemId, region);
+          if (resolved && resolved.displayId > 0) {
+            displayId = resolved.displayId;
+            if (resolved.slotId) slotNum = resolved.slotId;
+          }
+        }
+      }
+
+      // Final fallback to direct displayId if available
+      if ((!displayId || displayId <= 0) && directDispId > 0 && !isNaN(directDispId)) {
+        displayId = directDispId;
+      }
+    }
+
     if (slotNum > 0 && displayId > 0) {
-      // Don't add duplicate slots
       const existingIdx = resolvedTuples.findIndex(([s]) => s === slotNum);
       if (existingIdx >= 0) {
         resolvedTuples[existingIdx] = [slotNum, displayId];
@@ -440,26 +696,40 @@ export async function resolveCharacterGearItems(
     }
   }
 
-  // Also check profileTransmogs for any remaining slots that were transmogrified
-  if (profileTransmogs) {
-    for (const [slotKey, tInfo] of Object.entries(profileTransmogs)) {
-      if (!tInfo) continue;
-      const sKey = slotKey.toUpperCase();
-      let slotNum = tInfo.slotId || slotMapping[sKey] || 0;
-      if (!slotNum) continue;
+  // Also check safeTransmogs for any remaining slots that were transmogrified
+  for (const [slotKey, tInfo] of Object.entries(safeTransmogs)) {
+    if (!tInfo || typeof tInfo !== "object") continue;
+    const sKey = slotKey.toUpperCase();
+    let slotNum = tInfo.slotId || slotMapping[sKey] || 0;
+    if (!slotNum || [2, 11, 12, 13, 14, 15, 17, 18, 28, 29, 30].includes(slotNum)) continue;
 
-      const alreadyResolved = resolvedTuples.some(([s]) => s === slotNum);
-      if (!alreadyResolved) {
-        let displayId = tInfo.displayId || 0;
-        if (!displayId && tInfo.itemId) {
-          const resolved = await resolveBlizzardItemDisplay(tInfo.itemId, region);
+    const alreadyResolved = resolvedTuples.some(([s]) => s === slotNum);
+    if (!alreadyResolved) {
+      let displayId = typeof tInfo.displayId === "number" ? tInfo.displayId : Number(tInfo.displayId || 0);
+      const tItemId = typeof tInfo.itemId === "number" ? tInfo.itemId : (typeof tInfo.id === "number" ? tInfo.id : Number(tInfo.itemId || tInfo.id || 0));
+
+      if ((!displayId || displayId <= 0) && tItemId > 0 && !isNaN(tItemId)) {
+        const syncMap = getItemDisplayMappingSync(tItemId);
+        if (syncMap && syncMap.displayId > 0) {
+          displayId = syncMap.displayId;
+          if (syncMap.slotId) slotNum = syncMap.slotId;
+        } else {
+          const resolved = await resolveBlizzardItemDisplay(tItemId, region);
           if (resolved?.displayId) {
             displayId = resolved.displayId;
             if (resolved.slotId) slotNum = resolved.slotId;
           }
         }
-        if (slotNum > 0 && displayId > 0) {
+      }
+
+      if (slotNum > 0 && displayId > 0) {
+        const isTransmogValid = await validateTransmogModelPath(slotNum, displayId);
+        if (isTransmogValid) {
           resolvedTuples.push([slotNum, displayId]);
+        } else {
+          console.warn(
+            `[blizzardAssetCache] Standalone transmog displayId ${displayId} for slot ${slotNum} does not return a valid 3D model path. Skipping.`
+          );
         }
       }
     }
@@ -479,15 +749,20 @@ export async function prefetchAndVerifyBlizzardGearList(
   items: [number, number][],
   locale = "en_US"
 ): Promise<[number, number][]> {
-  if (!items || !Array.isArray(items) || items.length === 0) return items;
+  if (!items || !Array.isArray(items) || items.length === 0) return [];
+
+  // L1 Fast cache check for full gear list to avoid re-fetching when switching tabs
+  const listCacheKey = items.map(([s, d]) => `${s}:${d}`).sort().join(";");
+  if (gearListMemoryCache.has(listCacheKey)) {
+    return gearListMemoryCache.get(listCacheKey)!;
+  }
 
   const verifiedItems: [number, number][] = [];
 
-  for (const [slot, displayId] of items) {
-    if (!displayId || displayId <= 0) {
-      verifiedItems.push([slot, displayId]);
-      continue;
-    }
+  for (const item of items) {
+    if (!item || !Array.isArray(item) || item.length < 2) continue;
+    const [slot, displayId] = item;
+    if (!slot || !displayId || displayId <= 0) continue;
 
     // Check IndexedDB
     const cachedId = await getCachedDisplayId("item", displayId);
@@ -547,5 +822,6 @@ export async function prefetchAndVerifyBlizzardGearList(
     verifiedItems.push([slot, displayId]);
   }
 
+  gearListMemoryCache.set(listCacheKey, verifiedItems);
   return verifiedItems;
 }

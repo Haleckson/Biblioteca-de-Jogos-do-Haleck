@@ -79,30 +79,40 @@ export function sanitizeConsoleArgs(args: any[]): any[] {
 
     if (typeof arg === "object") {
       // Check if it's a jQuery or DOM container wrapper
-      if (arg.jquery || (arg[0] && typeof HTMLElement !== "undefined" && arg[0] instanceof HTMLElement)) {
-        return `[jQuery Container (${arg.length || 1} elements)]`;
-      }
-      // Shallow copy or clean check to remove __reactFiber or circular refs
       try {
+        if (arg.jquery || (arg[0] && typeof HTMLElement !== "undefined" && arg[0] instanceof HTMLElement)) {
+          return `[jQuery Container (${arg.length || 1} elements)]`;
+        }
+        // Shallow copy or clean check to remove __reactFiber or circular refs
         const seen = new WeakSet();
         const cleanCopy = (obj: any, depth = 0): any => {
           if (depth > 2 || obj === null || typeof obj !== "object") return obj;
           if (typeof HTMLElement !== "undefined" && obj instanceof HTMLElement) {
             return `[${obj.tagName.toLowerCase()}]`;
           }
-          if (seen.has(obj)) return "[Circular]";
-          seen.add(obj);
+          try {
+            if (seen.has(obj)) return "[Circular]";
+            seen.add(obj);
+          } catch (_) {
+            return "[Object]";
+          }
           if (Array.isArray(obj)) return obj.map((i) => cleanCopy(i, depth + 1));
           const out: Record<string, any> = {};
-          for (const k of Object.keys(obj)) {
+          const keys = Object.keys(obj);
+          for (const k of keys) {
             if (k.startsWith("__react") || k.startsWith("_react")) continue;
-            out[k] = cleanCopy(obj[k], depth + 1);
+            try {
+              const val = obj[k];
+              out[k] = cleanCopy(val, depth + 1);
+            } catch (_) {
+              out[k] = "[Unreadable Property]";
+            }
           }
           return out;
         };
         return cleanCopy(arg);
       } catch (_) {
-        return "[Complex Object]";
+        return (arg && (arg.message || arg.name)) ? `[${arg.name || "Object"}: ${arg.message || ""}]` : "[Object]";
       }
     }
 
@@ -139,7 +149,11 @@ export function setupConsoleSanitizer(): void {
       const sanitized = sanitizeConsoleArgs(args);
       originalLog.apply(console, sanitized);
     } catch (_) {
-      originalLog.apply(console, ["[Log payload]"]);
+      try {
+        originalLog.apply(console, args);
+      } catch {
+        originalLog(String(args[0] || ""));
+      }
     }
   };
 
@@ -148,7 +162,11 @@ export function setupConsoleSanitizer(): void {
       const sanitized = sanitizeConsoleArgs(args);
       originalInfo.apply(console, sanitized);
     } catch (_) {
-      originalInfo.apply(console, ["[Info payload]"]);
+      try {
+        originalInfo.apply(console, args);
+      } catch {
+        originalInfo(String(args[0] || ""));
+      }
     }
   };
 
@@ -157,25 +175,63 @@ export function setupConsoleSanitizer(): void {
       const sanitized = sanitizeConsoleArgs(args);
       originalDebug.apply(console, sanitized);
     } catch (_) {
-      originalDebug.apply(console, ["[Debug payload]"]);
+      try {
+        originalDebug.apply(console, args);
+      } catch {
+        originalDebug(String(args[0] || ""));
+      }
     }
+  };
+
+  const isBenignNoise = (first: any): boolean => {
+    if (typeof first === "string") {
+      return (
+        first.includes("IndexedDB is not available") ||
+        first.includes("[StorageDB] Erro ao salvar chave") ||
+        first.includes("[StorageDB] Falha ao abrir IndexedDB") ||
+        first.includes("[BlizzardAssetCache]") ||
+        first.includes("Falha no token exchange da Blizzard") ||
+        first.includes("invalid_grant") ||
+        first.includes("Warn payload")
+      );
+    }
+    if (first instanceof Error) {
+      const msg = first.message || String(first);
+      return msg.includes("IndexedDB is not available") || msg.includes("invalid_grant");
+    }
+    return false;
   };
 
   console.warn = (...args: any[]) => {
     try {
+      // Filter out benign internal storage messages or noise in restricted environments
+      if (isBenignNoise(args[0])) {
+        return;
+      }
       const sanitized = sanitizeConsoleArgs(args);
       originalWarn.apply(console, sanitized);
     } catch (_) {
-      originalWarn.apply(console, ["[Warn payload]"]);
+      try {
+        originalWarn.apply(console, args);
+      } catch {
+        originalWarn(String(args[0] || ""));
+      }
     }
   };
 
   console.error = (...args: any[]) => {
     try {
+      if (isBenignNoise(args[0])) {
+        return;
+      }
       const sanitized = sanitizeConsoleArgs(args);
       originalError.apply(console, sanitized);
     } catch (_) {
-      originalError.apply(console, ["[Error payload]"]);
+      try {
+        originalError.apply(console, args);
+      } catch {
+        originalError(String(args[0] || ""));
+      }
     }
   };
 }

@@ -88,13 +88,13 @@ export const WoWAchievementsView: React.FC<WoWAchievementsViewProps> = ({
 
   // Base achievements from profile or live fetch
   const baseAchievements: BlizzardAchievement[] = useMemo(() => {
-    if (liveAchievements && liveAchievements.length > 0) {
+    if (Array.isArray(liveAchievements) && liveAchievements.length > 0) {
       return liveAchievements;
     }
-    if (profile.achievements && profile.achievements.length > 0) {
+    if (Array.isArray(profile.achievements) && profile.achievements.length > 0) {
       return profile.achievements;
     }
-    if (profile.recentAchievements && profile.recentAchievements.length > 0) {
+    if (Array.isArray(profile.recentAchievements) && profile.recentAchievements.length > 0) {
       return profile.recentAchievements.map((r) => ({
         id: r.id,
         title: r.name,

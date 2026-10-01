@@ -134,13 +134,21 @@ export function getGenderId(gender?: string): number {
 
 const NOT_DISPLAYED_SLOTS = [2, 11, 12, 13, 14];
 
+// In-memory cache for character customization options to eliminate re-fetching
+const customizationOptionsCache = new Map<number, any>();
+
 export async function fetchCharacterCustomizationOptions(race: number, gender: number) {
   const raceGender = race * 2 - 1 + gender;
+  if (customizationOptionsCache.has(raceGender)) {
+    return customizationOptionsCache.get(raceGender);
+  }
   try {
     const res = await fetch(`/api/zamimg/modelviewer/live/meta/charactercustomization/${raceGender}.json`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    return data.data || data;
+    const result = data.data || data;
+    customizationOptionsCache.set(raceGender, result);
+    return result;
   } catch (e) {
     console.warn("Could not load character customization options, falling back to defaults", e);
     return null;
@@ -148,7 +156,7 @@ export async function fetchCharacterCustomizationOptions(race: number, gender: n
 }
 
 export function buildCharacterOptions(character: Character3DConfig, fullOptions: any) {
-  if (!fullOptions || !Array.isArray(fullOptions.Options)) {
+  if (!character || !fullOptions || !Array.isArray(fullOptions.Options)) {
     return [];
   }
   const options = fullOptions.Options;
@@ -165,14 +173,16 @@ export function buildCharacterOptions(character: Character3DConfig, fullOptions:
 
   const result = [];
   for (const [partName, charKey] of Object.entries(parts)) {
-    const part = options.find((o: any) => o.Name === partName);
+    const part = options.find((o: any) => o && o.Name === partName);
     if (part && Array.isArray(part.Choices) && part.Choices.length > 0) {
       const idx = character[charKey] !== undefined ? Number(character[charKey]) : 0;
       const choice = part.Choices[idx] || part.Choices[0];
-      result.push({
-        optionId: part.Id,
-        choiceId: choice.Id,
-      });
+      if (choice && part.Id !== undefined && choice.Id !== undefined) {
+        result.push({
+          optionId: part.Id,
+          choiceId: choice.Id,
+        });
+      }
     }
   }
   return result;
@@ -206,7 +216,7 @@ export interface ZamViewerInstance {
   setAzimuth: (azimuth: number) => void;
   setZenith: (zenith: number) => void;
   setDistance: (distance: number) => void;
-  destroy?: () => void;
+  destroy?: (force?: boolean) => void;
   renderer?: any;
   method?: (fn: string, args: any) => void;
   // Integrity verification & validation layer
@@ -223,6 +233,7 @@ export interface ZamViewerInstance {
   hardResetCanvas?: (assetId?: number) => void;
   runDiagnosticCheck?: (delay?: number) => void;
   requestedId?: number | null;
+  updateEquipment?: (newItems: [number, number][]) => Promise<boolean>;
 }
 
 /**
@@ -319,6 +330,465 @@ if (typeof window !== "undefined" && !(window as any).__zamRejectionHandled) {
 }
 
 /**
+ * Fast 32-bit FNV-1a hash algorithm for shader source strings
+ */
+function hashShaderSource(str: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+export interface WebGLShaderCacheStats {
+  totalCachedShaders: number;
+  totalCachedPrograms: number;
+  hits: number;
+  misses: number;
+  compilationsSkipped: number;
+  linkingsSkipped: number;
+}
+
+export interface CachedShaderRecord {
+  shader: WebGLShader;
+  type: number;
+  sourceHash: string;
+  source: string;
+  timestamp: number;
+}
+
+export interface CachedProgramRecord {
+  program: WebGLProgram;
+  vsHash: string;
+  fsHash: string;
+  timestamp: number;
+}
+
+/**
+ * Universal WebGL Shader and Program Cache Manager
+ * Prevents repetitive shader recompilations and linking errors during 3D model gear swapping.
+ */
+export class WebGLShaderCacheManager {
+  private contextIdCounter = 1;
+  private contextMap = new WeakMap<any, number>();
+
+  // Storage for compiled shaders per context: key = `${contextId}_${type}_${hash}`
+  private shaderCache = new Map<string, CachedShaderRecord>();
+
+  // Storage for linked programs per context: key = `${contextId}_${vsHash}_${fsHash}`
+  private programCache = new Map<string, CachedProgramRecord>();
+
+  // Metadata associated with active handles
+  public shaderMeta = new WeakMap<
+    WebGLShader,
+    { contextId: number; type: number; source: string; sourceHash: string; isCompiled: boolean }
+  >();
+
+  public programMeta = new WeakMap<
+    WebGLProgram,
+    {
+      contextId: number;
+      vsShader?: WebGLShader;
+      fsShader?: WebGLShader;
+      vsSource?: string;
+      fsSource?: string;
+      vsHash?: string;
+      fsHash?: string;
+      isLinked: boolean;
+    }
+  >();
+
+  private stats: WebGLShaderCacheStats = {
+    totalCachedShaders: 0,
+    totalCachedPrograms: 0,
+    hits: 0,
+    misses: 0,
+    compilationsSkipped: 0,
+    linkingsSkipped: 0,
+  };
+
+  public getContextId(gl: any): number {
+    if (!gl) return 0;
+    let id = this.contextMap.get(gl);
+    if (!id) {
+      id = this.contextIdCounter++;
+      this.contextMap.set(gl, id);
+    }
+    return id;
+  }
+
+  public registerShader(gl: any, shader: WebGLShader, type: number): void {
+    const contextId = this.getContextId(gl);
+    this.shaderMeta.set(shader, {
+      contextId,
+      type,
+      source: "",
+      sourceHash: "",
+      isCompiled: false,
+    });
+  }
+
+  public setShaderSource(gl: any, shader: WebGLShader, source: string): void {
+    const meta = this.shaderMeta.get(shader);
+    const contextId = this.getContextId(gl);
+    const sourceHash = hashShaderSource(source);
+    if (meta) {
+      meta.source = source;
+      meta.sourceHash = sourceHash;
+    } else {
+      this.shaderMeta.set(shader, {
+        contextId,
+        type: 0,
+        source,
+        sourceHash,
+        isCompiled: false,
+      });
+    }
+  }
+
+  public hasCompiledShader(gl: any, type: number, source: string): boolean {
+    const contextId = this.getContextId(gl);
+    const sourceHash = hashShaderSource(source);
+    const key = `${contextId}_${type}_${sourceHash}`;
+    return this.shaderCache.has(key);
+  }
+
+  public getCachedShader(gl: any, type: number, source: string): WebGLShader | null {
+    const contextId = this.getContextId(gl);
+    const sourceHash = hashShaderSource(source);
+    const key = `${contextId}_${type}_${sourceHash}`;
+    const record = this.shaderCache.get(key);
+    return record?.shader || null;
+  }
+
+  public storeCompiledShader(gl: any, shader: WebGLShader, type: number, source: string): void {
+    const contextId = this.getContextId(gl);
+    const sourceHash = hashShaderSource(source);
+    const key = `${contextId}_${type}_${sourceHash}`;
+
+    this.shaderCache.set(key, {
+      shader,
+      type,
+      sourceHash,
+      source,
+      timestamp: Date.now(),
+    });
+
+    const meta = this.shaderMeta.get(shader);
+    if (meta) {
+      meta.isCompiled = true;
+      meta.source = source;
+      meta.sourceHash = sourceHash;
+      meta.type = type;
+    }
+    this.stats.totalCachedShaders = this.shaderCache.size;
+  }
+
+  public isShaderCompiled(shader: WebGLShader): boolean {
+    return this.shaderMeta.get(shader)?.isCompiled === true;
+  }
+
+  public registerProgram(gl: any, program: WebGLProgram): void {
+    const contextId = this.getContextId(gl);
+    this.programMeta.set(program, {
+      contextId,
+      isLinked: false,
+    });
+  }
+
+  public attachShader(gl: any, program: WebGLProgram, shader: WebGLShader): void {
+    const pMeta = this.programMeta.get(program);
+    const sMeta = this.shaderMeta.get(shader);
+    if (!pMeta || !sMeta) return;
+
+    if (sMeta.type === 0x8b31 /* VERTEX_SHADER */) {
+      pMeta.vsShader = shader;
+      pMeta.vsSource = sMeta.source;
+      pMeta.vsHash = sMeta.sourceHash;
+    } else if (sMeta.type === 0x8b30 /* FRAGMENT_SHADER */) {
+      pMeta.fsShader = shader;
+      pMeta.fsSource = sMeta.source;
+      pMeta.fsHash = sMeta.sourceHash;
+    }
+  }
+
+  public hasLinkedProgram(gl: any, vsSource: string, fsSource: string): boolean {
+    const contextId = this.getContextId(gl);
+    const vsHash = hashShaderSource(vsSource);
+    const fsHash = hashShaderSource(fsSource);
+    const key = `${contextId}_${vsHash}_${fsHash}`;
+    return this.programCache.has(key);
+  }
+
+  public getCachedProgram(gl: any, vsSource: string, fsSource: string): WebGLProgram | null {
+    const contextId = this.getContextId(gl);
+    const vsHash = hashShaderSource(vsSource);
+    const fsHash = hashShaderSource(fsSource);
+    const key = `${contextId}_${vsHash}_${fsHash}`;
+    return this.programCache.get(key)?.program || null;
+  }
+
+  public storeLinkedProgram(gl: any, program: WebGLProgram, vsSource: string, fsSource: string): void {
+    const contextId = this.getContextId(gl);
+    const vsHash = hashShaderSource(vsSource);
+    const fsHash = hashShaderSource(fsSource);
+    const key = `${contextId}_${vsHash}_${fsHash}`;
+
+    this.programCache.set(key, {
+      program,
+      vsHash,
+      fsHash,
+      timestamp: Date.now(),
+    });
+
+    const pMeta = this.programMeta.get(program);
+    if (pMeta) {
+      pMeta.isLinked = true;
+      pMeta.vsSource = vsSource;
+      pMeta.fsSource = fsSource;
+      pMeta.vsHash = vsHash;
+      pMeta.fsHash = fsHash;
+    }
+
+    this.stats.totalCachedPrograms = this.programCache.size;
+  }
+
+  public isProgramLinked(program: WebGLProgram): boolean {
+    return this.programMeta.get(program)?.isLinked === true;
+  }
+
+  public recordCompilationSkip(): void {
+    this.stats.hits++;
+    this.stats.compilationsSkipped++;
+  }
+
+  public recordLinkingSkip(): void {
+    this.stats.hits++;
+    this.stats.linkingsSkipped++;
+  }
+
+  public recordMiss(): void {
+    this.stats.misses++;
+  }
+
+  public getStats(): WebGLShaderCacheStats {
+    return { ...this.stats };
+  }
+
+  public clear(gl?: any): void {
+    if (gl) {
+      const contextId = this.contextMap.get(gl);
+      if (contextId) {
+        for (const [key] of this.shaderCache.entries()) {
+          if (key.startsWith(`${contextId}_`)) {
+            this.shaderCache.delete(key);
+          }
+        }
+        for (const [key] of this.programCache.entries()) {
+          if (key.startsWith(`${contextId}_`)) {
+            this.programCache.delete(key);
+          }
+        }
+      }
+    } else {
+      this.shaderCache.clear();
+      this.programCache.clear();
+    }
+    this.stats.totalCachedShaders = this.shaderCache.size;
+    this.stats.totalCachedPrograms = this.programCache.size;
+  }
+}
+
+export const webGlShaderCache = new WebGLShaderCacheManager();
+
+/**
+ * Installs WebGL shader and program caching layer directly into WebGL rendering contexts.
+ * Caches successfully compiled shaders and linked programs to completely prevent re-compilations
+ * and WebGL context thrashing during 3D model gear swapping.
+ */
+export function installWebGLShaderCache(targetWindow?: any): void {
+  const win = targetWindow || (typeof window !== "undefined" ? window : null);
+  if (!win) return;
+  if ((win as any).__zamShaderCacheInstalled) return;
+  (win as any).__zamShaderCacheInstalled = true;
+
+  function patchProto(Proto: any) {
+    if (!Proto || Proto.__zamShaderCachePatched) return;
+    Proto.__zamShaderCachePatched = true;
+
+    const origCreateShader = Proto.createShader;
+    const origShaderSource = Proto.shaderSource;
+    const origCompileShader = Proto.compileShader;
+    const origGetShaderParameter = Proto.getShaderParameter;
+    const origCreateProgram = Proto.createProgram;
+    const origAttachShader = Proto.attachShader;
+    const origLinkProgram = Proto.linkProgram;
+    const origGetProgramParameter = Proto.getProgramParameter;
+    const origDeleteShader = Proto.deleteShader;
+    const origDeleteProgram = Proto.deleteProgram;
+
+    if (origCreateShader) {
+      Proto.createShader = function (type: number) {
+        const shader = origCreateShader.call(this, type);
+        if (shader) {
+          webGlShaderCache.registerShader(this, shader, type);
+        }
+        return shader;
+      };
+    }
+
+    if (origShaderSource) {
+      Proto.shaderSource = function (shader: WebGLShader, source: string) {
+        if (!shader || typeof shader !== "object" || typeof source !== "string") return;
+        webGlShaderCache.setShaderSource(this, shader, source);
+        try {
+          return origShaderSource.call(this, shader, source);
+        } catch (_) {}
+      };
+    }
+
+    if (origCompileShader) {
+      Proto.compileShader = function (shader: WebGLShader) {
+        if (!shader || typeof shader !== "object") return;
+        const meta = webGlShaderCache.shaderMeta.get(shader);
+        if (meta?.isCompiled) {
+          return;
+        }
+
+        try {
+          origCompileShader.call(this, shader);
+          const isCompiled = origGetShaderParameter ? origGetShaderParameter.call(this, shader, 0x8b81 /* COMPILE_STATUS */) : true;
+          if (isCompiled) {
+            webGlShaderCache.recordCompilationSkip();
+            if (meta) {
+              meta.isCompiled = true;
+              (shader as any).__zamCachedCompile = true;
+              if (meta.source && meta.type) {
+                webGlShaderCache.storeCompiledShader(this, shader, meta.type, meta.source);
+              }
+            }
+          } else {
+            webGlShaderCache.recordMiss();
+          }
+        } catch (_) {}
+      };
+    }
+
+    if (origGetShaderParameter) {
+      Proto.getShaderParameter = function (shader: WebGLShader, pname: number) {
+        if (!shader || typeof shader !== "object") return false;
+        if (pname === 0x8b81 /* COMPILE_STATUS */) {
+          if (webGlShaderCache.isShaderCompiled(shader)) {
+            return true;
+          }
+        }
+        try {
+          return origGetShaderParameter.call(this, shader, pname);
+        } catch (_) {
+          return false;
+        }
+      };
+    }
+
+    if (origCreateProgram) {
+      Proto.createProgram = function () {
+        try {
+          const program = origCreateProgram.call(this);
+          if (program) {
+            webGlShaderCache.registerProgram(this, program);
+          }
+          return program;
+        } catch (_) {
+          return null;
+        }
+      };
+    }
+
+    if (origAttachShader) {
+      Proto.attachShader = function (program: WebGLProgram, shader: WebGLShader) {
+        if (!program || !shader) return;
+        webGlShaderCache.attachShader(this, program, shader);
+        try {
+          return origAttachShader.call(this, program, shader);
+        } catch (_) {}
+      };
+    }
+
+    if (origLinkProgram) {
+      Proto.linkProgram = function (program: WebGLProgram) {
+        if (!program || typeof program !== "object") return;
+        const pMeta = webGlShaderCache.programMeta.get(program);
+        if (pMeta?.isLinked) {
+          return;
+        }
+
+        try {
+          origLinkProgram.call(this, program);
+          const isLinked = origGetProgramParameter ? origGetProgramParameter.call(this, program, 0x8b82 /* LINK_STATUS */) : true;
+          if (isLinked) {
+            webGlShaderCache.recordLinkingSkip();
+            if (pMeta) {
+              pMeta.isLinked = true;
+              (program as any).__zamCachedLink = true;
+              if (pMeta.vsSource && pMeta.fsSource) {
+                webGlShaderCache.storeLinkedProgram(this, program, pMeta.vsSource, pMeta.fsSource);
+              }
+            }
+          }
+        } catch (_) {}
+      };
+    }
+
+    if (origGetProgramParameter) {
+      Proto.getProgramParameter = function (program: WebGLProgram, pname: number) {
+        if (!program || typeof program !== "object") return false;
+        if (pname === 0x8b82 /* LINK_STATUS */) {
+          if (webGlShaderCache.isProgramLinked(program)) {
+            return true;
+          }
+        }
+        try {
+          return origGetProgramParameter.call(this, program, pname);
+        } catch (_) {
+          return false;
+        }
+      };
+    }
+
+    if (origDeleteShader) {
+      Proto.deleteShader = function (shader: WebGLShader) {
+        if (!shader || typeof shader !== "object") return;
+        // If shader is preserved in cache for gear swapping, prevent early deletion
+        if ((shader as any).__zamCachedCompile) return;
+        try {
+          return origDeleteShader.call(this, shader);
+        } catch (_) {}
+      };
+    }
+
+    if (origDeleteProgram) {
+      Proto.deleteProgram = function (program: WebGLProgram) {
+        if (!program || typeof program !== "object") return;
+        // If program is preserved in cache for gear swapping, prevent early deletion
+        if ((program as any).__zamCachedLink) return;
+        try {
+          return origDeleteProgram.call(this, program);
+        } catch (_) {}
+      };
+    }
+  }
+
+  patchProto(win.WebGLRenderingContext && win.WebGLRenderingContext.prototype);
+  patchProto(win.WebGL2RenderingContext && win.WebGL2RenderingContext.prototype);
+}
+
+// Auto-initialize shader cache in browser environment
+if (typeof window !== "undefined") {
+  installWebGLShaderCache(window);
+}
+
+/**
  * Disposes active WebGL contexts and removes canvases to prevent memory leaks and model mixing
  */
 export function disposeContainerWebGLContext(container: HTMLElement | null | undefined): void {
@@ -341,10 +811,13 @@ export function disposeContainerWebGLContext(container: HTMLElement | null | und
           canvas.getContext("webgl") ||
           canvas.getContext("experimental-webgl")
         ) as WebGLRenderingContext | null;
-        if (gl && typeof gl.getExtension === "function") {
-          const ext = gl.getExtension("WEBGL_lose_context");
-          if (ext) {
-            ext.loseContext();
+        if (gl) {
+          webGlShaderCache.clear(gl);
+          if (typeof gl.getExtension === "function") {
+            const ext = gl.getExtension("WEBGL_lose_context");
+            if (ext) {
+              ext.loseContext();
+            }
           }
         }
       } catch (_) {}
@@ -434,6 +907,7 @@ export function notifyBlizzardCollectionItemChange(itemKey: string, container?: 
  * 3. Canvas MutationObserver capturing rendered ID and forcing a clean re-render if it mismatches blizzardSelectedCollectionItem or current gear state.
  */
 function installZamModelViewerInterceptor(win: any): void {
+  installWebGLShaderCache(win);
   if (win.ZamModelViewer && !win.ZamModelViewer.__intercepted) {
     const OriginalViewer = win.ZamModelViewer;
 
@@ -568,11 +1042,14 @@ function installZamModelViewerInterceptor(win: any): void {
                 }
 
                 // Compare equipped gear items
-                if (primaryActor && Array.isArray(gearState.items) && gearState.items.length > 0) {
-                  const loadedActorItems: [number, number][] =
+                if (primaryActor && Array.isArray(gearState?.items) && gearState.items.length > 0) {
+                  const rawLoadedActorItems =
                     Array.isArray(primaryActor.items) ? primaryActor.items :
                     Array.isArray(primaryActor.gear) ? primaryActor.gear :
                     Array.isArray(primaryActor.equipment) ? primaryActor.equipment : [];
+
+                  const loadedActorItems: [number, number][] = (Array.isArray(rawLoadedActorItems) ? rawLoadedActorItems : [])
+                    .filter((it: any) => Array.isArray(it) && it.length >= 2 && it[0] != null);
 
                   if (loadedActorItems.length > 0) {
                     const loadedMap = new Map<number, number>();
@@ -581,7 +1058,9 @@ function installZamModelViewerInterceptor(win: any): void {
                     }
                     let gearMismatchFound = false;
                     let mismatchDetails = "";
-                    for (const [slot, expectedDisplay] of gearState.items) {
+                    for (const itemTuple of gearState.items) {
+                      if (!itemTuple || !Array.isArray(itemTuple)) continue;
+                      const [slot, expectedDisplay] = itemTuple;
                       const loadedDisplay = loadedMap.get(Number(slot));
                       if (loadedDisplay !== undefined && loadedDisplay !== Number(expectedDisplay)) {
                         gearMismatchFound = true;
@@ -997,6 +1476,15 @@ export function extractZamViewerLoadedAsset(
     }
   }
 
+  // Defensively filter loadedItems so downstream consumers never encounter null or corrupted tuples
+  if (Array.isArray(loadedItems) && loadedItems.length > 0) {
+    loadedItems = loadedItems.filter(
+      (it: any) => Array.isArray(it) && it.length >= 2 && it[0] != null && it[1] != null && !isNaN(Number(it[0]))
+    );
+  } else {
+    loadedItems = [];
+  }
+
   return { loadedId, loadedType, loadedItems, isContextLost };
 }
 
@@ -1078,19 +1566,26 @@ export function verifyZamViewerIntegrity(
   // 5. Character Armory Equipment item integrity verification
   let itemsMatched = true;
   const mismatchedSlots: { slot: number; expected: number; loaded?: number }[] = [];
-  if (expected.assetType === "character" && expected.expectedItems && expected.expectedItems.length > 0) {
-    if (extracted.loadedItems.length > 0) {
-      const loadedMap = new Map(extracted.loadedItems);
-      for (const [slot, expectedDisplay] of expected.expectedItems) {
+  if (expected.assetType === "character" && Array.isArray(expected.expectedItems) && expected.expectedItems.length > 0) {
+    if (Array.isArray(extracted.loadedItems) && extracted.loadedItems.length > 0) {
+      const validLoadedItems = extracted.loadedItems.filter((it: any) => Array.isArray(it) && it.length >= 2 && it[0] != null);
+      const loadedMap = new Map<number, number>();
+      for (const [slot, dispId] of validLoadedItems) {
+        loadedMap.set(Number(slot), Number(dispId));
+      }
+      for (const itemTuple of expected.expectedItems) {
+        if (!itemTuple || !Array.isArray(itemTuple)) continue;
+        const [slot, expectedDisplay] = itemTuple;
         if (!expectedDisplay || expectedDisplay <= 0) continue;
         const loadedDisplay = loadedMap.get(slot);
         if (loadedDisplay !== undefined && loadedDisplay !== expectedDisplay) {
           mismatchedSlots.push({ slot, expected: expectedDisplay, loaded: loadedDisplay });
         }
       }
-      if (mismatchedSlots.length > 0) {
+      if (Array.isArray(mismatchedSlots) && mismatchedSlots.length > 0) {
         itemsMatched = false;
         const slotDescs = mismatchedSlots
+          .filter((s: any) => s != null)
           .map((s) => `slot ${s.slot} (expected display #${s.expected}, loaded #${s.loaded})`)
           .join(", ");
         return {
@@ -1182,6 +1677,15 @@ export function attachModelViewerIntegrityGuard(
     if (isStopped) return true;
     const check = verifyZamViewerIntegrity(expected, rawViewer, container);
     if (!check.isValid) {
+      // If the container was re-assigned to a different asset by the UI, this viewer instance is obsolete.
+      // Do NOT reload the obsolete asset; simply stop this guard cleanly.
+      if (check.reason?.includes("Container requested asset has changed")) {
+        isStopped = true;
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+        return false;
+      }
+
       console.warn(
         `[ZamModelViewer Integrity Guard] Incompatibility detected: ${check.reason}. ` +
         `Expected ${expected.assetType} #${expected.expectedId}, loaded #${check.loadedId}. ` +
@@ -1238,6 +1742,202 @@ export function attachModelViewerIntegrityGuard(
 const PRELOADED_ASSET_CACHE = new Set<string>();
 
 /**
+ * Cached entry for an active or detached ZamModelViewer character instance
+ */
+interface CachedCharacterViewerEntry {
+  cacheKey: string;
+  hostDiv: HTMLDivElement;
+  rawViewer: any;
+  viewerWrapper: ZamViewerInstance;
+  characterConfig: Character3DConfig;
+  aspect: number;
+  lastUsed: number;
+  integrityGuard: { stop: () => void; restart?: () => void; verify: () => any; forceReload: () => Promise<boolean> };
+  items: [number, number][];
+  raceGender: number;
+}
+
+interface CachedCollectionViewerEntry {
+  cacheKey: string;
+  hostDiv: HTMLDivElement;
+  rawViewer: any;
+  viewerWrapper: ZamViewerInstance;
+  creatureDisplayId: number;
+  assetType: "mount" | "pet" | "npc";
+  aspect: number;
+  lastUsed: number;
+  integrityGuard: { stop: () => void; restart?: () => void; verify: () => any; forceReload: () => Promise<boolean> };
+}
+
+// Caching layer to avoid re-rendering or re-fetching character and collection assets
+// when switching between tabs or re-opening detail drawers.
+const MAX_CACHED_CHARACTER_VIEWERS = 4;
+const MAX_CACHED_COLLECTION_VIEWERS = 4;
+const zamCharacterViewerCache = new Map<string, CachedCharacterViewerEntry>();
+const zamCollectionViewerCache = new Map<string, CachedCollectionViewerEntry>();
+
+/**
+ * Computes deterministic cache key for character visual state
+ */
+export function generateCharacterViewerCacheKey(
+  character: Character3DConfig,
+  aspect: number
+): string {
+  const race = character.race || 1;
+  const gender = character.gender || 0;
+  const raceGender = race * 2 - 1 + gender;
+
+  const rawItems = Array.isArray(character.items) ? character.items : [];
+  const itemsStr = rawItems
+    .filter((it) => Array.isArray(it) && it.length >= 2 && it[0] != null && it[1] != null)
+    .map(([slot, id]) => `${slot}:${id}`)
+    .sort()
+    .join(";");
+
+  const customs = Array.isArray(character.customizations)
+    ? character.customizations
+        .map((c: any) => `${c?.optionId ?? c?.option?.id ?? 0}:${c?.choiceId ?? c?.choice?.id ?? 0}`)
+        .sort()
+        .join(";")
+    : "";
+
+  const aspectStr = aspect ? aspect.toFixed(2) : "1.10";
+  return `zam_char_${raceGender}_items[${itemsStr}]_cust[${customs}]_asp[${aspectStr}]`;
+}
+
+/**
+ * Evicts oldest cached character viewer to respect browser WebGL context limits (usually 8-16)
+ */
+function evictOldestCachedCharacterViewer(): void {
+  if (zamCharacterViewerCache.size < MAX_CACHED_CHARACTER_VIEWERS) return;
+
+  let oldestKey: string | null = null;
+  let oldestTime = Infinity;
+
+  for (const [key, entry] of zamCharacterViewerCache.entries()) {
+    if (entry.lastUsed < oldestTime) {
+      oldestTime = entry.lastUsed;
+      oldestKey = key;
+    }
+  }
+
+  if (oldestKey) {
+    const entry = zamCharacterViewerCache.get(oldestKey);
+    if (entry) {
+      try {
+        entry.integrityGuard?.stop();
+        if (entry.rawViewer?.destroy) entry.rawViewer.destroy();
+      } catch (_) {}
+      disposeContainerWebGLContext(entry.hostDiv);
+      entry.hostDiv.remove();
+    }
+    zamCharacterViewerCache.delete(oldestKey);
+  }
+}
+
+/**
+ * Evicts oldest cached collection viewer (mount/pet/npc)
+ */
+function evictOldestCachedCollectionViewer(): void {
+  if (zamCollectionViewerCache.size < MAX_CACHED_COLLECTION_VIEWERS) return;
+
+  let oldestKey: string | null = null;
+  let oldestTime = Infinity;
+
+  for (const [key, entry] of zamCollectionViewerCache.entries()) {
+    if (entry.lastUsed < oldestTime) {
+      oldestTime = entry.lastUsed;
+      oldestKey = key;
+    }
+  }
+
+  if (oldestKey) {
+    const entry = zamCollectionViewerCache.get(oldestKey);
+    if (entry) {
+      try {
+        entry.integrityGuard?.stop();
+        if (entry.rawViewer?.destroy) entry.rawViewer.destroy();
+      } catch (_) {}
+      disposeContainerWebGLContext(entry.hostDiv);
+      entry.hostDiv.remove();
+    }
+    zamCollectionViewerCache.delete(oldestKey);
+  }
+}
+
+/**
+ * Clears all cached ZamModelViewer instances and frees active WebGL contexts
+ */
+export function clearZamViewerCache(force = true): void {
+  for (const [, entry] of zamCharacterViewerCache.entries()) {
+    if (force) {
+      try {
+        entry.integrityGuard?.stop();
+        if (entry.rawViewer?.destroy) entry.rawViewer.destroy();
+      } catch (_) {}
+      disposeContainerWebGLContext(entry.hostDiv);
+      entry.hostDiv.remove();
+    }
+  }
+  if (force) {
+    zamCharacterViewerCache.clear();
+  }
+
+  for (const [, entry] of zamCollectionViewerCache.entries()) {
+    if (force) {
+      try {
+        entry.integrityGuard?.stop();
+        if (entry.rawViewer?.destroy) entry.rawViewer.destroy();
+      } catch (_) {}
+      disposeContainerWebGLContext(entry.hostDiv);
+      entry.hostDiv.remove();
+    }
+  }
+  if (force) {
+    zamCollectionViewerCache.clear();
+  }
+}
+
+/**
+ * Invalidate a specific cached character viewer
+ */
+export function invalidateCharacterViewerCache(cacheKey?: string): void {
+  if (cacheKey) {
+    const entry = zamCharacterViewerCache.get(cacheKey);
+    if (entry) {
+      try {
+        entry.integrityGuard?.stop();
+        if (entry.rawViewer?.destroy) entry.rawViewer.destroy();
+      } catch (_) {}
+      disposeContainerWebGLContext(entry.hostDiv);
+      entry.hostDiv.remove();
+      zamCharacterViewerCache.delete(cacheKey);
+    }
+  } else {
+    clearZamViewerCache(true);
+  }
+}
+
+/**
+ * Returns statistics about the active ZamModelViewer caching layer
+ */
+export function getZamViewerCacheStats(): {
+  cachedCharacterCount: number;
+  cachedCollectionCount: number;
+  cachedCharacterKeys: string[];
+  customizationCacheSize: number;
+  preloadedAssetsCount: number;
+} {
+  return {
+    cachedCharacterCount: zamCharacterViewerCache.size,
+    cachedCollectionCount: zamCollectionViewerCache.size,
+    cachedCharacterKeys: Array.from(zamCharacterViewerCache.keys()),
+    customizationCacheSize: customizationOptionsCache.size,
+    preloadedAssetsCount: PRELOADED_ASSET_CACHE.size,
+  };
+}
+
+/**
  * Preloads shaders, metadata, and textures for ZamModelViewer with locale=en_US
  * to prevent model pop-in, Dwarf fallback glitches, and misaligned gear.
  */
@@ -1286,8 +1986,10 @@ export async function preloadZamModelAssets(config: {
 
   // Preload item gear metadata and textures with exact display IDs and locale=en_US
   if (config.items && Array.isArray(config.items)) {
-    for (const [slot, displayId] of config.items) {
-      if (!displayId || displayId <= 0) continue;
+    for (const item of config.items) {
+      if (!item || !Array.isArray(item) || item.length < 2) continue;
+      const [slot, displayId] = item;
+      if (!slot || !displayId || displayId <= 0) continue;
       const itemKey = `item-${slot}-${displayId}`;
       if (PRELOADED_ASSET_CACHE.has(itemKey)) continue;
       PRELOADED_ASSET_CACHE.add(itemKey);
@@ -1340,6 +2042,89 @@ export async function createWowCharacterViewer(
   aspect = 1.1,
   reloadAttempt = 0
 ): Promise<ZamViewerInstance | null> {
+  if (!container || !character) {
+    console.warn("createWowCharacterViewer: Container or character is null/undefined");
+    return null;
+  }
+
+  // --- CACHING LAYER LOOKUP ---
+  // Avoid re-rendering or re-fetching character assets when switching between tabs
+  // or re-opening detail drawers.
+  const cacheKey = generateCharacterViewerCacheKey(character, aspect);
+  const cachedEntry = zamCharacterViewerCache.get(cacheKey);
+
+  if (cachedEntry) {
+    // Check if the cached WebGL context is healthy and canvas is intact
+    const canvas = cachedEntry.hostDiv.querySelector("canvas");
+    let isHealthy = false;
+    if (canvas && !(canvas as any).__zamDisposing) {
+      try {
+        const gl = (
+          canvas.getContext("webgl2") ||
+          canvas.getContext("webgl") ||
+          canvas.getContext("experimental-webgl")
+        ) as WebGLRenderingContext | null;
+        if (gl && !gl.isContextLost()) {
+          isHealthy = true;
+        }
+      } catch (_) {}
+    }
+
+    if (isHealthy) {
+      // Re-attach cached hostDiv to the target container
+      cachedEntry.lastUsed = Date.now();
+      if (cachedEntry.hostDiv.parentElement !== container) {
+        cachedEntry.hostDiv.remove();
+        // Safely empty container without destroying WebGL contexts
+        while (container.firstChild) {
+          container.removeChild(container.firstChild);
+        }
+        container.appendChild(cachedEntry.hostDiv);
+      }
+
+      container.setAttribute("data-zam-requested-id", String(cachedEntry.raceGender));
+      container.setAttribute("data-zam-requested-type", "character");
+      container.setAttribute("data-zam-cached", "true");
+
+      // Resume animation if previously paused
+      try {
+        const actor = cachedEntry.rawViewer.renderer?.actors?.[0];
+        if (actor?.setAnimPaused) {
+          actor.setAnimPaused(false);
+        }
+      } catch (_) {}
+
+      // Refresh dimensions & renderer
+      try {
+        if (cachedEntry.rawViewer.resize) cachedEntry.rawViewer.resize();
+        if (cachedEntry.rawViewer.renderer?.resize) cachedEntry.rawViewer.renderer.resize();
+      } catch (_) {}
+
+      // Re-attach integrity guard for the new container
+      const expectedAsset: ZamIntegrityExpectedAsset = {
+        assetType: "character",
+        expectedId: cachedEntry.raceGender,
+        expectedItems: cachedEntry.items,
+        assetLabel: `Character Race ${character.race} Gender ${character.gender}`,
+      };
+
+      const integrityGuard = attachModelViewerIntegrityGuard(
+        container,
+        cachedEntry.rawViewer,
+        expectedAsset,
+        () => createWowCharacterViewer(container, character, aspect, reloadAttempt + 1),
+        reloadAttempt,
+        2
+      );
+      cachedEntry.integrityGuard = integrityGuard;
+
+      return cachedEntry.viewerWrapper;
+    } else {
+      // Cached context was lost or canvas disposed: remove stale cache entry
+      zamCharacterViewerCache.delete(cacheKey);
+    }
+  }
+
   await ensureViewerAssetsLoaded();
   const win = window as any;
   if (!win.ZamModelViewer || !win.jQuery) {
@@ -1356,8 +2141,9 @@ export async function createWowCharacterViewer(
   container.setAttribute("data-zam-requested-type", "character");
 
   let charOptions: any[] = [];
-  if (character.customizations && Array.isArray(character.customizations) && character.customizations.length > 0) {
+  if (Array.isArray(character.customizations) && character.customizations.length > 0) {
     charOptions = character.customizations
+      .filter((c: any) => c != null && typeof c === "object")
       .map((c: any) => ({
         optionId: c.option?.id ?? c.optionId,
         choiceId: c.choice?.id ?? c.choiceId,
@@ -1372,7 +2158,10 @@ export async function createWowCharacterViewer(
     }
   }
 
-  const rawItems = (character.items || []).filter(([slot]) => !NOT_DISPLAYED_SLOTS.includes(slot));
+  // Defensive null-checks on character gear items
+  const rawItems = (Array.isArray(character.items) ? character.items : [])
+    .filter((item: any) => Array.isArray(item) && item.length >= 2 && item[0] != null && item[1] != null)
+    .filter(([slot]) => typeof slot === "number" && !NOT_DISPLAYED_SLOTS.includes(slot));
 
   // Pre-fetching layer: verify all character gear items in IndexedDB before 3D instantiation
   const items = await prefetchAndVerifyBlizzardGearList(rawItems, "en_US");
@@ -1487,12 +2276,29 @@ export async function createWowCharacterViewer(
       setDistance: (distance: number) => {
         if (rawViewer.renderer) rawViewer.renderer.distance = distance;
       },
-      destroy: () => {
+      destroy: (force?: boolean) => {
         integrityGuard.stop();
-        try {
-          if (rawViewer.destroy) rawViewer.destroy();
-        } catch (_) {}
-        disposeContainerWebGLContext(container);
+        if (force) {
+          // Explicit force destruction
+          try {
+            if (rawViewer.destroy) rawViewer.destroy();
+          } catch (_) {}
+          disposeContainerWebGLContext(container);
+          zamCharacterViewerCache.delete(cacheKey);
+        } else {
+          // Soft unmount (switching tabs or closing drawer):
+          // Pause animation to conserve GPU/battery and detach hostDiv,
+          // preserving the initialized WebGL canvas in the caching layer!
+          try {
+            const actor = rawViewer.renderer?.actors?.[0];
+            if (actor?.setAnimPaused) {
+              actor.setAnimPaused(true);
+            }
+          } catch (_) {}
+          try {
+            hostDiv.remove();
+          } catch (_) {}
+        }
       },
       renderer: rawViewer.renderer,
       method: rawViewer.method ? rawViewer.method.bind(rawViewer) : undefined,
@@ -1510,7 +2316,53 @@ export async function createWowCharacterViewer(
         if (typeof rawViewer.runDiagnosticCheck === "function") rawViewer.runDiagnosticCheck(delay);
       },
       requestedId: rawViewer.requestedId ?? raceGender,
+      updateEquipment: async (newItems: [number, number][]): Promise<boolean> => {
+        try {
+          // Preload shader assets and textures for new items
+          await preloadZamModelAssets({
+            items: newItems,
+            locale: "en_US",
+          });
+
+          const actor = rawViewer.renderer?.actors?.[0];
+          if (actor) {
+            if (typeof actor.setItems === "function") {
+              const mapped = newItems.map(([slot, display]) => ({ slot, display, visual: 0 }));
+              actor.setItems(mapped);
+              return true;
+            }
+            if (typeof actor.attachList === "function") {
+              const flatList = newItems.map(([s, d]) => `${s},${d}`).join(",");
+              actor.attachList(flatList);
+              return true;
+            }
+          }
+          if (typeof rawViewer.method === "function") {
+            const mapped = newItems.map(([slot, display]) => ({ slot, display, visual: 0 }));
+            rawViewer.method("setItems", [mapped]);
+            return true;
+          }
+          return false;
+        } catch (_) {
+          return false;
+        }
+      },
     };
+
+    // Store in caching layer for 0ms restoration on tab switches or drawer re-opens
+    evictOldestCachedCharacterViewer();
+    zamCharacterViewerCache.set(cacheKey, {
+      cacheKey,
+      hostDiv,
+      rawViewer,
+      viewerWrapper,
+      characterConfig: character,
+      aspect,
+      lastUsed: Date.now(),
+      integrityGuard,
+      items,
+      raceGender,
+    });
 
     return viewerWrapper;
   } catch (err: any) {
@@ -1540,6 +2392,72 @@ export async function createWowMountViewer(
   const category = assetType === "pet" ? "pet" : "mount";
   const verified = await prefetchAndVerifyBlizzardAsset(category, creatureDisplayId, creatureDisplayId, "en_US");
   const targetCreatureDisplayId = verified.verifiedDisplayId > 0 ? verified.verifiedDisplayId : creatureDisplayId;
+
+  // --- COLLECTION VIEWER CACHE LOOKUP ---
+  const cacheKey = `zam_coll_${assetType}_${targetCreatureDisplayId}_${aspect.toFixed(2)}`;
+  const cachedEntry = zamCollectionViewerCache.get(cacheKey);
+
+  if (cachedEntry) {
+    const canvas = cachedEntry.hostDiv.querySelector("canvas");
+    let isHealthy = false;
+    if (canvas && !(canvas as any).__zamDisposing) {
+      try {
+        const gl = (
+          canvas.getContext("webgl2") ||
+          canvas.getContext("webgl") ||
+          canvas.getContext("experimental-webgl")
+        ) as WebGLRenderingContext | null;
+        if (gl && !gl.isContextLost()) {
+          isHealthy = true;
+        }
+      } catch (_) {}
+    }
+
+    if (isHealthy) {
+      cachedEntry.lastUsed = Date.now();
+      if (cachedEntry.hostDiv.parentElement !== container) {
+        cachedEntry.hostDiv.remove();
+        while (container.firstChild) {
+          container.removeChild(container.firstChild);
+        }
+        container.appendChild(cachedEntry.hostDiv);
+      }
+
+      container.setAttribute("data-zam-requested-id", String(targetCreatureDisplayId));
+      container.setAttribute("data-zam-requested-type", assetType);
+      container.setAttribute("data-zam-cached", "true");
+
+      try {
+        const actor = cachedEntry.rawViewer.renderer?.actors?.[0];
+        if (actor?.setAnimPaused) actor.setAnimPaused(false);
+      } catch (_) {}
+
+      try {
+        if (cachedEntry.rawViewer.resize) cachedEntry.rawViewer.resize();
+        if (cachedEntry.rawViewer.renderer?.resize) cachedEntry.rawViewer.renderer.resize();
+      } catch (_) {}
+
+      const expectedAsset: ZamIntegrityExpectedAsset = {
+        assetType,
+        expectedId: targetCreatureDisplayId,
+        assetLabel: `${assetType} #${targetCreatureDisplayId}`,
+      };
+
+      const integrityGuard = attachModelViewerIntegrityGuard(
+        container,
+        cachedEntry.rawViewer,
+        expectedAsset,
+        () => createWowMountViewer(container, targetCreatureDisplayId, aspect, assetType, reloadAttempt + 1),
+        reloadAttempt,
+        2
+      );
+      cachedEntry.integrityGuard = integrityGuard;
+
+      return cachedEntry.viewerWrapper;
+    } else {
+      zamCollectionViewerCache.delete(cacheKey);
+    }
+  }
 
   // Stamp container with requested asset info for cross-component desynchronization detection
   container.setAttribute("data-zam-requested-id", String(targetCreatureDisplayId));
@@ -1645,12 +2563,23 @@ export async function createWowMountViewer(
       setDistance: (distance: number) => {
         if (rawViewer.renderer) rawViewer.renderer.distance = distance;
       },
-      destroy: () => {
+      destroy: (force?: boolean) => {
         integrityGuard.stop();
-        try {
-          if (rawViewer.destroy) rawViewer.destroy();
-        } catch (_) {}
-        disposeContainerWebGLContext(container);
+        if (force) {
+          try {
+            if (rawViewer.destroy) rawViewer.destroy();
+          } catch (_) {}
+          disposeContainerWebGLContext(container);
+          zamCollectionViewerCache.delete(cacheKey);
+        } else {
+          try {
+            const actor = rawViewer.renderer?.actors?.[0];
+            if (actor?.setAnimPaused) actor.setAnimPaused(true);
+          } catch (_) {}
+          try {
+            hostDiv.remove();
+          } catch (_) {}
+        }
       },
       renderer: rawViewer.renderer,
       method: rawViewer.method ? rawViewer.method.bind(rawViewer) : undefined,
@@ -1669,6 +2598,19 @@ export async function createWowMountViewer(
       },
       requestedId: rawViewer.requestedId ?? creatureDisplayId,
     };
+
+    evictOldestCachedCollectionViewer();
+    zamCollectionViewerCache.set(cacheKey, {
+      cacheKey,
+      hostDiv,
+      rawViewer,
+      viewerWrapper,
+      creatureDisplayId: targetCreatureDisplayId,
+      assetType,
+      aspect,
+      lastUsed: Date.now(),
+      integrityGuard,
+    });
 
     return viewerWrapper;
   } catch (err: any) {

@@ -222,7 +222,7 @@ class MediaUploadQueueManager {
   }): UploadBatchTask {
     const batchId = `batch_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     
-    const items: FileTaskItem[] = params.files.map((f, idx) => ({
+    const items: FileTaskItem[] = (Array.isArray(params.files) ? params.files : []).map((f, idx) => ({
       file: f.file,
       tempMediaId: f.tempMediaId,
       isVideo: f.isVideo || isVideoFile(f.file),

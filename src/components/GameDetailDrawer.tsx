@@ -45,6 +45,7 @@ import {
   WoWVersionType,
   getCharacterCompositeKey,
   matchCharacterComposite,
+  isWorldOfWarcraftGame,
 } from "../utils/blizzardApi";
 import WoWCharacterGrid from "./WoWCharacterGrid";
 import { WoWArmoryView } from "./WoWArmoryView";
@@ -257,7 +258,7 @@ const ReadingModeResizableRow: React.FC<ReadingModeResizableRowProps> = ({
             {isExpanded ? "Leitura Fixa" : "Jornada"}
           </span>
         </div>
-        {entry.keyMoments && entry.keyMoments.length > 0 && (
+        {Array.isArray(entry.keyMoments) && entry.keyMoments.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5 mb-3">
             {entry.keyMoments.map((km) => (
               <span
@@ -1237,9 +1238,10 @@ export default function GameDetailDrawer({
   // Blizzard Profile & Characters loader in Drawer - ONLY LOADS ON DEMAND WHEN EXPANDED!
   useEffect(() => {
     const isBattlenet = Boolean(game?.integrationPlatform === "battlenet");
+    const isWoW = isWorldOfWarcraftGame(game);
 
-    if (!isOpen || !game || !isBattlenet) {
-      // Lazy cleanup: Clear WoW data when drawer is closed or integration is disabled
+    if (!isOpen || !game || !isBattlenet || !isWoW) {
+      // Lazy cleanup: Clear WoW data when drawer is closed, integration is disabled, or game is not WoW
       setBlizzardChars([]);
       setBlizzardActiveProfile(null);
       setIsLoadingBlizzardChars(false);
@@ -4696,7 +4698,7 @@ export default function GameDetailDrawer({
                       )}
 
                       {/* BLIZZARD BATTLE.NET & WORLD OF WARCRAFT / WARCRAFT SPECIAL SECTION */}
-                      {game.integrationPlatform === "battlenet" && (
+                      {game.integrationPlatform === "battlenet" && isWorldOfWarcraftGame(game) && (
                         <div id="blizzard-characters-section" className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-cyan-500/50 hover:border-cyan-500/80 shadow-md shadow-cyan-500/10 mt-1 text-left space-y-4 transition-all">
                           {/* Header Bar Colapsável */}
                           <div 
@@ -4996,10 +4998,16 @@ export default function GameDetailDrawer({
                               const charAchievePoints = blizzardActiveProfile?.achievementPoints ?? blizzardActiveProfile?.achievementPointsTotal ?? blizzardActiveProfile?.selectedCharacter?.achievementPoints ?? (modeInfo.maxLevel <= 60 ? 2800 : 21450);
                               const charGuild = blizzardActiveProfile?.guild || "No Guild";
                               const charItems = blizzardActiveProfile?.equippedItems || blizzardActiveProfile?.gear || [];
-                              const charAchievements = blizzardActiveProfile?.recentAchievements || (blizzardActiveProfile?.achievements ? blizzardActiveProfile.achievements.map((a) => ({ id: a.id, name: a.title, points: a.points || 0, description: a.description || "" })) : []);
+                              const charAchievements = Array.isArray(blizzardActiveProfile?.recentAchievements)
+                                ? blizzardActiveProfile.recentAchievements
+                                : (Array.isArray(blizzardActiveProfile?.achievements)
+                                  ? blizzardActiveProfile.achievements.map((a) => ({ id: a.id, name: a.title, points: a.points || 0, description: a.description || "" }))
+                                  : []);
                               const charTalents = Array.isArray(blizzardActiveProfile?.talents)
                                 ? blizzardActiveProfile.talents
-                                : (blizzardActiveProfile?.talents?.talentsList ? blizzardActiveProfile.talents.talentsList.map((t: string, i: number) => ({ tierName: `Tier ${i + 1}`, spellName: t })) : []);
+                                : (Array.isArray(blizzardActiveProfile?.talents?.talentsList)
+                                  ? blizzardActiveProfile.talents.talentsList.map((t: string, i: number) => ({ tierName: `Tier ${i + 1}`, spellName: t }))
+                                  : []);
 
                               const classInfo = getWoWClassInfo(charClass);
                               const raceInfo = getWoWRaceInfo(charRace, blizzardActiveProfile?.gender || (filteredChars.length > 0 ? filteredChars[0].gender : "MALE"));
@@ -5350,6 +5358,27 @@ export default function GameDetailDrawer({
                         </div>
                       )}
 
+                      {/* BLIZZARD BATTLE.NET NON-WOW GAMES SECTION */}
+                      {game.integrationPlatform === "battlenet" && !isWorldOfWarcraftGame(game) && (
+                        <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-sky-500/40 shadow-md shadow-sky-500/10 mt-1 text-left space-y-2 transition-all">
+                          <div className="flex items-center gap-2.5">
+                            <span className="w-2.5 h-2.5 rounded-full bg-sky-400 animate-pulse" />
+                            <div className="flex items-center gap-2">
+                              <Shield size={18} className="text-sky-400" />
+                              <h3 className="text-sky-300 text-sm uppercase tracking-wider font-extrabold font-mono">
+                                Battle.net Conectado
+                              </h3>
+                              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-md bg-sky-950/80 text-sky-300 border border-sky-500/40">
+                                {game.blizzardGameName || game.name || "Blizzard"}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="text-xs text-zinc-400 leading-relaxed">
+                            Jogo oficial sincronizado com a plataforma Battle.net da Blizzard Entertainment.
+                          </p>
+                        </div>
+                      )}
+
                       {(game.hltbId || game.hltbMain || game.hltbExtra || game.hltbCompletionist) && (
                         <div className="col-span-2 sm:col-span-3 md:col-span-4 bg-zinc-950/80 rounded-2xl p-4.5 border-2 border-purple-500/50 hover:border-purple-500/80 shadow-md shadow-purple-500/10 mt-1 text-left space-y-3 transition-all">
                           <div className="flex items-center justify-between gap-3 flex-wrap border-b border-purple-500/30 pb-2">
@@ -5628,7 +5657,7 @@ export default function GameDetailDrawer({
                             <span className="text-xs uppercase tracking-wider text-fuchsia-300 font-extrabold font-mono">Gêneros:</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5">
-                            {[...game.genre].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
+                            {[...(Array.isArray(game.genre) ? game.genre : [])].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((g, idx) => (
                               <span key={`${g}-${idx}`} className="px-2.5 py-1 rounded-lg bg-fuchsia-950/40 text-fuchsia-200 text-xs font-bold border border-fuchsia-500/40 shadow-sm">
                                 {g}
                               </span>
@@ -5645,12 +5674,12 @@ export default function GameDetailDrawer({
                             <span className="text-xs uppercase tracking-wider text-cyan-300 font-extrabold font-mono">Tags:</span>
                           </div>
                           <div className="flex flex-wrap gap-1.5">
-                            {[...game.tags].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
+                            {[...(Array.isArray(game.tags) ? game.tags : [])].sort((a, b) => a.localeCompare(b, "pt", { sensitivity: "base" })).map((t, idx) => (
                               <span key={`${t}-${idx}`} className="px-2.5 py-1 rounded-lg bg-cyan-950/40 text-cyan-200 text-xs font-bold border border-cyan-500/40 shadow-sm">
                                 {t}
                               </span>
                             ))}
-                            {game.tags.length === 0 && (
+                            {(!Array.isArray(game.tags) || game.tags.length === 0) && (
                               <span className="text-xs text-zinc-500 italic">Nenhuma tag atribuída.</span>
                             )}
                           </div>
@@ -5878,7 +5907,7 @@ export default function GameDetailDrawer({
                                     {isCollapsed ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
                                   </span>
 
-                                  {entry.keyMoments && entry.keyMoments.length > 0 && (
+                                  {Array.isArray(entry.keyMoments) && entry.keyMoments.length > 0 && (
                                     <div className="flex flex-wrap items-center gap-1.5">
                                       {entry.keyMoments.map((km) => (
                                         <span
@@ -6070,7 +6099,7 @@ export default function GameDetailDrawer({
                                 <span className="text-xs font-mono font-bold text-pink-400 group-hover:text-pink-300 truncate">
                                   {entry.period}
                                 </span>
-                                {entry.keyMoments && entry.keyMoments.length > 0 && (
+                                {Array.isArray(entry.keyMoments) && entry.keyMoments.length > 0 && (
                                   <div className="flex flex-wrap gap-1">
                                     {entry.keyMoments.map((km) => (
                                       <span key={km} className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/30 text-cyan-300 font-bold flex items-center gap-0.5">
