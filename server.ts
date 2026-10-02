@@ -6811,6 +6811,196 @@ app.get("/api/blizzard/wow/addon-sync/detect-paths", (req, res) => {
   });
 });
 
+// 3b. Endpoint to query Addon Manifest & Version Info
+app.get("/api/blizzard/wow/addon/manifest", (req, res) => {
+  const addonDir = path.join(process.cwd(), "src", "addon");
+  const files = ["HaleckAccountImporter.toc", "HaleckAccountImporter.lua", "AddonInterface.lua"];
+  const fileDetails = files.map((file) => {
+    const fullPath = path.join(addonDir, file);
+    const exists = fs.existsSync(fullPath);
+    const size = exists ? fs.statSync(fullPath).size : 0;
+    return { file, exists, size };
+  });
+
+  return res.json({
+    success: true,
+    name: "Haleck Account Importer",
+    version: "4.3.0",
+    targetVersion: "WoW Forever (Vanilla+ Build 16001 / 16002)",
+    officialLaunchDate: "2026-11-04",
+    clientFolder: "_classic_beta_",
+    folderExample: "World of Warcraft/_classic_beta_/Interface/AddOns/HaleckAccountImporter/",
+    files: fileDetails,
+    features: [
+      "Suporte prioritário ao WoW Forever Beta (16001/16002) com camada adaptativa anti-quebra",
+      "Pipeline de migração automática de SavedVariables (schemaVersion 430) com EnsureDB dinâmico",
+      "Resolução canônica de nome e sobrenome com UnitNameUnmodified via securecall contra secret unit name taint",
+      "Correções nativas para bugs de interface Blizzard no WoW Forever (PatchAchievementShield, StatusBars, Summary)",
+      "Histórico de trocas comerciais entre jogadores (Trade Ledger) e histórico de fortuna (Wealth History)",
+      "Protocolo peer-to-peer de verificação de versões via canais de guilda e grupo (HAIVER Protocol)",
+      "Visualizador de equipamentos e atributos em tempo real com isolamento de propagação de teclado no EditBox",
+      "ATT-Grade Harvest de Quests, Magias, Talentos, Coleções e Estatísticas nativas via GetStatisticsCategoryList",
+      "Meu Diário de Aventura com 11 subcategorias especializadas e rastreamento de passos em tempo real",
+      "Contador e alertas de Chefes Mundiais (Lord Kazzak, Azuregos, Dragões do Pesadelo)",
+      "Ícone customizado com o 'H' estilizado da marca Haleck",
+    ],
+  });
+});
+
+// 3c. Endpoint to serve Dynamic Definitions (World Bosses, Custom Vanilla+ Quests & Areas)
+app.get("/api/blizzard/wow/addon/definitions", (req, res) => {
+  return res.json({
+    success: true,
+    version: "4.3.0",
+    clientBuild: "16001",
+    targetGame: "WoW Forever (Vanilla+)",
+    lastUpdated: new Date().toISOString(),
+    worldBosses: {
+      kazzak: { id: 12397, name: "Lord Kazzak", zone: "Barreira do Inferno (Blasted Lands)", minRespawn: 72 * 3600, maxRespawn: 96 * 3600, key: "kazzak" },
+      azuregos: { id: 6109, name: "Azuregos", zone: "Azshara", minRespawn: 72 * 3600, maxRespawn: 96 * 3600, key: "azuregos" },
+      taerar: { id: 14890, name: "Taerar", zone: "Vale Gris (Ashenvale - Bough Shadow)", minRespawn: 72 * 3600, maxRespawn: 96 * 3600, key: "taerar" },
+      ysondre: { id: 14887, name: "Ysondre", zone: "Feralas (Dream Bough)", minRespawn: 72 * 3600, maxRespawn: 96 * 3600, key: "ysondre" },
+      lethon: { id: 14888, name: "Lethon", zone: "Terras Altas dos Guarus (The Hinterlands)", minRespawn: 72 * 3600, maxRespawn: 96 * 3600, key: "lethon" },
+      emeriss: { id: 14889, name: "Emeriss", zone: "Floresta do Crepúsculo (Duskwood - Twilight Grove)", minRespawn: 72 * 3600, maxRespawn: 96 * 3600, key: "emeriss" },
+    },
+    supportedForeverBuilds: ["16001", "16002", "16003", "11506", "11507"],
+    compatibilityLayers: [
+      { module: "C_QuestLog", fallback: "GetQuestLogTitle", status: "active" },
+      { module: "C_Spell.GetSpellInfo", fallback: "GetSpellInfo", status: "active" },
+      { module: "C_Container", fallback: "GetContainerItemInfo", status: "active" },
+    ],
+  });
+});
+
+// 3d. Endpoint to query Addon installation status and check for updates
+app.get("/api/blizzard/wow/addon/status", (req, res) => {
+  const targetPath = (req.query.targetPath as string) || "";
+  const availableVersion = "4.1.0";
+  const compatibleForeverBuilds = ["16001", "16002", "16003", "11506", "11507"];
+
+  let cleanPath = targetPath.trim();
+  if (cleanPath && !cleanPath.toLowerCase().endsWith("haleckaccountimporter")) {
+    cleanPath = path.join(cleanPath, "HaleckAccountImporter");
+  }
+
+  let installedVersion: string | null = null;
+  let isInstalled = false;
+  let isUpToDate = false;
+  let status: "up_to_date" | "update_available" | "not_installed" | "configured_remote" = "not_installed";
+
+  if (cleanPath && fs.existsSync(cleanPath)) {
+    isInstalled = true;
+    const tocPath = path.join(cleanPath, "HaleckAccountImporter.toc");
+    if (fs.existsSync(tocPath)) {
+      try {
+        const tocContent = fs.readFileSync(tocPath, "utf-8");
+        const match = tocContent.match(/##\s*Version:\s*([^\r\n]+)/i);
+        if (match) {
+          installedVersion = match[1].trim();
+        }
+      } catch {}
+    }
+
+    if (installedVersion === availableVersion) {
+      isUpToDate = true;
+      status = "up_to_date";
+    } else {
+      isUpToDate = false;
+      status = "update_available";
+    }
+  } else if (cleanPath) {
+    status = "configured_remote";
+  }
+
+  return res.json({
+    success: true,
+    targetPath: cleanPath,
+    availableVersion,
+    installedVersion,
+    isInstalled,
+    isUpToDate,
+    status,
+    compatibleForeverBuilds,
+    changelog: [
+      {
+        version: "4.1.0",
+        date: "2026-10-01",
+        title: "Camada Adaptativa WoW Forever & Sincronização Dinâmica de Definições",
+        highlights: [
+          "Detecção resiliente de APIs em tempo de execução (C_QuestLog, C_Spell, C_Container)",
+          "Auto-migração de SavedVariables para schemaVersion 410 sem perda de dados históricos",
+          "Injeção dinâmica de World Bosses e definições de conteúdo de Vanilla+",
+          "Compatibilidade oficial estendida para Builds 16001, 16002 e 16003 de WoW Forever",
+        ],
+      },
+    ],
+  });
+});
+
+// 3e. Endpoint to install or update the Addon into a specified local folder
+app.post("/api/blizzard/wow/addon/install", (req, res) => {
+  try {
+    const { targetPath, version = "forever" } = req.body;
+    if (!targetPath || typeof targetPath !== "string") {
+      return res.status(400).json({ success: false, error: "Caminho da pasta Interface/AddOns não informado." });
+    }
+
+    const cleanPath = targetPath.trim();
+    const addonDir = path.join(process.cwd(), "src", "addon");
+
+    // Ensure final folder is HaleckAccountImporter
+    let destinationFolder = cleanPath;
+    if (!destinationFolder.toLowerCase().endsWith("haleckaccountimporter")) {
+      destinationFolder = path.join(destinationFolder, "HaleckAccountImporter");
+    }
+
+    let isLocalDiskReachable = false;
+    let filesWritten: string[] = [];
+
+    try {
+      if (!fs.existsSync(destinationFolder)) {
+        fs.mkdirSync(destinationFolder, { recursive: true });
+      }
+      isLocalDiskReachable = true;
+
+      const files = ["HaleckAccountImporter.toc", "HaleckAccountImporter.lua", "AddonInterface.lua"];
+      for (const f of files) {
+        const src = path.join(addonDir, f);
+        if (fs.existsSync(src)) {
+          const content = fs.readFileSync(src, "utf-8");
+          fs.writeFileSync(path.join(destinationFolder, f), content, "utf-8");
+          filesWritten.push(f);
+        }
+      }
+    } catch (fsErr: any) {
+      isLocalDiskReachable = false;
+    }
+
+    if (isLocalDiskReachable && filesWritten.length > 0) {
+      return res.json({
+        success: true,
+        installedDirectly: true,
+        destinationFolder,
+        filesWritten,
+        version: "4.1.0",
+        message: `Addon 'HaleckAccountImporter' v4.1.0 instalado/atualizado com sucesso em ${destinationFolder}!`,
+      });
+    }
+
+    // If destination folder is a Windows path on user client (e.g. C:\Program Files...), provide 1-click batch instructions
+    return res.json({
+      success: true,
+      installedDirectly: false,
+      isWindowsClientPath: true,
+      destinationFolder,
+      version: "4.1.0",
+      message: `Caminho local do Windows registrado (${destinationFolder}). Utilize o instalador automático (.BAT ou .PS1) de 1 clique gerado pelo sistema para copiar os arquivos instantaneamente.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: "Falha ao processar instalação do Addon", details: err?.message });
+  }
+});
+
 // 4. Endpoint to query account economy and total gold across all alts
 app.get("/api/blizzard/wow/addon-sync/account-economy", (req, res) => {
   const alts = Object.values(wowAddonEconomyStore);

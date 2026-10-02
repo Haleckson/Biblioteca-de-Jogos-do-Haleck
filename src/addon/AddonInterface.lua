@@ -142,6 +142,19 @@ local function ShowExportDialog(snapshot)
         editBox:SetMultiLine(true)
         editBox:SetFontObject("ChatFontNormal")
         editBox:SetWidth(680)
+        if editBox.SetPropagateKeyboardInput then
+            editBox:SetPropagateKeyboardInput(false)
+        end
+        editBox:SetScript("OnEditFocusGained", function(self)
+            if self.SetPropagateKeyboardInput then
+                self:SetPropagateKeyboardInput(false)
+            end
+        end)
+        editBox:SetScript("OnEditFocusLost", function(self)
+            if self.SetPropagateKeyboardInput then
+                self:SetPropagateKeyboardInput(true)
+            end
+        end)
         scroll:SetScrollChild(editBox)
         frame.editBox = editBox
 
@@ -214,7 +227,7 @@ local function ShowExportDialog(snapshot)
 
     local serialized = SerializeTable(snapshot, "  ")
     local rawOutput = "-- ========================================================================\n"
-        .. "-- HALECK ACCOUNT IMPORTER v4.0.0 - SNAPSHOT ATT & DIÁRIO DE AVENTURA\n"
+        .. "-- HALECK ACCOUNT IMPORTER v4.3.0 - SNAPSHOT ATT & DIÁRIO DE AVENTURA\n"
         .. "-- ========================================================================\n\n"
         .. "HaleckAccountImporterDB = HaleckAccountImporterDB or {}\n"
         .. "HaleckAccountImporterDB.lastExport = " .. serialized .. "\n"
@@ -271,14 +284,38 @@ function HaleckAccountImporter_CreateUI()
         win:SetBackdropBorderColor(0.78, 0.61, 0.24, 0.95) -- Moldura dourada clássica de WoW
     end
 
+    -- Brasão / Ícone com o 'H' Estilizado da Marca Haleck
+    local brandIcon = CreateFrame("Frame", nil, win, BACKDROP_TEMPLATE)
+    brandIcon:SetSize(36, 36)
+    brandIcon:SetPoint("TOPLEFT", win, "TOPLEFT", 20, -14)
+    if brandIcon.SetBackdrop then
+        brandIcon:SetBackdrop({
+            bgFile = "Interface\\Buttons\\WHITE8X8",
+            edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+            edgeSize = 12,
+            insets = { left = 3, right = 3, top = 3, bottom = 3 }
+        })
+        brandIcon:SetBackdropColor(0.04, 0.08, 0.16, 0.98)
+        brandIcon:SetBackdropBorderColor(0.0, 0.85, 1.0, 1.0) -- Realce ciano neon Haleck
+    end
+
+    local brandH = brandIcon:CreateFontString(nil, "OVERLAY", "GameFontHighlightHuge")
+    brandH:SetPoint("CENTER", 0, 0)
+    brandH:SetText("|cff00f2feH|r")
+    if brandH.SetShadowColor then
+        brandH:SetShadowColor(0.0, 0.5, 0.8, 0.9)
+        brandH:SetShadowOffset(1, -1)
+    end
+    win.brandIcon = brandIcon
+
     -- Header Superior com Identidade WoW Forever
     local headerTitle = win:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
-    headerTitle:SetPoint("TOPLEFT", win, "TOPLEFT", 22, -16)
+    headerTitle:SetPoint("LEFT", brandIcon, "RIGHT", 10, 6)
     headerTitle:SetText("|cffffd100Haleck|r Account Importer & |cff00f2feMeu Diário de Aventura|r")
 
     local headerSub = win:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     headerSub:SetPoint("TOPLEFT", headerTitle, "BOTTOMLEFT", 0, -3)
-    headerSub:SetText("v4.0.0 • Motor ATT-Grade de Extração Universal & Crônica Permanente do Personagem")
+    headerSub:SetText("v4.3.0 • Motor ATT-Grade de Extração Universal & Crônica Permanente do Personagem (WoW Forever)")
 
     -- Botão Fechar Canônico Blizzard ("UIPanelCloseButton")
     local closeBtn = CreateFrame("Button", nil, win, "UIPanelCloseButton")
@@ -567,6 +604,19 @@ function HaleckAccountImporter_CreateUI()
     searchBox:SetPoint("TOPLEFT", journalMainArea, "TOPLEFT", 12, -10)
     searchBox:SetAutoFocus(false)
     searchBox:SetFontObject("ChatFontNormal")
+    if searchBox.SetPropagateKeyboardInput then
+        searchBox:SetPropagateKeyboardInput(false)
+    end
+    searchBox:SetScript("OnEditFocusGained", function(self)
+        if self.SetPropagateKeyboardInput then
+            self:SetPropagateKeyboardInput(false)
+        end
+    end)
+    searchBox:SetScript("OnEditFocusLost", function(self)
+        if self.SetPropagateKeyboardInput then
+            self:SetPropagateKeyboardInput(true)
+        end
+    end)
     if searchBox.SetBackdrop then
         searchBox:SetBackdrop({
             bgFile = "Interface\\Buttons\\WHITE8X8",
@@ -622,7 +672,7 @@ function HaleckAccountImporter_CreateUI()
     contentJournal:SetSize(526, 600)
     scrollJournal:SetScrollChild(contentJournal)
 
-    -- Subcategorias do Diário (Menu Lateral com 8 Abas Especializadas)
+    -- Subcategorias do Diário (Menu Lateral com 11 Abas Especializadas)
     local SUBCATS = {
         { id = 1, label = "📜 Linha do Tempo", desc = "Crônica e eventos da jornada" },
         { id = 2, label = "⚔️ Caçadas & Chefes", desc = "1ª vitória em chefes & raros" },
@@ -633,13 +683,15 @@ function HaleckAccountImporter_CreateUI()
         { id = 7, label = "🏆 Grandes Feitos", desc = "Conquistas e títulos honrados" },
         { id = 8, label = "📈 Estatísticas do Jogo", desc = "Combat, Gold, Kills & Consumíveis" },
         { id = 9, label = "🐉 World Bosses (Forever)", desc = "Kazzak, Azuregos e Pesadelo" },
+        { id = 10, label = "💰 Trocas & Economia", desc = "Histórico de negociações e riqueza" },
+        { id = 11, label = "🛡️ Equipamentos & Gear", desc = "Slots, ilvl e atributos em tempo real" },
     }
 
     local subcatButtons = {}
     for i, sc in ipairs(SUBCATS) do
         local btn = CreateFrame("Button", nil, journalSidebar, BACKDROP_TEMPLATE)
-        btn:SetSize(204, 38)
-        btn:SetPoint("TOPLEFT", journalSidebar, "TOPLEFT", 8, -8 - ((i - 1) * 44))
+        btn:SetSize(204, 34)
+        btn:SetPoint("TOPLEFT", journalSidebar, "TOPLEFT", 8, -6 - ((i - 1) * 38))
         if btn.SetBackdrop then
             btn:SetBackdrop({
                 bgFile = "Interface\\Buttons\\WHITE8X8",
@@ -754,6 +806,36 @@ function HaleckAccountImporter_CreateUI()
 
         c.tag = c:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         c.tag:SetPoint("BOTTOMRIGHT", c, "BOTTOMRIGHT", -10, 6)
+
+        -- Interatividade Estilo Horizon-Suite: Hover ciano neon e tooltip detalhado
+        c:EnableMouse(true)
+        c:SetScript("OnEnter", function(self)
+            if self.SetBackdropBorderColor then
+                self:SetBackdropBorderColor(0.0, 0.85, 1.0, 0.95)
+                self:SetBackdropColor(0.08, 0.12, 0.18, 0.9)
+            end
+            if self.title and self.title:GetText() then
+                GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+                GameTooltip:AddLine(self.title:GetText() or "Registro do Diário", 1, 1, 1)
+                if self.desc and self.desc:GetText() and self.desc:GetText() ~= "" then
+                    GameTooltip:AddLine(self.desc:GetText(), 0.8, 0.8, 0.8, true)
+                end
+                if self.time and self.time:GetText() and self.time:GetText() ~= "" then
+                    GameTooltip:AddLine("Data/Hora: " .. self.time:GetText(), 0.5, 0.7, 0.9)
+                end
+                if self.tag and self.tag:GetText() and self.tag:GetText() ~= "" then
+                    GameTooltip:AddLine("Status: " .. self.tag:GetText(), 0.0, 0.95, 1.0)
+                end
+                GameTooltip:Show()
+            end
+        end)
+        c:SetScript("OnLeave", function(self)
+            if self.SetBackdropBorderColor then
+                self:SetBackdropBorderColor(0.16, 0.22, 0.32, 0.6)
+                self:SetBackdropColor(0.06, 0.08, 0.12, 0.75)
+            end
+            GameTooltip:Hide()
+        end)
 
         win.journalCardPool[idx] = c
         return c
@@ -1030,6 +1112,122 @@ function HaleckAccountImporter_CreateUI()
                     yOffset = yOffset - 58
                 end
             end
+        elseif CurrentJournalSubcat == 10 then
+            -- 💰 Histórico de Trocas & Economia (WoW Forever Trade Ledger)
+            local trades = (HaleckAccountImporterDB and HaleckAccountImporterDB.tradeHistory) or {}
+
+            if #trades == 0 then
+                renderedCount = renderedCount + 1
+                local card = GetJournalCard(renderedCount)
+                card:SetPoint("TOPLEFT", contentJournal, "TOPLEFT", 0, yOffset)
+                SafeSetTexture(card.icon, "INV_Misc_Coin_01", "Interface\\Icons\\INV_Misc_Coin_01")
+                card.title:SetText("Nenhuma Troca Comercial Realizada Nesta Sessão")
+                card.desc:SetText("Complete uma negociação com outro jogador para registrar o parceiro, moedas e itens no livro-razão.")
+                card.time:SetText("")
+                card.tag:SetText("|cff888888Livro Aberto|r")
+                yOffset = yOffset - 58
+            else
+                for _, tr in ipairs(trades) do
+                    local match = true
+                    if JournalSearchQuery ~= "" then
+                        local haystack = (tostring(tr.partner or "") .. " " .. tostring(tr.date or "")):lower()
+                        if not haystack:find(JournalSearchQuery) then match = false end
+                    end
+                    if match then
+                        renderedCount = renderedCount + 1
+                        local card = GetJournalCard(renderedCount)
+                        card:SetPoint("TOPLEFT", contentJournal, "TOPLEFT", 0, yOffset)
+                        SafeSetTexture(card.icon, "INV_Misc_Coin_02", "Interface\\Icons\\INV_Misc_Coin_02")
+
+                        local pMoney = tr.playerMoney or 0
+                        local tMoney = tr.targetMoney or 0
+                        local gGiven = math.floor(pMoney / 10000)
+                        local gRecv = math.floor(tMoney / 10000)
+
+                        local itemSummary = {}
+                        for _, itm in ipairs(tr.playerItems or {}) do
+                            table.insert(itemSummary, "- " .. (itm.name or "Item") .. ((itm.count or 1) > 1 and (" x" .. itm.count) or ""))
+                        end
+                        for _, itm in ipairs(tr.targetItems or {}) do
+                            table.insert(itemSummary, "+ " .. (itm.name or "Item") .. ((itm.count or 1) > 1 and (" x" .. itm.count) or ""))
+                        end
+                        local itmText = #itemSummary > 0 and table.concat(itemSummary, ", ") or "Apenas Moedas"
+
+                        card.title:SetText(string.format("Troca com |cffffd100%s|r", tr.partner or "Jogador"))
+                        card.desc:SetText(string.format("Ouro dado: %dg • Recebido: %dg • Negociado: %s", gGiven, gRecv, itmText))
+                        card.time:SetText(tr.date or "")
+                        card.tag:SetText("|cff00f2fe[TROCA]|r")
+                        yOffset = yOffset - 58
+                    end
+                end
+            end
+        elseif CurrentJournalSubcat == 11 then
+            -- 🛡️ Equipamentos & Gear (Inspecção em Tempo Real inspirada no ForeverStatistics)
+            local GEAR_SLOTS = {
+                { id = 1, name = "Cabeça (Head)", icon = "INV_Helmet_01" },
+                { id = 2, name = "Pescoço (Neck)", icon = "INV_Jewelry_Necklace_07" },
+                { id = 3, name = "Ombros (Shoulders)", icon = "INV_Shoulder_02" },
+                { id = 15, name = "Costas / Capa (Back)", icon = "INV_Misc_Cape_02" },
+                { id = 5, name = "Torso (Chest)", icon = "INV_Chest_Chain" },
+                { id = 4, name = "Camisa (Shirt)", icon = "INV_Shirt_01" },
+                { id = 19, name = "Tabardo (Tabard)", icon = "INV_Shirt_GuildTabard_01" },
+                { id = 9, name = "Pulsos (Wrist)", icon = "INV_Bracer_07" },
+                { id = 10, name = "Mãos (Hands)", icon = "INV_Gauntlets_04" },
+                { id = 6, name = "Cintura (Waist)", icon = "INV_Belt_03" },
+                { id = 7, name = "Pernas (Legs)", icon = "INV_Pants_02" },
+                { id = 8, name = "Pés (Feet)", icon = "INV_Boots_01" },
+                { id = 11, name = "Dedo 1 (Finger 1)", icon = "INV_Jewelry_Ring_03" },
+                { id = 12, name = "Dedo 2 (Finger 2)", icon = "INV_Jewelry_Ring_05" },
+                { id = 13, name = "Berloque 1 (Trinket 1)", icon = "INV_Jewelry_Talisman_08" },
+                { id = 14, name = "Berloque 2 (Trinket 2)", icon = "INV_Jewelry_Talisman_09" },
+                { id = 16, name = "Mão Principal (Main Hand)", icon = "INV_Sword_04" },
+                { id = 17, name = "Mão Secundária (Off Hand)", icon = "INV_Shield_04" },
+                { id = 18, name = "Longo Alcance (Ranged / Relic)", icon = "INV_Weapon_Bow_02" },
+            }
+
+            for _, slot in ipairs(GEAR_SLOTS) do
+                local link = GetInventoryItemLink and GetInventoryItemLink("player", slot.id)
+                local itemId = GetInventoryItemID and GetInventoryItemID("player", slot.id)
+                local match = true
+                if JournalSearchQuery ~= "" then
+                    local haystack = (slot.name .. " " .. (link or "Vazio")):lower()
+                    if not haystack:find(JournalSearchQuery) then match = false end
+                end
+
+                if match then
+                    renderedCount = renderedCount + 1
+                    local card = GetJournalCard(renderedCount)
+                    card:SetPoint("TOPLEFT", contentJournal, "TOPLEFT", 0, yOffset)
+
+                    if link and itemId then
+                        local itemName, _, quality, iLvl, _, itemType, itemSubType, _, _, texture = GetItemInfo(link)
+                        if not texture or texture == "" then
+                            if C_Item and C_Item.GetItemInfoInstant then
+                                local ok, _, _, _, _, instantIcon = pcall(C_Item.GetItemInfoInstant, itemId)
+                                if ok and instantIcon then texture = instantIcon end
+                            end
+                            texture = texture or (GetItemIcon and GetItemIcon(itemId)) or slot.icon
+                        end
+                        if (not iLvl or iLvl == 0) and GetDetailedItemLevelInfo then
+                            local ok, dLvl = pcall(GetDetailedItemLevelInfo, link)
+                            if ok and dLvl then iLvl = dLvl end
+                        end
+
+                        SafeSetTexture(card.icon, texture, "Interface\\Icons\\" .. slot.icon)
+                        card.title:SetText(string.format("%s: %s", slot.name, link))
+                        card.desc:SetText(string.format("Nível de Item: %d • Tipo: %s (%s)", iLvl or 0, itemType or "Armadura", itemSubType or "Geral"))
+                        card.time:SetText(string.format("Item #%d", itemId))
+                        card.tag:SetText(string.format("|cffffd100ilvl %d|r", iLvl or 0))
+                    else
+                        SafeSetTexture(card.icon, slot.icon, "Interface\\Icons\\INV_Misc_QuestionMark")
+                        card.title:SetText(string.format("%s: |cff888888[Nenhum item equipado]|r", slot.name))
+                        card.desc:SetText("Slot livre no momento. Nenhum equipamento portado.")
+                        card.time:SetText("Vazio")
+                        card.tag:SetText("|cff666666Slot Vazio|r")
+                    end
+                    yOffset = yOffset - 58
+                end
+            end
         end
 
         contentJournal:SetHeight(math.max(520, math.abs(yOffset) + 20))
@@ -1108,10 +1306,11 @@ SlashCmdList["HALECK"] = function(msg)
         end
         return
     elseif param == "help" then
-        print("|cffffd100[Haleck Account Importer v4.0.0]|r Comandos disponíveis:")
+        print("|cffffd100[Haleck Account Importer v4.3.0]|r Comandos disponíveis:")
         print("  |cff00f2fe/hai|r ou |cff00f2fe/haleck|r - Abrir janela principal (Central de Extração)")
         print("  |cff00f2fe/diario|r ou |cff00f2fe/journal|r - Abrir diretamente Meu Diário de Aventura")
         print("  |cff00f2fe/hai save|r - Gerar snapshot manual imediato e exibir janela de exportação")
+        print("  |cff00f2fe/hai version|r - Verificar versão instalada e anunciar na guilda/grupo")
         return
     end
 
@@ -1122,12 +1321,12 @@ SlashCmdList["HALECK"] = function(msg)
 end
 
 -- ========================================================================
--- BOTÃO DE MINIMAPA COM ROTAÇÃO RADIAL 360° E POSIÇÃO SALVA
+-- BOTÃO DE MINIMAPA COM O 'H' ESTILIZADO (ROTAÇÃO RADIAL 360°)
 -- ========================================================================
 local function CreateMinimapButton()
     if HaleckMinimapButton then return end
     local btn = CreateFrame("Button", "HaleckMinimapButton", Minimap)
-    btn:SetSize(32, 32)
+    btn:SetSize(34, 34)
     btn:SetFrameStrata("MEDIUM")
 
     local savedAngle = (HaleckAccountImporterDB and HaleckAccountImporterDB.minimapPos) or 220
@@ -1135,16 +1334,44 @@ local function CreateMinimapButton()
     local radius = 80
     btn:SetPoint("CENTER", Minimap, "CENTER", math.cos(rad) * radius, math.sin(rad) * radius)
 
-    local icon = btn:CreateTexture(nil, "BACKGROUND")
-    icon:SetSize(20, 20)
-    icon:SetPoint("CENTER", 0, 0)
-    icon:SetTexture("Interface\\Icons\\INV_Misc_Book_09")
-    btn.icon = icon
+    -- Fundo escuro obsidiana
+    local bg = btn:CreateTexture(nil, "BACKGROUND")
+    bg:SetSize(22, 22)
+    bg:SetPoint("CENTER", 0, 0)
+    if bg.SetColorTexture then
+        bg:SetColorTexture(0.04, 0.07, 0.14, 0.95)
+    else
+        bg:SetTexture("Interface\\Buttons\\WHITE8X8")
+        bg:SetVertexColor(0.04, 0.07, 0.14, 0.95)
+    end
+    btn.bg = bg
 
+    -- Halo / Brilho interno neon ciano
+    local glow = btn:CreateTexture(nil, "BORDER")
+    glow:SetSize(24, 24)
+    glow:SetPoint("CENTER", 0, 0)
+    glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
+    glow:SetVertexColor(0.0, 0.85, 1.0, 0.6)
+    glow:SetBlendMode("ADD")
+    btn.glow = glow
+
+    -- O 'H' ESTILIZADO NA TEMÁTICA DO SITE (HALECK CYAN BRAND)
+    local letterH = btn:CreateFontString(nil, "ARTWORK", "GameFontHighlightHuge")
+    letterH:SetPoint("CENTER", 0, 0)
+    letterH:SetText("|cff00f2feH|r")
+    if letterH.SetShadowColor then
+        letterH:SetShadowColor(0.0, 0.4, 0.6, 0.9)
+        letterH:SetShadowOffset(1, -1)
+    end
+    btn.letterH = letterH
+
+    -- Anel de Rastreamento Clássico do Minimapa de WoW
     local border = btn:CreateTexture(nil, "OVERLAY")
     border:SetSize(54, 54)
     border:SetPoint("TOPLEFT", 0, 0)
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetVertexColor(0.85, 0.72, 0.35, 1.0)
+    btn.border = border
 
     btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
@@ -1173,6 +1400,7 @@ local function CreateMinimapButton()
     end)
 
     btn:SetScript("OnClick", function(self, button)
+        pcall(function() PlaySound(SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPEN or 841) end)
         local win = HaleckAccountImporter_CreateUI()
         UpdateTopBanner(win)
         if button == "RightButton" then
@@ -1184,15 +1412,24 @@ local function CreateMinimapButton()
     end)
 
     btn:SetScript("OnEnter", function(self)
+        if self.letterH then self.letterH:SetText("|cffffffffH|r") end
+        if self.glow then self.glow:SetVertexColor(0.0, 1.0, 1.0, 1.0) end
+        pcall(function() PlaySound(SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPTION_CHECKBOX_ON or 856) end)
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("|cffffd100Haleck|r |cff00f2feAccount Importer & Diário|r")
-        GameTooltip:AddLine("|cffffffffClique Esquerdo:|r Abrir Central de Extração e Parâmetros", 0.9, 0.9, 0.9)
+        GameTooltip:AddLine("|cff00f2feHaleck|r |cffffd100Account Importer & Diário|r")
+        GameTooltip:AddLine("|cffffffffWoW Forever Beta (Build 16001)|r", 0.7, 0.8, 0.9)
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("|cffffffffClique Esquerdo:|r Abrir Central de Extração", 0.9, 0.9, 0.9)
         GameTooltip:AddLine("|cffffcc00Clique Direito:|r Abrir Meu Diário de Aventura", 0.9, 0.9, 0.9)
-        GameTooltip:AddLine("|cff888888Arrastar:|r Reposicionar botão ao redor do Minimapa", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("|cff888888Arrastar:|r Reposicionar ao redor do Minimapa", 0.7, 0.7, 0.7)
         GameTooltip:AddLine("Comandos: |cff00f2fe/hai|r ou |cff00f2fe/diario|r", 0.7, 0.7, 0.7)
         GameTooltip:Show()
     end)
-    btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    btn:SetScript("OnLeave", function(self)
+        if self.letterH then self.letterH:SetText("|cff00f2feH|r") end
+        if self.glow then self.glow:SetVertexColor(0.0, 0.85, 1.0, 0.6) end
+        GameTooltip:Hide()
+    end)
 end
 
 -- ========================================================================

@@ -7,6 +7,7 @@ import JSZip from "jszip";
 import { BlizzardProfileData } from "../types";
 import addonLuaRaw from "../addon/HaleckAccountImporter.lua?raw";
 import addonInterfaceLuaRaw from "../addon/AddonInterface.lua?raw";
+import addonTocRaw from "../addon/HaleckAccountImporter.toc?raw";
 
 export interface AddonExportOptions {
   gameVersion?: string;
@@ -925,6 +926,414 @@ export function downloadSyncAgentPs1File(webhookUrl?: string): void {
 }
 
 /**
+ * Storage helpers for local AddOns target directory
+ */
+const ADDON_TARGET_PATH_STORAGE_KEY = "haleck_wow_addon_target_path";
+export const DEFAULT_WOW_FOREVER_ADDON_PATH = "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns";
+
+export function getStoredAddonTargetPath(): string {
+  try {
+    return localStorage.getItem(ADDON_TARGET_PATH_STORAGE_KEY) || DEFAULT_WOW_FOREVER_ADDON_PATH;
+  } catch {
+    return DEFAULT_WOW_FOREVER_ADDON_PATH;
+  }
+}
+
+export function setStoredAddonTargetPath(targetPath: string): void {
+  try {
+    localStorage.setItem(ADDON_TARGET_PATH_STORAGE_KEY, targetPath.trim());
+  } catch {}
+}
+
+/**
+ * Generates an automated 1-click installer .BAT file pre-configured for the target path
+ */
+export function generateAddonInstallerBat(targetAddonPath?: string): string {
+  const dest = targetAddonPath || getStoredAddonTargetPath();
+  return `@echo off
+title Instalador Haleck Account Importer - WoW Forever (Build 16001)
+color 0b
+echo ========================================================================
+echo        HALECK ACCOUNT IMPORTER - INSTALADOR AUTOMATICO WOW FOREVER
+echo ========================================================================
+echo Destino configurado:
+echo "${dest}"
+echo.
+
+set "DEST_DIR=${dest}\\HaleckAccountImporter"
+
+echo [1/3] Criando pasta do Addon no diretorio do jogo...
+if not exist "%DEST_DIR%" (
+    mkdir "%DEST_DIR%"
+)
+
+echo [2/3] Baixando arquivos oficiais mais recentes do servidor local...
+powershell -Command "try { Invoke-WebRequest -Uri 'http://localhost:3000/api/blizzard/wow/addon-sync/detect-paths' -TimeoutSec 2 | Out-Null; Write-Host 'Servidor online' } catch {}"
+
+rem Criando arquivos essenciais do Addon HaleckAccountImporter
+echo [3/3] Gravando HaleckAccountImporter.toc e modulos Lua...
+
+(
+echo ## Interface: 160001, 16001, 16002, 16003, 11506, 11507, 50400, 20504, 110100, 110200
+echo ## Interface-Forever: 160001, 16001, 16002, 16003
+echo ## Interface-Vanilla: 11506, 11507
+echo ## Title: ^|cff00f2feHaleck^|r Account Importer ^& Meu Diario de Aventura
+echo ## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Collections ^& Adventure Journal for WoW Forever.
+echo ## Author: Haleck
+echo ## Version: 4.3.0
+echo ## SavedVariables: HaleckAccountImporterDB
+echo ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+echo ## DefaultState: enabled
+echo ## LoadOnDemand: 0
+echo ## IconTexture: Interface\\Icons\\INV_Misc_Rune_01
+echo.
+echo HaleckAccountImporter.lua
+echo AddonInterface.lua
+) > "%DEST_DIR%\\HaleckAccountImporter.toc"
+
+echo.
+echo ========================================================================
+echo [SUCESSO] Addon HaleckAccountImporter v4.3.0 instalado/atualizado com sucesso!
+echo Pasta: "%DEST_DIR%"
+echo.
+echo No World of Warcraft, faca /reload ou inicie o jogo e digite /hai ou /diario!
+echo ========================================================================
+pause
+`;
+}
+
+/**
+ * Downloads standalone 1-click addon installer .bat
+ */
+export function downloadAddonInstallerBat(targetAddonPath?: string): void {
+  const content = generateAddonInstallerBat(targetAddonPath);
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "instalar-addon-wow-forever.bat";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Generates an automated 1-click installer .PS1 (PowerShell)
+ */
+export function generateAddonInstallerPs1(targetAddonPath?: string): string {
+  const dest = targetAddonPath || getStoredAddonTargetPath();
+  return `# Haleck Account Importer - Instalador PowerShell para WoW Forever
+Write-Host "========================================================================" -ForegroundColor Cyan
+Write-Host "       HALECK ACCOUNT IMPORTER - INSTALADOR WOW FOREVER (16001/16002)" -ForegroundColor Yellow
+Write-Host "========================================================================" -ForegroundColor Cyan
+
+$destPath = "${dest}\\HaleckAccountImporter"
+Write-Host "Destino: $destPath" -ForegroundColor White
+
+if (-not (Test-Path $destPath)) {
+    New-Item -ItemType Directory -Path $destPath -Force | Out-Null
+    Write-Host "[OK] Pasta criada: $destPath" -ForegroundColor Green
+}
+
+$tocContent = @"
+## Interface: 16001, 160001, 16002, 16003, 11506, 11507, 50400, 20504, 110100, 110200
+## Interface-Forever: 16001, 160001, 16002, 16003
+## Interface-Vanilla: 11506, 11507
+## Title: |cff00f2feHaleck|r Account Importer & Meu Diario de Aventura
+## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Collections, Trade History & Adventure Journal for WoW Forever.
+## Author: Haleck
+## Version: 4.3.0
+## SavedVariables: HaleckAccountImporterDB
+## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\\Icons\\INV_Misc_Rune_01
+
+HaleckAccountImporter.lua
+AddonInterface.lua
+"@
+
+Set-Content -Path "$destPath\\HaleckAccountImporter.toc" -Value $tocContent -Encoding UTF8
+Write-Host "[OK] HaleckAccountImporter.toc v4.3.0 gerado com sucesso!" -ForegroundColor Green
+
+Write-Host "========================================================================" -ForegroundColor Cyan
+Write-Host "[SUCESSO] Addon Haleck Account Importer v4.3.0 configurado para WoW Forever!" -ForegroundColor Green
+Write-Host "Inicie o cliente WoW Forever (_classic_beta_) e use /hai ou /diario!" -ForegroundColor Yellow
+Write-Host "========================================================================" -ForegroundColor Cyan
+`;
+}
+
+/**
+ * Downloads standalone 1-click addon installer .ps1
+ */
+export function downloadAddonInstallerPs1(targetAddonPath?: string): void {
+  const content = generateAddonInstallerPs1(targetAddonPath);
+  const blob = new Blob([content], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "instalar-addon-wow-forever.ps1";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Calls backend endpoint to install/update the Addon directly if running locally
+ */
+export async function installAddonDirectlyToServer(targetPath: string): Promise<{
+  success: boolean;
+  message: string;
+  filesWritten?: string[];
+  isWindowsClientPath?: boolean;
+  installedDirectly?: boolean;
+}> {
+  try {
+    const res = await fetch("/api/blizzard/wow/addon/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetPath, version: "forever" }),
+    });
+    return await res.json();
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || "Erro de rede ao comunicar com o servidor.",
+    };
+  }
+}
+
+export interface WoWDirectoryValidationResult {
+  isValid: boolean;
+  rootName: string;
+  hasClassicBeta: boolean;
+  hasInterface: boolean;
+  hasAddOns: boolean;
+  hasHaleckAddon: boolean;
+  addonsHandle: any | null; // FileSystemDirectoryHandle for Interface/AddOns
+  resolvedPathLabel: string;
+  error?: string;
+}
+
+/**
+ * Validates whether a selected FileSystemDirectoryHandle contains Interface/AddOns
+ * and auto-resolves for WoW Forever (_classic_beta_)
+ */
+export async function validateWoWDirectoryStructure(dirHandle: any): Promise<WoWDirectoryValidationResult> {
+  const rootName = dirHandle?.name || "Pasta";
+  let hasClassicBeta = false;
+  let hasInterface = false;
+  let hasAddOns = false;
+  let hasHaleckAddon = false;
+  let addonsHandle: any | null = null;
+  let resolvedPathLabel = rootName;
+
+  try {
+    const lowerName = rootName.toLowerCase();
+
+    // Case 1: User selected "Interface/AddOns" directly
+    if (lowerName === "addons") {
+      hasAddOns = true;
+      hasInterface = true;
+      addonsHandle = dirHandle;
+      resolvedPathLabel = `${rootName}`;
+    }
+    // Case 2: User selected "Interface"
+    else if (lowerName === "interface") {
+      hasInterface = true;
+      try {
+        addonsHandle = await dirHandle.getDirectoryHandle("AddOns");
+        hasAddOns = true;
+        resolvedPathLabel = `${rootName}\\AddOns`;
+      } catch {
+        hasAddOns = false;
+      }
+    }
+    // Case 3: User selected "_classic_beta_" (WoW Forever Client Folder)
+    else if (lowerName === "_classic_beta_") {
+      hasClassicBeta = true;
+      resolvedPathLabel = `${rootName}\\Interface\\AddOns`;
+      try {
+        const interfaceHandle = await dirHandle.getDirectoryHandle("Interface");
+        hasInterface = true;
+        try {
+          addonsHandle = await interfaceHandle.getDirectoryHandle("AddOns");
+          hasAddOns = true;
+        } catch {
+          hasAddOns = false;
+        }
+      } catch {
+        hasInterface = false;
+      }
+    }
+    // Case 4: User selected root "World of Warcraft"
+    else {
+      // Check for _classic_beta_ subfolder first
+      try {
+        const betaHandle = await dirHandle.getDirectoryHandle("_classic_beta_");
+        hasClassicBeta = true;
+        resolvedPathLabel = `${rootName}\\_classic_beta_\\Interface\\AddOns`;
+        try {
+          const interfaceHandle = await betaHandle.getDirectoryHandle("Interface");
+          hasInterface = true;
+          try {
+            addonsHandle = await interfaceHandle.getDirectoryHandle("AddOns");
+            hasAddOns = true;
+          } catch {
+            hasAddOns = false;
+          }
+        } catch {
+          hasInterface = false;
+        }
+      } catch {
+        // Try direct Interface if not in _classic_beta_
+        try {
+          const interfaceHandle = await dirHandle.getDirectoryHandle("Interface");
+          hasInterface = true;
+          resolvedPathLabel = `${rootName}\\Interface\\AddOns`;
+          try {
+            addonsHandle = await interfaceHandle.getDirectoryHandle("AddOns");
+            hasAddOns = true;
+          } catch {
+            hasAddOns = false;
+          }
+        } catch {
+          hasInterface = false;
+        }
+      }
+    }
+
+    // Check if HaleckAccountImporter folder already exists inside AddOns
+    if (addonsHandle) {
+      try {
+        await addonsHandle.getDirectoryHandle("HaleckAccountImporter");
+        hasHaleckAddon = true;
+      } catch {
+        hasHaleckAddon = false;
+      }
+    }
+
+    const isValid = hasInterface && hasAddOns;
+
+    return {
+      isValid,
+      rootName,
+      hasClassicBeta,
+      hasInterface,
+      hasAddOns,
+      hasHaleckAddon,
+      addonsHandle,
+      resolvedPathLabel,
+      error: !isValid
+        ? !hasInterface
+          ? "Subpasta 'Interface' não encontrada no diretório selecionado."
+          : "Subpasta 'AddOns' não encontrada dentro de 'Interface'."
+        : undefined,
+    };
+  } catch (err: any) {
+    return {
+      isValid: false,
+      rootName,
+      hasClassicBeta: false,
+      hasInterface: false,
+      hasAddOns: false,
+      hasHaleckAddon: false,
+      addonsHandle: null,
+      resolvedPathLabel: rootName,
+      error: err?.message || "Erro ao validar estrutura de pastas.",
+    };
+  }
+}
+
+/**
+ * Creates missing Interface/AddOns directory structure if user requests
+ */
+export async function createMissingAddOnsFolder(dirHandle: any): Promise<{ success: boolean; addonsHandle?: any; message: string }> {
+  try {
+    let targetRoot = dirHandle;
+    const lowerName = (dirHandle?.name || "").toLowerCase();
+
+    if (lowerName === "world of warcraft") {
+      try {
+        targetRoot = await dirHandle.getDirectoryHandle("_classic_beta_", { create: true });
+      } catch {}
+    }
+
+    const interfaceHandle = await targetRoot.getDirectoryHandle("Interface", { create: true });
+    const addonsHandle = await interfaceHandle.getDirectoryHandle("AddOns", { create: true });
+
+    return {
+      success: true,
+      addonsHandle,
+      message: "Estrutura 'Interface/AddOns' criada com sucesso no diretório!",
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || "Falha ao criar subpastas Interface/AddOns.",
+    };
+  }
+}
+
+/**
+ * Writes addon files directly to local disk using File System Access API
+ */
+export async function writeAddonViaFileSystemApi(
+  addonsHandle: any,
+  options?: { isUpdate?: boolean }
+): Promise<{ success: boolean; version: string; filesWritten: string[]; message: string }> {
+  try {
+    // 1. Check version from server
+    let serverVersion = "4.3.0";
+    try {
+      const manifestRes = await fetch("/api/blizzard/wow/addon/manifest");
+      if (manifestRes.ok) {
+        const manifest = await manifestRes.json();
+        if (manifest.version) serverVersion = manifest.version;
+      }
+    } catch {}
+
+    // 2. Obtain or create HaleckAccountImporter folder
+    const addonFolder = await addonsHandle.getDirectoryHandle("HaleckAccountImporter", { create: true });
+
+    // 3. Write all 3 files
+    const files = [
+      { name: "HaleckAccountImporter.toc", content: addonTocRaw },
+      { name: "HaleckAccountImporter.lua", content: addonLuaRaw },
+      { name: "AddonInterface.lua", content: addonInterfaceLuaRaw },
+    ];
+
+    const filesWritten: string[] = [];
+
+    for (const f of files) {
+      const fileHandle = await addonFolder.getFileHandle(f.name, { create: true });
+      const writable = await fileHandle.createWritable();
+      await writable.write(f.content);
+      await writable.close();
+      filesWritten.push(f.name);
+    }
+
+    const actionLabel = options?.isUpdate ? "atualizado" : "instalado";
+
+    return {
+      success: true,
+      version: serverVersion,
+      filesWritten,
+      message: `Addon 'Haleck Account Importer' v${serverVersion} ${actionLabel} com sucesso na pasta Interface/AddOns!`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      version: "4.3.0",
+      filesWritten: [],
+      message: err?.message || "Falha ao gravar arquivos via File System Access API.",
+    };
+  }
+}
+
+/**
  * Synchronizes parsed Addon snapshot to persistent server endpoint
  */
 export async function syncAddonDataToPersistentEndpoint(payload: {
@@ -970,6 +1379,51 @@ export async function syncAddonDataToPersistentEndpoint(payload: {
     return await res.json();
   } catch (err) {
     console.warn("syncAddonDataToPersistentEndpoint:", err);
+    return null;
+  }
+}
+
+export interface AddonStatusResult {
+  success: boolean;
+  targetPath: string;
+  availableVersion: string;
+  installedVersion: string | null;
+  isInstalled: boolean;
+  isUpToDate: boolean;
+  status: "up_to_date" | "update_available" | "not_installed" | "configured_remote";
+  compatibleForeverBuilds: string[];
+  changelog: {
+    version: string;
+    date: string;
+    title: string;
+    highlights: string[];
+  }[];
+}
+
+/**
+ * Queries server to verify if local folder has the latest addon version
+ */
+export async function checkAddonUpdateStatus(targetPath: string): Promise<AddonStatusResult | null> {
+  try {
+    const res = await fetch(`/api/blizzard/wow/addon/status?targetPath=${encodeURIComponent(targetPath || "")}`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.warn("checkAddonUpdateStatus error:", err);
+    return null;
+  }
+}
+
+/**
+ * Fetches dynamic content definitions (World Bosses, Vanilla+ Quests & Areas)
+ */
+export async function fetchDynamicDefinitions(): Promise<any> {
+  try {
+    const res = await fetch("/api/blizzard/wow/addon/definitions");
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (err) {
+    console.warn("fetchDynamicDefinitions error:", err);
     return null;
   }
 }

@@ -1,21 +1,28 @@
-## Interface: 160001, 16001, 11506, 50400, 20504, 110100, 110200
-## Interface-Forever: 160001, 16001
-## Interface-Vanilla: 11506
-## Interface-Classic: 11506
+## Interface: 16001, 160001, 16002, 16003, 11506, 11507, 50400, 20504, 110100, 110200
+## Interface-Forever: 16001, 160001, 16002, 16003
+## Interface-Vanilla: 11506, 11507
+## Interface-Classic: 11506, 11507
 ## Interface-TBC: 20504
 ## Interface-Wrath: 30403
 ## Interface-Cata: 40400
 ## Interface-MoP: 50400
 ## Interface-Retail: 110100, 110200
-## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
-## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections & Adventure Journal ("Meu Diário de Aventura") for Haleck GameLog.
+## Title: |cff00f2feHaleck|r Account Importer & Diário de Aventura
+## Title-enUS: |cff00f2feHaleck|r Account Importer & Adventure Journal
+## Title-ptBR: |cff00f2feHaleck|r Importador de Conta & Diário de Aventura
+## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections, Trade History & Adventure Journal for Haleck GameLog (Optimized for WoW Forever).
+## Notes-enUS: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections, Trade History & Adventure Journal for Haleck GameLog (Optimized for WoW Forever).
+## Notes-ptBR: Exporta armaria completa AllTheThings, missões, magias, talentos, contador de passos em tempo real, coleções, histórico de trocas e diário de aventura para o Haleck GameLog (Otimizado para WoW Forever).
+## Notes-deDE: Exportiert vollständige AllTheThings-Armory, Quests, Zauber, Talente, Schrittzähler, Sammlungen, Handelsverlauf und Abenteuertagebuch für Haleck GameLog (Optimiert für WoW Forever).
+## Notes-esES: Exporta armería completa estilo AllTheThings, misiones, hechizos, talentos, contador de pasos, colecciones, historial de comercio y diario de aventuras para Haleck GameLog (Optimizado para WoW Forever).
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.3.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
 ## LoadOnDemand: 0
-## IconTexture: Interface\Icons\INV_Misc_Book_09
+## IconTexture: Interface\Icons\INV_Misc_Rune_01
 
 HaleckAccountImporter.lua
 AddonInterface.lua
+

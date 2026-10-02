@@ -1,118 +1,71 @@
-# Reestruturação do Painel de Admin & Central Técnica de Integrações
+# Plano de Implementação: Seletor de Diretório WoW Forever e Exportação com Dry-Run de Integridade
 
-Reorganizar o **Painel de Admin (SiteSettingsModal)** em uma Central de Controle Técnico expandida (ocupando 95% do espaço de tela), com barra lateral vertical de categorias à esquerda e painel de controle amplo à direita, integrando todas as configurações do Addon WoW e o Simulador In-Game na aba dedicada da Blizzard.
-
----
-
-## Decisões Confirmadas & Respostas do Usuário
-
-> [!IMPORTANT]
-> **Decisões confirmadas na Etapa 1:**
-> - **Navegação Principal**: Menu lateral vertical fixo à esquerda ($260\text{px}$) com painel de conteúdo técnico amplo à direita (layout 95% do viewport: `w-[95vw] h-[95vh] max-w-[1750px]`).
-> - **Estrutura da Categoria Blizzard**: Dividida em 3 sub-abas técnicas limpas e especializadas:
->   1. `Autenticação & Contas`: Battle.net OAuth permanente, credenciais Client ID/Secret, BattleTag, status do token e listener automático.
->   2. `Addon & Sincronização`: Download do Addon Universal v4.0.0, scripts do Agente Local (.bat / .ps1), ingestão de SavedVariables e estúdio de desenvolvimento (Dev Studio).
->   3. `Simulador In-Game`: Simulador interativo in-game embutido diretamente na tela com alternância entre dados reais e de exemplo, controle de extração e Meu Diário de Aventura.
+Este plano detalha a implementação das ferramentas solicitadas na aba técnica **Blizzard** do Painel de Admin, garantindo a integração perfeita com o cliente **WoW: Forever (Vanilla+ Build 16001)** e a verificação rigorosa de integridade de SavedVariables antes da ingestão de dados.
 
 ---
 
-## 1. Visão Geral & Conceito
+## 1. Seletor de Diretório Local do WoW Forever com Botões 'Instalar Addon' e 'Atualizar Addon'
 
-- **O que faz**: Transforma o modal de configurações em um console de administração técnico profissional de alta densidade (95% do viewport), separando a responsabilidade de **configuração técnica e gerenciamento de integrações** (exclusiva do Admin) da **experiência de jogo e exploração de dados** (páginas dos jogos e Armory).
-- **Público-alvo**: Administrador do catálogo e jogadores de WoW/Steam/GOG configurando suas credenciais com clareza técnica e sem sobreposição de botões ou textos.
-- **Valor Principal**: Elimina sobrecargas visuais na visualização do jogo, remove elementos duplicados e organiza cada plataforma de forma modular e expansível.
+### 1.1 Explorador de Pastas Nativo com Resolução Inteligente
+- **Integração com File System Access API (`window.showDirectoryPicker`):**
+  - Adicionar botão **"Procurar Pasta..."** que abre o explorador de arquivos nativo do sistema operacional.
+  - Fallback universal via `<input type="file" webkitdirectory directory />` para navegadores que não suportam a API de acesso direto ao sistema de arquivos.
+  - **Resolução Automática da Estrutura do Jogo:**
+    - Se o usuário selecionar a pasta raiz do WoW (`World of Warcraft`), o sistema detecta prioritariamente a subpasta oficial do WoW Forever (`_classic_beta_`) e aponta para `_classic_beta_/Interface/AddOns/HaleckAccountImporter`.
+    - Se selecionar a pasta `_classic_beta_`, adiciona `Interface/AddOns/HaleckAccountImporter`.
+    - Se selecionar `Interface/AddOns`, adiciona a subpasta do addon.
+- **Campo de Texto & Atalhos de Presets:**
+  - Manter campo de texto editável com o caminho absoluto para flexibilidade total.
+  - Botões de atalho rápido para os caminhos padrão do Windows (Drives `C:` e `D:`).
 
----
-
-## 2. Experiência do Usuário & Design Visual
-
-### A. Layout Espacial & Proporção (95% do Viewport)
-- **Container**: `w-[95vw] h-[95vh] max-w-[1750px] bg-[#0b0d14] border border-cyan-500/30 rounded-3xl flex flex-col shadow-2xl overflow-hidden`.
-- **Top Header**: Breadcrumb técnico com indicador de conexão das APIs, perfil do admin e botão de fechar acessível com atalho `Esc`.
-- **Corpo Dividido**:
-  - **Barra Lateral Esquerda ($260\text{px}$)**:
-    - Botões de categoria com ícones específicos de plataforma, contador de jogos/serviços ativos e estado de seleção ciano/azul:
-      - ⚔️ **Blizzard & Battle.net** (OAuth, Armory, Addon v4.0.0, Simulador)
-      - 🎮 **Steam Web API** (Credenciais Steam, SteamID64, Cache)
-      - 👾 **GOG Galaxy** (Login Direto OAuth, Username, API Key)
-      - 🎨 **Mídia & Metadados** (IGDB/Twitch, SteamGridDB, ImgBB, YouTube, Drive, Gmail)
-      - ⚙️ **Sistema & Manutenção** (Efeitos de Som Retrô, Diagnóstico, Lixeira, Logs de Auditoria, Logout)
-  - **Painel de Conteúdo Amplo à Direita (Flex-1)**:
-    - Espaço de trabalho amplo com rolagem suave (`custom-scrollbar`), cartões de nível único com borda sutil de 1px e zero sobreposição.
-
-### B. Sub-abas Técnicas da Blizzard
-```
-┌────────────────────────────────────────────────────────────────────────┐
-│ [Autenticação & Contas]   [Addon & Sincronização]   [Simulador In-Game]│
-└────────────────────────────────────────────────────────────────────────┘
-```
-1. **Autenticação & Contas**:
-   - Card de Conexão Battle.net OAuth com botão direto, BattleTag ativo, expiração do token e renovação.
-   - Seletor de Região (US, EU, KR, TW) e campos de Client ID / Client Secret personalizados com máscara de proteção.
-   - Diagnosticador de Redirect URIs permitidas pela Blizzard (`/auth/blizzard/callback`).
-2. **Addon & Sincronização**:
-   - Gerador do pacote `.zip` do Addon HaleckAccountImporter com seletor de versão (WoW Forever Beta `_classic_beta_`, Classic Era, Retail).
-   - Scripts do Agente Local de Sincronização Automática em segundo plano (`.bat` para Windows e `.ps1` para PowerShell).
-   - Ingestor de arquivos `SavedVariables/HaleckAccountImporter.lua` e leitor da API local `/api/blizzard/wow/addon-sync`.
-   - Botão para o **Dev Studio** (estúdio de criação de addons com templates e documentação canônica).
-3. **Simulador In-Game**:
-   - Acesso e controle completo do simulador in-game diretamente no Admin, com renderização da janela do addon in-game, seletor de dados reais vs exemplo, Central de Extração e Meu Diário de Aventura.
-
-### C. Limpeza das Páginas dos Jogos
-- Remoção do botão de pré-visualização do Addon na tela principal do Armory (`WoWArmoryView`), mantendo apenas um atalho discreto que abre o Admin na aba Blizzard quando o usuário quiser gerenciar configurações ou o addon.
+### 1.2 Botões Claros e Distintos: 'Instalar Addon' e 'Atualizar Addon'
+- **Botão 'Instalar Addon' (Haleck Account Importer):**
+  - Cria o diretório `HaleckAccountImporter/` na pasta `Interface/AddOns` do jogo e grava a versão v4.1.0 completa (`.toc`, `HaleckAccountImporter.lua` e `AddonInterface.lua`).
+  - Fornece feedback visual imediato de sucesso ou download automático do script `.BAT`/`.PS1` de 1 clique caso o diretório pertença ao cliente local do Windows.
+- **Botão 'Atualizar Addon' (Haleck Account Importer):**
+  - Inspeciona os arquivos existentes no caminho configurado, compara o hash/versão com a v4.1.0 e sobrescreve atomicamente apenas os scripts executáveis do addon.
+  - **Garantia de Segurança:** Mantém 100% intactas as pastas `WTF/SavedVariables/` e os dados do usuário.
 
 ---
 
-## 3. Decisões de Produto & Arquitetura de Interface
+## 2. Função de Exportação de Dados & Dry-Run de Integridade de Quests e Itens
 
-- **Decisão 1: Menu Lateral Fixo em vez de Abas no Topo**:
-  - *Abordagem*: Barra lateral vertical à esquerda com largura fixa de $260\text{px}$ e rolagem interna no painel direito.
-  - *Por que*: Com a expansão para 95% da tela, uma barra lateral oferece espaço proporcional para rótulos legíveis, métricas de status por plataforma e navegação ágil sem aglomerar o cabeçalho.
-- **Decisão 2: Sub-abas Especializadas para a Blizzard**:
-  - *Abordagem*: Dividir a complexidade do ecossistema Blizzard (OAuth + Addon ZIP + Sync Server + Simulador) em 3 sub-abas limpas.
-  - *Por que*: Evita que uma tela longa de formulários e instruções técnicas sobreponha o simulador e o download do addon.
-- **Decisão 3: Reorganização das Outras Categorias (Steam, GOG, Mídia, Sistema)**:
-  - *Abordagem*: Cada categoria ganha seu espaço dedicado com formulários organizados em grids de 2 colunas, testes de conexão com feedback visual imediato e sem botões sobrepostos.
+### 2.1 Função de Exportação de Dados na Aba de Configurações
+- Botão **"Exportar Dados do Addon (.lua / .json)"**:
+  - Exporta os dados atuais do personagem ou do armory para o formato oficial de SavedVariables (`HaleckAccountImporter.lua` com tabela `HaleckAccountImporterDB = { ... }`), pronto para ser colocado diretamente na pasta `WTF/Account/<Conta>/SavedVariables/` do jogo.
+  - Suporte adicional para exportar em formato JSON limpo para auditoria externa.
 
----
+### 2.2 Leitor de SavedVariables e Verificador de Schema
+- Campo de inserção flexível: Upload de arquivo (`.lua` ou `.json`) ou colar texto bruto.
+- **Auditoria Rigorosa de Quests Conforme o Schema:**
+  - Validação de IDs inteiros de missões (`questID > 0`).
+  - Verificação de títulos, objetivos, status de conclusão e timestamps.
+  - Detecção de registros incompletos ou órfãos com alertas claros de formato.
+- **Auditoria Rigorosa de Itens & Equipamentos:**
+  - Validação de cada slot de equipamento (1 a 19: Head, Neck, Shoulders, Chest, MainHand, OffHand, etc.).
+  - Checagem de integridade de `itemID`, `itemLevel`, raridade/qualidade e `display_id` de transmog.
+  - Validação de bolsas e banco pessoal.
 
-## 4. Diagrama de Arquitetura do Painel de Admin
-
-```
-┌────────────────────────────────────────────────────────────────────────────────────────┐
-│ PAINEL DE ADMIN (SiteSettingsModal - 95vw x 95vh)                                      │
-├─────────────────────┬──────────────────────────────────────────────────────────────────┤
-│ BARRA LATERAL (260px)│ PAINEL TÉCNICO DIREITO (Flex-1, Scrollable)                      │
-│                     │                                                                  │
-│ [⚔️ Blizzard]  ───► │ Sub-Abas: [Autenticação] | [Addon & Sync] | [Simulador In-Game]  │
-│                     │ ├─ Autenticação: Battle.net OAuth, BattleTag, Client ID/Secret   │
-│                     │ ├─ Addon & Sync: Download .ZIP, Scripts .bat/.ps1, SavedVars Ingest│
-│                     │ └─ Simulador: Central de Extração + Meu Diário de Aventura      │
-│                     │                                                                  │
-│ [🎮 Steam]     ───► │ Formulário Steam Web API, SteamID64, Cache de Jogos              │
-│                     │                                                                  │
-│ [👾 GOG Galaxy]───► │ Login OAuth GOG, Perfil, Chave API, Sincronização de Biblioteca  │
-│                     │                                                                  │
-│ [🎨 Mídia & APIs]──► │ IGDB/Twitch (Rate limits), SteamGridDB, ImgBB, Drive, YouTube   │
-│                     │                                                                  │
-│ [⚙️ Sistema]    ───► │ Áudio Retrô, Diagnóstico, Lixeira, Auditoria de Backup, Logout  │
-└─────────────────────┴──────────────────────────────────────────────────────────────────┘
-```
+### 2.3 Painel de Dry-Run com Badges de Conformidade e Auditoria Item a Item
+- Ao clicar em **"Executar Dry-Run de Integridade"**:
+  - Análise em tempo real do conteúdo sem gravar imediatamente no banco.
+  - Exibição de painel visual com:
+    - Badge Geral: *"Schema 100% Válido"* (Verde) ou *"Requer Atenção"* (Amarelo/Vermelho).
+    - 4 Badges de Métricas: Quests Concluídas vs Ativas, Conquistas, Coleções e Equipamento.
+    - Tabela de Auditoria Item por Item: cada quest ou item analisado recebe um badge (*Válido*, *Aviso de Formato* ou *Erro Crítico*) acompanhado da descrição exata do campo inconsistente.
+  - Botão **"Confirmar & Importar Dados para o Site"**:
+    - Fica ativo apenas após a conclusão bem-sucedida do dry-run, garantindo que nenhum dado corrompido seja inserido no banco do armory.
 
 ---
 
-## 5. Plano de Execução & Verificação
+## 3. Ordem de Execução das Modificações
 
-1. **Refatorar `SiteSettingsModal.tsx`**:
-   - Ajustar container principal para `w-[95vw] h-[95vh] max-w-[1750px]`.
-   - Adicionar estado de categoria principal: `activeCategory: "blizzard" | "steam" | "gog" | "media" | "system"`.
-   - Implementar a barra lateral vertical fixa com ícones e status.
-   - Criar as 3 sub-abas da categoria Blizzard (`auth`, `addon_sync`, `simulator`).
-   - Mover os módulos de download do addon, tutorial, Dev Studio e o Simulador In-Game (`WoWAddonPreviewModal`) para dentro do painel da Blizzard.
-   - Organizar as categorias Steam, GOG, Mídia e Sistema em grids com espaçamento adequado sem sobreposições.
-2. **Ajustar `WoWArmoryView.tsx`**:
-   - Remover os botões redundantes de simulação espalhados na barra de tabs do Armory, substituindo por link/atalho que direciona para a Central de Admin da Blizzard.
-3. **Validação & Testes**:
-   - Compilação via `compile_applet`.
-   - Verificação de tipos via `lint_applet`.
-   - Teste de alternância entre todas as categorias e sub-abas.
+1. **Atualizar `SiteSettingsModal.tsx`:**
+   - Adicionar manipulador do seletor nativo de diretório (`showDirectoryPicker` e input fallback).
+   - Separar e estilizar os botões **"Instalar Addon"** e **"Atualizar Addon"** com ações e feedbacks distintos.
+   - Aprimorar o painel do **Dry-Run** com badges de conformidade por item e auditoria estrita de quests e itens conforme o schema.
+2. **Atualizar `wowSavedVariablesIntegrity.ts` & `addonExportService.ts`:**
+   - Adicionar regras específicas de auditoria detalhada de quests e slots de itens.
+   - Adicionar helper de exportação em múltiplos formatos (.lua e .json).
+3. **Verificação & Testes:**
+   - Executar `lint_applet` e `compile_applet` para assegurar build sem erros.

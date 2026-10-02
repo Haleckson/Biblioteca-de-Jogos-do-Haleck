@@ -582,9 +582,11 @@ HaleckAccountImporterDB = {
       {/* =================================================================== */}
       <div className="bg-gradient-to-r from-[#1b1610] via-[#2c2012] to-[#1b1610] px-4 py-2.5 border-b-2 border-[#96721d] flex items-center justify-between shrink-0 shadow-md relative z-20">
         <div className="flex items-center gap-3">
-          {/* Brasão / Ícone da Janela WoW */}
-          <div className="w-8 h-8 rounded-full bg-gradient-to-b from-[#b8860b] to-[#422e02] border-2 border-[#ffd100] flex items-center justify-center text-[#ffd100] shadow-md shrink-0">
-            <BookOpen size={16} className="drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
+          {/* Brasão / Ícone da Janela WoW com o 'H' Estilizado da Marca Haleck */}
+          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#071326] via-[#091f3b] to-[#040813] border-2 border-cyan-400 shadow-[0_0_12px_rgba(6,182,212,0.5)] flex items-center justify-center shrink-0">
+            <span className="font-orbitron font-black text-cyan-300 text-sm tracking-wider drop-shadow-[0_0_8px_rgba(6,182,212,0.9)]">
+              H
+            </span>
           </div>
 
           <div>

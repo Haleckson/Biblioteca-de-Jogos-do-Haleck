@@ -19,7 +19,8 @@
 local ADDON_NAME, addon = ...
 ADDON_NAME = ADDON_NAME or "HaleckAccountImporter"
 addon = addon or {}
-local ADDON_VERSION = "4.0.0"
+local ADDON_VERSION = "4.3.0"
+addon.Version = ADDON_VERSION
 
 -- Opções Padrão de Extração
 local DEFAULT_OPTIONS = {
@@ -56,38 +57,63 @@ local DEFAULT_OPTIONS = {
     otherAddons = true,
 }
 
--- Banco de Dados Persistente (SavedVariables) - Declaração Antecipada Segura
-HaleckAccountImporterDB = HaleckAccountImporterDB or {}
-HaleckAccountImporterDB.version = ADDON_VERSION
-HaleckAccountImporterDB.options = HaleckAccountImporterDB.options or {}
-for k, v in pairs(DEFAULT_OPTIONS) do
-    if HaleckAccountImporterDB.options[k] == nil then
-        HaleckAccountImporterDB.options[k] = v
+-- ========================================================================
+-- BANCO DE DADOS PERSISTENTE (SAVEDVARIABLES) - RESOLVER DINÂMICO SEGURO
+-- O WoW Forever (16001) pode restaurar SavedVariables após a carga inicial de Lua.
+-- O EnsureDB() garante que nunca mantemos uma referência de tabela obsoleta (stale).
+-- ========================================================================
+local DB
+local function EnsureDB()
+    if type(_G.HaleckAccountImporterDB) ~= "table" then
+        _G.HaleckAccountImporterDB = {}
     end
-end
+    DB = _G.HaleckAccountImporterDB
+    DB.version = ADDON_VERSION
+    if type(DB.options) ~= "table" then DB.options = {} end
+    for k, v in pairs(DEFAULT_OPTIONS) do
+        if DB.options[k] == nil then
+            DB.options[k] = v
+        end
+    end
 
--- Inicialização Segura da Estrutura do Diário de Aventura
-HaleckAccountImporterDB.journal = HaleckAccountImporterDB.journal or {}
-HaleckAccountImporterDB.journal.timeline = HaleckAccountImporterDB.journal.timeline or {}
-HaleckAccountImporterDB.journal.bosses = HaleckAccountImporterDB.journal.bosses or {}
-HaleckAccountImporterDB.journal.companions = HaleckAccountImporterDB.journal.companions or {}
-HaleckAccountImporterDB.journal.exploration = HaleckAccountImporterDB.journal.exploration or {}
-HaleckAccountImporterDB.journal.deaths = HaleckAccountImporterDB.journal.deaths or {}
-HaleckAccountImporterDB.journal.statistics = HaleckAccountImporterDB.journal.statistics or {
-    steps = 0,
-    distanceYards = 0,
-    totalQuestsCompleted = 0,
-    totalBossesDefeated = 0,
-    totalCompanionsMet = 0,
-    totalDeaths = 0,
-}
-HaleckAccountImporterDB.history = HaleckAccountImporterDB.history or {}
-HaleckAccountImporterDB.worldBosses = HaleckAccountImporterDB.worldBosses or {}
-HaleckAccountImporterDB.pendingChanges = HaleckAccountImporterDB.pendingChanges or {}
-HaleckAccountImporterDB.sessionStats = HaleckAccountImporterDB.sessionStats or {
-    eventsRecorded = 0,
-    startTime = date("%Y-%m-%d %H:%M:%S"),
-}
+    if type(DB.characters) ~= "table" then DB.characters = {} end
+    if type(DB.profiles) ~= "table" then DB.profiles = {} end
+    if type(DB.wealthHistory) ~= "table" then DB.wealthHistory = {} end
+    if type(DB.tradeHistory) ~= "table" then DB.tradeHistory = {} end
+    if type(DB.settings) ~= "table" then DB.settings = {} end
+    if type(DB.versionCheck) ~= "table" then DB.versionCheck = {} end
+
+    -- Estrutura do Diário de Aventura
+    if type(DB.journal) ~= "table" then DB.journal = {} end
+    if type(DB.journal.timeline) ~= "table" then DB.journal.timeline = {} end
+    if type(DB.journal.bosses) ~= "table" then DB.journal.bosses = {} end
+    if type(DB.journal.companions) ~= "table" then DB.journal.companions = {} end
+    if type(DB.journal.exploration) ~= "table" then DB.journal.exploration = {} end
+    if type(DB.journal.deaths) ~= "table" then DB.journal.deaths = {} end
+    if type(DB.journal.statistics) ~= "table" then
+        DB.journal.statistics = {
+            steps = 0,
+            distanceYards = 0,
+            totalQuestsCompleted = 0,
+            totalBossesDefeated = 0,
+            totalCompanionsMet = 0,
+            totalDeaths = 0,
+        }
+    end
+
+    if type(DB.history) ~= "table" then DB.history = {} end
+    if type(DB.worldBosses) ~= "table" then DB.worldBosses = {} end
+    if type(DB.pendingChanges) ~= "table" then DB.pendingChanges = {} end
+    if type(DB.sessionStats) ~= "table" then
+        DB.sessionStats = {
+            eventsRecorded = 0,
+            startTime = date("%Y-%m-%d %H:%M:%S"),
+        }
+    end
+
+    return DB
+end
+EnsureDB()
 
 -- Frame Principal de Eventos do Addon com Registro Seguro (Anti-Crash Cross-Version)
 local fCore = CreateFrame("Frame", "HaleckImporterCoreFrame")
@@ -130,6 +156,20 @@ SafeRegisterEvent(fCore, "BANKFRAME_OPENED")
 SafeRegisterEvent(fCore, "BANK_FRAME_OPENED")
 SafeRegisterEvent(fCore, "BAG_UPDATE")
 SafeRegisterEvent(fCore, "BAG_UPDATE_DELAYED")
+
+-- Comércio & Economia entre Jogadores (WoW Forever Trade Network)
+SafeRegisterEvent(fCore, "TRADE_SHOW")
+SafeRegisterEvent(fCore, "TRADE_UPDATE")
+SafeRegisterEvent(fCore, "TRADE_TARGET_ITEM_CHANGED")
+SafeRegisterEvent(fCore, "TRADE_PLAYER_ITEM_CHANGED")
+SafeRegisterEvent(fCore, "TRADE_MONEY_CHANGED")
+SafeRegisterEvent(fCore, "TRADE_ACCEPT_UPDATE")
+SafeRegisterEvent(fCore, "TRADE_CLOSED")
+SafeRegisterEvent(fCore, "PLAYER_MONEY")
+
+-- Sincronização & Notificação de Versão Peer-to-Peer
+SafeRegisterEvent(fCore, "CHAT_MSG_ADDON")
+SafeRegisterEvent(fCore, "CHAT_MSG_ADDON_LOGGED")
 
 -- Tempo de Jogo & Rastreamento
 SafeRegisterEvent(fCore, "TIME_PLAYED_MSG")
@@ -202,7 +242,253 @@ local function RecordDelta(category, action, payload)
 end
 
 -- ========================================================================
--- MELHORIA 2: BANCO CANÔNICO DE WORLD BOSSES DO WOW FOREVER (VANILLA+)
+-- CONTROLE DE VERSÃO, BUILD & ATUALIZAÇÕES CONTÍNUAS (WOW FOREVER ENGINE)
+-- ========================================================================
+local CURRENT_ADDON_VERSION = "4.3.0"
+local CURRENT_SCHEMA_VERSION = 430
+
+-- ========================================================================
+-- CORREÇÕES DE ERROS NATIVOS DA INTERFACE BLIZZARD NO WOW FOREVER (16001)
+-- Identificado na análise de ForeverStatistics:
+-- 1. AchievementShield_SetPoints pode receber nil points durante comparação
+-- 2. AchievementFrameComparison_UpdateStatusBars recebe a string "summary"
+-- 3. AchievementFrameSummary_UpdateAchievements pode ter points e flags nulos
+-- ========================================================================
+local achievementShieldPatched = false
+local function PatchAchievementShield()
+    if achievementShieldPatched then return true end
+    if type(AchievementShield_SetPoints) ~= "function" then return false end
+    local original = AchievementShield_SetPoints
+    AchievementShield_SetPoints = function(points, pointString, normalFont, smallFont)
+        if points == nil then
+            if pointString and pointString.SetText then pointString:SetText("") end
+            return
+        end
+        return original(points, pointString, normalFont, smallFont)
+    end
+    achievementShieldPatched = true
+    return true
+end
+
+local achievementComparisonStatusBarsPatched = false
+local function PatchAchievementComparisonStatusBars()
+    if achievementComparisonStatusBarsPatched then return true end
+    if type(AchievementFrameComparison_UpdateStatusBars) ~= "function" then return false end
+    local originalStatusBars = AchievementFrameComparison_UpdateStatusBars
+    AchievementFrameComparison_UpdateStatusBars = function(id)
+        if id == "summary" or id == nil then return end
+        return originalStatusBars(id)
+    end
+    achievementComparisonStatusBarsPatched = true
+    return true
+end
+
+local achievementSummaryPatched = false
+local function PatchAchievementSummary()
+    if achievementSummaryPatched then return true end
+    if type(AchievementFrameSummary_UpdateAchievements) ~= "function" then return false end
+    local originalSummaryUpdate = AchievementFrameSummary_UpdateAchievements
+    AchievementFrameSummary_UpdateAchievements = function(...)
+        local originalGetAchievementInfo = GetAchievementInfo
+        if type(originalGetAchievementInfo) == "function" then
+            GetAchievementInfo = function(...)
+                local id, name, points, completed, month, day, year, description, flags, icon, rewardText, isGuild, wasEarnedByMe, earnedBy = originalGetAchievementInfo(...)
+                if points == nil then points = 0 end
+                if flags == nil then flags = 0 end
+                return id, name, points, completed, month, day, year, description, flags, icon, rewardText, isGuild, wasEarnedByMe, earnedBy
+            end
+        end
+        local ok, err = pcall(originalSummaryUpdate, ...)
+        GetAchievementInfo = originalGetAchievementInfo
+        if not ok then error(err, 0) end
+    end
+    achievementSummaryPatched = true
+    return true
+end
+
+local function EnsureAchievementUI()
+    if C_AddOns and C_AddOns.LoadAddOn then
+        pcall(C_AddOns.LoadAddOn, "Blizzard_AchievementUI")
+    elseif LoadAddOn then
+        pcall(LoadAddOn, "Blizzard_AchievementUI")
+    end
+    PatchAchievementShield()
+    PatchAchievementSummary()
+    PatchAchievementComparisonStatusBars()
+end
+
+-- ========================================================================
+-- SISTEMA DE HISTÓRICO DE TROCAS & ECONOMIA (TRADE & WEALTH LEDGER)
+-- Inspirado na engenharia de ForeverStatistics e adaptado ao Diário de Bordo
+-- ========================================================================
+local tradeSession = nil
+
+local function RecordWealthSnapshot()
+    EnsureDB()
+    local money = (GetMoney and GetMoney()) or 0
+    local charKey = UnitName("player") or "Player"
+    if GetFullCharacterName then charKey = GetFullCharacterName() end
+    HaleckAccountImporterDB.wealthHistory = HaleckAccountImporterDB.wealthHistory or {}
+    HaleckAccountImporterDB.wealthHistory[charKey] = HaleckAccountImporterDB.wealthHistory[charKey] or {}
+    local hist = HaleckAccountImporterDB.wealthHistory[charKey]
+    table.insert(hist, 1, {
+        timestamp = time(),
+        date = GetCurrentTimestamp(),
+        money = money,
+        formatted = string.format("%dg %ds %dc", math.floor(money / 10000), math.floor((money % 10000) / 100), money % 100)
+    })
+    while #hist > 60 do table.remove(hist) end
+end
+
+local function UpdateTradeSnapshot()
+    if not tradeSession then return end
+    tradeSession.playerMoney = (GetPlayerTradeMoney and GetPlayerTradeMoney()) or 0
+    tradeSession.targetMoney = (GetTargetTradeMoney and GetTargetTradeMoney()) or 0
+    tradeSession.playerItems = {}
+    tradeSession.targetItems = {}
+    local maxTrade = MAX_TRADE_ITEMS or 7
+    for i = 1, maxTrade do
+        local pName, _, pCount = nil, nil, nil
+        if GetTradePlayerItemInfo then pName, _, pCount = GetTradePlayerItemInfo(i) end
+        local pLink = GetTradePlayerItemLink and GetTradePlayerItemLink(i)
+        if pName or pLink then
+            local itemName = pName or (pLink and pLink:match("%[(.-)%]")) or "Item"
+            table.insert(tradeSession.playerItems, {
+                name = itemName,
+                link = pLink or itemName,
+                count = pCount or 1,
+            })
+        end
+
+        local tName, _, tCount = nil, nil, nil
+        if GetTradeTargetItemInfo then tName, _, tCount = GetTradeTargetItemInfo(i) end
+        local tLink = GetTradeTargetItemLink and GetTradeTargetItemLink(i)
+        if tName or tLink then
+            local itemName = tName or (tLink and tLink:match("%[(.-)%]")) or "Item"
+            table.insert(tradeSession.targetItems, {
+                name = itemName,
+                link = tLink or itemName,
+                count = tCount or 1,
+            })
+        end
+    end
+end
+
+local function StartTradeSession()
+    local partner = nil
+    if GetFullCharacterName then
+        partner = GetFullCharacterName("NPC")
+    end
+    if not partner or partner == "" or partner == "Unknown" then
+        partner = UnitName("NPC") or "Jogador"
+    end
+    tradeSession = {
+        partner = partner,
+        started = time(),
+        playerAccepted = 0,
+        targetAccepted = 0,
+        playerMoney = 0,
+        targetMoney = 0,
+        playerItems = {},
+        targetItems = {},
+    }
+    UpdateTradeSnapshot()
+end
+
+local function SaveCompletedTrade()
+    EnsureDB()
+    if not tradeSession or tradeSession.playerAccepted ~= 1 or tradeSession.targetAccepted ~= 1 then
+        tradeSession = nil
+        return
+    end
+    UpdateTradeSnapshot()
+    local partner = tradeSession.partner or "Jogador"
+    local entry = {
+        timestamp = time(),
+        date = GetCurrentTimestamp(),
+        partner = partner,
+        playerMoney = tradeSession.playerMoney or 0,
+        targetMoney = tradeSession.targetMoney or 0,
+        playerItems = tradeSession.playerItems or {},
+        targetItems = tradeSession.targetItems or {},
+    }
+    HaleckAccountImporterDB.tradeHistory = HaleckAccountImporterDB.tradeHistory or {}
+    table.insert(HaleckAccountImporterDB.tradeHistory, 1, entry)
+    while #HaleckAccountImporterDB.tradeHistory > 100 do
+        table.remove(HaleckAccountImporterDB.tradeHistory)
+    end
+
+    -- Registra no Diário de Aventura
+    if AddJournalTimelineEntry then
+        local gGiven = math.floor((entry.playerMoney or 0) / 10000)
+        local gReceived = math.floor((entry.targetMoney or 0) / 10000)
+        AddJournalTimelineEntry("trade", "Troca com " .. partner,
+            string.format("Negociação concluída. Ouro transferido: %dg | Ouro recebido: %dg | Itens dados: %d | Itens recebidos: %d",
+                gGiven, gReceived, #(entry.playerItems or {}), #(entry.targetItems or {})),
+            "Interface\\Icons\\INV_Misc_Coin_01", entry
+        )
+    end
+
+    RecordWealthSnapshot()
+    tradeSession = nil
+end
+
+-- ========================================================================
+-- PROTOCOLO PEER-TO-PEER DE CHECAGEM DE VERSÃO DO ADDON (HAIVER PROTOCOL)
+-- Permite que grupos e guildas avisem automaticamente se há nova versão
+-- ========================================================================
+local VERSION_PREFIX = "HAIVER"
+local PROTOCOL_MSG = "HAI1"
+local pendingNewestVersion = nil
+
+local function RegisterVersionPrefix()
+    if C_ChatInfo and type(C_ChatInfo.RegisterAddonMessagePrefix) == "function" then
+        pcall(C_ChatInfo.RegisterAddonMessagePrefix, VERSION_PREFIX)
+    elseif type(RegisterAddonMessagePrefix) == "function" then
+        pcall(RegisterAddonMessagePrefix, VERSION_PREFIX)
+    end
+end
+
+local function ParseVersion(val)
+    local nums = {}
+    for p in tostring(val or ""):gmatch("%d+") do
+        table.insert(nums, tonumber(p) or 0)
+        if #nums >= 4 then break end
+    end
+    while #nums < 4 do table.insert(nums, 0) end
+    return nums
+end
+
+local function CompareVersions(a, b)
+    local av, bv = ParseVersion(a), ParseVersion(b)
+    for i = 1, 4 do
+        if av[i] < bv[i] then return -1 end
+        if av[i] > bv[i] then return 1 end
+    end
+    return 0
+end
+
+local function SendVersionMsg(kind, channel, target)
+    if not C_ChatInfo or type(C_ChatInfo.SendAddonMessage) ~= "function" then return false end
+    local msg = PROTOCOL_MSG .. "|" .. kind .. "|" .. CURRENT_ADDON_VERSION
+    return pcall(C_ChatInfo.SendAddonMessage, VERSION_PREFIX, msg, channel, target)
+end
+
+local function BroadcastAddonVersion()
+    if isInCombat or (InCombatLockdown and InCombatLockdown()) then return end
+    RegisterVersionPrefix()
+    if IsInGuild and IsInGuild() then SendVersionMsg("H", "GUILD") end
+    if IsInGroup and IsInGroup() then
+        if IsInRaid and IsInRaid() then
+            SendVersionMsg("H", "RAID")
+        else
+            SendVersionMsg("H", "PARTY")
+        end
+    end
+end
+
+-- ========================================================================
+-- MELHORIA 2: BANCO DINÂMICO DE WORLD BOSSES & CONTEÚDO WOW FOREVER (VANILLA+)
 -- ========================================================================
 local VANILLA_WORLD_BOSSES = {
     kazzak = { id = 12397, name = "Lord Kazzak", zone = "Barreira do Inferno (Blasted Lands)", minRespawn = 72 * 3600, maxRespawn = 96 * 3600, key = "kazzak" },
@@ -212,6 +498,118 @@ local VANILLA_WORLD_BOSSES = {
     lethon = { id = 14888, name = "Lethon", zone = "Terras Altas dos Guarus (The Hinterlands)", minRespawn = 72 * 3600, maxRespawn = 96 * 3600, key = "lethon" },
     emeriss = { id = 14889, name = "Emeriss", zone = "Floresta do Crepúsculo (Duskwood - Twilight Grove)", minRespawn = 72 * 3600, maxRespawn = 96 * 3600, key = "emeriss" },
 }
+
+-- Injetor Dinâmico de Definições de Conteúdo (Novos chefes e missões de WoW Forever)
+local function Haleck_UpdateDynamicDefinitions(customDefs)
+    if not customDefs or type(customDefs) ~= "table" then return end
+    if customDefs.worldBosses and type(customDefs.worldBosses) == "table" then
+        for k, v in pairs(customDefs.worldBosses) do
+            if v and v.name then
+                VANILLA_WORLD_BOSSES[k] = v
+            end
+        end
+    end
+    if HaleckAccountImporterDB then
+        HaleckAccountImporterDB.definitionsCache = HaleckAccountImporterDB.definitionsCache or {}
+        HaleckAccountImporterDB.definitionsCache.lastUpdated = GetCurrentTimestamp()
+        HaleckAccountImporterDB.definitionsCache.customBossCount = 0
+        for _ in pairs(VANILLA_WORLD_BOSSES) do
+            HaleckAccountImporterDB.definitionsCache.customBossCount = HaleckAccountImporterDB.definitionsCache.customBossCount + 1
+        end
+    end
+end
+
+-- ========================================================================
+-- CAMADA DE COMPATIBILIDADE ADAPTATIVA DE APIS (RESILIENTE A NOVAS BUILDS)
+-- ========================================================================
+local function Haleck_SafeGetQuestLogTitle(idx)
+    if C_QuestLog and C_QuestLog.GetInfo then
+        local ok, info = pcall(C_QuestLog.GetInfo, idx)
+        if ok and info then
+            return info.title, info.level, info.suggestedGroup, info.isHeader, info.isCollapsed, info.isComplete, info.frequency, info.questID
+        end
+    end
+    if GetQuestLogTitle then
+        local ok, title, lvl, tag, header, collapsed, complete, freq, qId = pcall(GetQuestLogTitle, idx)
+        if ok then
+            return title, lvl, tag, header, collapsed, complete, freq, qId
+        end
+    end
+    return nil
+end
+
+local function Haleck_SafeGetSpellInfo(spellId)
+    if C_Spell and C_Spell.GetSpellInfo then
+        local ok, sInfo = pcall(C_Spell.GetSpellInfo, spellId)
+        if ok and sInfo then
+            return sInfo.name, sInfo.iconID or sInfo.originalIconID, sInfo.castTime
+        end
+    end
+    if GetSpellInfo then
+        local ok, name, rank, icon, castTime = pcall(GetSpellInfo, spellId)
+        if ok and name then
+            return name, icon, castTime
+        end
+    end
+    return nil
+end
+
+local function Haleck_SafeGetContainerItemInfo(bag, slot)
+    if C_Container and C_Container.GetContainerItemInfo then
+        local ok, info = pcall(C_Container.GetContainerItemInfo, bag, slot)
+        if ok and info then
+            return info.iconFileID, info.stackCount, info.isLocked, info.quality, info.isReadable, info.hasLoot, info.hyperlink, info.isFiltered, info.hasNoValue, info.itemID
+        end
+    end
+    if GetContainerItemInfo then
+        local ok, texture, count, locked, quality, readable, loot, link, filtered, noValue, itemId = pcall(GetContainerItemInfo, bag, slot)
+        if ok then
+            return texture, count, locked, quality, readable, loot, link, filtered, noValue, itemId
+        end
+    end
+    return nil
+end
+
+-- ========================================================================
+-- PIPELINE DE MIGRAÇÃO AUTOMÁTICA DE SAVEDVARIABLES
+-- ========================================================================
+local function Haleck_RunMigrations()
+    if not HaleckAccountImporterDB then return end
+    local currentVer = HaleckAccountImporterDB.schemaVersion or 400
+
+    if currentVer < 410 then
+        -- Migração v4.0.0 -> v4.1.0
+        HaleckAccountImporterDB.definitionsCache = HaleckAccountImporterDB.definitionsCache or {
+            version = CURRENT_ADDON_VERSION,
+            lastUpdated = GetCurrentTimestamp(),
+            customBossCount = 6,
+        }
+        HaleckAccountImporterDB.compatibilityWarnings = HaleckAccountImporterDB.compatibilityWarnings or {}
+        HaleckAccountImporterDB.buildInfo = HaleckAccountImporterDB.buildInfo or {}
+
+        -- Leitura da build real do cliente em tempo de execução
+        if GetBuildInfo then
+            local ok, v, b, d, toc = pcall(GetBuildInfo)
+            if ok then
+                HaleckAccountImporterDB.buildInfo = {
+                    version = tostring(v),
+                    build = tostring(b),
+                    releaseDate = tostring(d),
+                    tocVersion = tostring(toc),
+                    isForeverBeta = (tostring(b) == "16001" or tostring(toc):find("1600")),
+                }
+            end
+        end
+
+        HaleckAccountImporterDB.schemaVersion = CURRENT_SCHEMA_VERSION
+        HaleckAccountImporterDB.addonVersion = CURRENT_ADDON_VERSION
+    end
+
+    -- Se existirem definições cacheadas de uma sessão anterior, mescla na tabela
+    if HaleckAccountImporterDB.definitionsCache and HaleckAccountImporterDB.definitionsCache.worldBosses then
+        Haleck_UpdateDynamicDefinitions({ worldBosses = HaleckAccountImporterDB.definitionsCache.worldBosses })
+    end
+end
 
 -- ========================================================================
 -- MELHORIA 4: MOTOR DE COMPRESSÃO LIBDEFLATE / LZ77 + BASE64 (PURO LUA 5.1)
@@ -971,21 +1369,26 @@ local function HarvestNativeGameStatistics()
         statsCatalog["stat_319"] = tostring(jStats.totalCompanionsMet or 0) .. " companheiros"
     end)
 
-    -- 2. Suporte para clients com achievement system (WotLK / Retail) se disponível
+    -- 2. Suporte canônico para WoW Forever (16001) e clients com Achievement/Statistics System
     pcall(function()
-        if not GetStatisticsCategoryList or not GetCategoryNumList or not GetStatistic then return end
-        local catList = GetStatisticsCategoryList()
-        if not catList then return end
+        if not GetStatisticsCategoryList or not GetStatistic then return end
+        EnsureAchievementUI()
+        local catList = SafeCall(GetStatisticsCategoryList)
+        if type(catList) ~= "table" then return end
 
         for _, catId in ipairs(catList) do
-            local count = GetCategoryNumList(catId)
+            local catName = SafeCall(GetCategoryInfo, catId) or ("Category " .. tostring(catId))
+            local count = SafeCall(GetCategoryNumAchievements, catId) or 0
             if count and count > 0 then
                 for sIndex = 1, count do
-                    local statId = GetStatistic(catId, sIndex)
+                    local statId, statName = SafeCall(GetAchievementInfo, catId, sIndex)
                     if statId then
-                        local statVal = GetStatistic(statId)
+                        local statVal = SafeCall(GetStatistic, statId)
                         if statVal and statVal ~= "" and statVal ~= "--" then
                             statsCatalog["stat_" .. tostring(statId)] = statVal
+                            if statName and statName ~= "" then
+                                statsCatalog[statName] = statVal
+                            end
                         end
                     end
                 end
@@ -1005,9 +1408,20 @@ local function SerializeItem(slotId, includeAllIds)
 
     local name, _, quality, itemLevel, _, itemType, itemSubType, _, equipLoc, texture = GetItemInfo(itemLink or itemId)
     
-    -- Fallback de textura caso GetItemInfo ainda esteja carregando
+    -- Fallback robusto usando C_Item.GetItemInfoInstant para itens ainda não carregados no cache
     if not texture or texture == "" then
-        texture = (GetItemIcon and GetItemIcon(itemId)) or (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemId)) or ""
+        if C_Item and C_Item.GetItemInfoInstant then
+            local ok, _, _, _, _, instantIcon = pcall(C_Item.GetItemInfoInstant, itemId)
+            if ok and instantIcon then texture = instantIcon end
+        end
+        if not texture or texture == "" then
+            texture = (GetItemIcon and GetItemIcon(itemId)) or (C_Item and C_Item.GetItemIconByID and C_Item.GetItemIconByID(itemId)) or ""
+        end
+    end
+
+    if (not itemLevel or itemLevel == 0) and itemLink and GetDetailedItemLevelInfo then
+        local ok, dIlvl = pcall(GetDetailedItemLevelInfo, itemLink)
+        if ok and dIlvl and dIlvl > 0 then itemLevel = dIlvl end
     end
 
     local itemObj = {
@@ -1183,44 +1597,51 @@ end
 
 -- ========================================================================
 -- RESOLUÇÃO DE NOME COMPLETO DO PERSONAGEM (SUPORTE WOW FOREVER VANILLA+)
+-- O WoW Forever (16001 / 1.60.1) introduziu sobrenomes (Surnames) e a API UnitNameUnmodified.
+-- Chamadas diretas de addons podem causar 'Secret Unit Name' taint.
+-- O padrão canônico utiliza securecall(UnitNameUnmodified, unit) para execução segura.
 -- ========================================================================
-local function GetFullCharacterName()
-    local name = (UnitName and UnitName("player")) or "Herói"
-    if name:find("%s+") then return name end
+local function GetFullCharacterName(unit)
+    unit = unit or "player"
+    local firstName, surname
 
-    local surname = nil
-    if UnitSurname then pcall(function() surname = UnitSurname("player") end) end
-    if not surname and UnitLastName then pcall(function() surname = UnitLastName("player") end) end
-    if not surname and GetSurname then pcall(function() surname = GetSurname("player") end) end
-    if not surname and GetPlayerSurname then pcall(function() surname = GetPlayerSurname() end) end
-    if not surname and C_Character and C_Character.GetSurname then
-        pcall(function() surname = C_Character.GetSurname() end)
-    end
-    if not surname and UnitPVPName then
-        pcall(function()
-            local pvp = UnitPVPName("player")
-            if pvp and pvp ~= name and pvp:find(name) then
-                local parts = {}
-                for w in pvp:gmatch("%S+") do table.insert(parts, w) end
-                for i = 1, #parts - 1 do
-                    if parts[i] == name and parts[i+1] then
-                        surname = table.concat(parts, " ", i+1)
-                        break
-                    end
-                end
-            end
-        end)
+    if securecall then
+        if UnitNameUnmodified then
+            firstName, surname = securecall(UnitNameUnmodified, unit)
+        elseif UnitName then
+            firstName, surname = securecall(UnitName, unit)
+        end
+    else
+        if UnitNameUnmodified then
+            firstName, surname = UnitNameUnmodified(unit)
+        elseif UnitName then
+            firstName, surname = UnitName(unit)
+        end
     end
 
-    if surname and surname ~= "" and surname ~= name then
-        return name .. " " .. surname
+    if not firstName or firstName == "" then
+        firstName = (UnitName and UnitName(unit)) or "Herói"
     end
 
-    if HaleckAccountImporterDB and HaleckAccountImporterDB.latestCharacter and HaleckAccountImporterDB.latestCharacter:find("%s+") and HaleckAccountImporterDB.latestCharacter:find(name) then
+    if not surname or surname == "" then
+        if UnitSurname then pcall(function() surname = UnitSurname(unit) end) end
+        if not surname and UnitLastName then pcall(function() surname = UnitLastName(unit) end) end
+        if not surname and GetSurname then pcall(function() surname = GetSurname(unit) end) end
+        if not surname and GetPlayerSurname and (unit == "player") then pcall(function() surname = GetPlayerSurname() end) end
+        if not surname and C_Character and C_Character.GetSurname and (unit == "player") then
+            pcall(function() surname = C_Character.GetSurname() end)
+        end
+    end
+
+    if surname and surname ~= "" and surname ~= firstName then
+        return firstName .. " " .. surname
+    end
+
+    if unit == "player" and HaleckAccountImporterDB and HaleckAccountImporterDB.latestCharacter and HaleckAccountImporterDB.latestCharacter:find("%s+") and HaleckAccountImporterDB.latestCharacter:find(firstName) then
         return HaleckAccountImporterDB.latestCharacter
     end
 
-    return name
+    return firstName
 end
 _G["HaleckAccountImporter_GetFullCharacterName"] = GetFullCharacterName
 
@@ -1641,6 +2062,8 @@ local function ExportCharacterSnapshot(userOpts)
             steps = journalExport.statistics.steps or 0,
             distanceYards = journalExport.statistics.distanceYards or 0,
         },
+        tradeHistory = HaleckAccountImporterDB.tradeHistory or {},
+        wealthHistory = HaleckAccountImporterDB.wealthHistory or {},
         worldBosses = HaleckAccountImporterDB.worldBosses or {},
         pendingChangesCount = #(HaleckAccountImporterDB.pendingChanges or {}),
         sessionStats = HaleckAccountImporterDB.sessionStats or {},
@@ -1817,9 +2240,16 @@ fCore:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
         HaleckAccountImporterDB.history = HaleckAccountImporterDB.history or {}
         HaleckAccountImporterDB.worldBosses = HaleckAccountImporterDB.worldBosses or {}
         HaleckAccountImporterDB.pendingChanges = HaleckAccountImporterDB.pendingChanges or {}
+
+        -- Executa pipeline de migrações automáticas
+        Haleck_RunMigrations()
     elseif event == "PLAYER_LOGIN" then
+        EnsureDB()
+        EnsureAchievementUI()
         RecordExplorationVisit()
         ScanPartyAndRaidMembers()
+        RecordWealthSnapshot()
+        BroadcastAddonVersion()
         -- Gera snapshot inicial do personagem na entrada para SavedVariables já conter dados
         pcall(function()
             if C_Timer and C_Timer.After then
@@ -1828,7 +2258,7 @@ fCore:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                 ExportCharacterSnapshot()
             end
         end)
-        print("|cff00f2fe[Haleck Account Importer v4.0.0]|r Motor ATT, World Bosses & Diário de Aventura ativos! Digite |cffffcc00/hai|r ou |cffffcc00/diario|r para abrir.")
+        print("|cff00f2fe[Haleck Account Importer v4.3.0]|r Motor ATT, Camada Adaptativa WoW Forever & Diário de Aventura ativos! Digite |cffffcc00/hai|r ou |cffffcc00/diario|r para abrir.")
     elseif event == "PLAYER_LOGOUT" then
         -- No logout, gera o snapshot completo consolidando todos os deltas da sessão
         ExportCharacterSnapshot()
@@ -1984,6 +2414,41 @@ fCore:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
                 levelFormatted = FormatTimeStr(level or 0)
             }
         end
+    elseif event == "TRADE_SHOW" then
+        StartTradeSession()
+    elseif event == "TRADE_UPDATE" or event == "TRADE_TARGET_ITEM_CHANGED" or event == "TRADE_PLAYER_ITEM_CHANGED" or event == "TRADE_MONEY_CHANGED" then
+        if not tradeSession then StartTradeSession() end
+        UpdateTradeSnapshot()
+    elseif event == "TRADE_ACCEPT_UPDATE" then
+        if not tradeSession then StartTradeSession() end
+        local pAcc, tAcc = arg1, arg2
+        tradeSession.playerAccepted = pAcc or 0
+        tradeSession.targetAccepted = tAcc or 0
+    elseif event == "TRADE_CLOSED" then
+        SaveCompletedTrade()
+    elseif event == "PLAYER_MONEY" then
+        RecordWealthSnapshot()
+    elseif event == "CHAT_MSG_ADDON" or event == "CHAT_MSG_ADDON_LOGGED" then
+        local prefix, message, channel, sender = arg1, arg2, arg3, arg4
+        if prefix == VERSION_PREFIX and message then
+            local pToken, kind, remoteVer = tostring(message):match("^(HAI1)|([HR])|(.+)$")
+            if pToken == PROTOCOL_MSG and remoteVer and sender ~= UnitName("player") then
+                if CompareVersions(CURRENT_ADDON_VERSION, remoteVer) == -1 then
+                    if not pendingNewestVersion or CompareVersions(pendingNewestVersion, remoteVer) == -1 then
+                        pendingNewestVersion = remoteVer
+                        if not isInCombat then
+                            print(string.format("|cff00f2fe[Haleck Importer]|r Nova versão disponível! Você usa |cffffcc00v%s|r, e |cff00ff00%s|r possui |cffffd100v%s|r.", CURRENT_ADDON_VERSION, sender, remoteVer))
+                        end
+                    end
+                elseif kind == "H" then
+                    if channel == "GUILD" and IsInGuild and IsInGuild() then
+                        SendVersionMsg("R", "WHISPER", sender)
+                    elseif channel == "PARTY" or channel == "RAID" then
+                        SendVersionMsg("R", "WHISPER", sender)
+                    end
+                end
+            end
+        end
     end
 end)
 
@@ -2016,6 +2481,8 @@ _G["HaleckAccountImporter_GetJournal"] = addon.GetJournal
 _G["HaleckAccountImporter_GetQuickStats"] = addon.GetQuickStats
 _G["HaleckAccountImporter_AddJournalEntry"] = AddJournalTimelineEntry
 _G["HaleckAccountImporter_RecordDelta"] = RecordDelta
+_G["HaleckAccountImporter_UpdateDefinitions"] = Haleck_UpdateDynamicDefinitions
+_G["HaleckAccountImporter_RunMigrations"] = Haleck_RunMigrations
 _G["HaleckAccountImporter_IsInCombat"] = function() return isInCombat or (InCombatLockdown and InCombatLockdown()) end
 _G["HaleckAccountImporter_RunSafeCombat"] = RunSafeCombat
 

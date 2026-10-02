@@ -352,3 +352,56 @@ Para o desenvolvimento, manipulação, engenharia reversa e criação de addons 
 - **Papel na Arquitetura:** Hub enciclopédico de design de addons, boas práticas de interface, anatomia de arquivos `.toc`, convenções de áudio/som (`PlaySound`) e conformidade com as políticas de desenvolvedores da Blizzard.
 - **Como usar:** Padrão arquitetural e diretrizes visuais para garantir que o addon `HaleckAccountImporter` e a interface `AddonInterface.lua` sigam a identidade clássica autêntica de World of Warcraft.
 
+---
+
+## 🔬 Análise Canônica do Repositório `testeaddonforeve` (`ForeverStatistics` para WoW Forever)
+**Fonte:** `https://github.com/Haleckson/testeaddonforeve.git`  
+**Addon Analisado:** `ForeverStatistics` (Build alvo: WoW Forever 16001 / `_classic_beta_` / Vanilla+)
+
+### 1. Timing de SavedVariables & Dynamic DB Resolver (`EnsureDB`)
+- **Descoberta Crítica:** No WoW Forever (Build 16001), o cliente pode restaurar o arquivo `SavedVariables` (.lua no disco) **após** os arquivos de código Lua do Addon já terem iniciado sua execução.
+- **Armadilha Comum:** Fazer `local DB = HaleckAccountImporterDB` uma única vez no carregamento do arquivo faz com que `DB` aponte para uma tabela temporária local; quando o cliente WoW injeta os dados reais do disco em `_G.HaleckAccountImporterDB`, o ponteiro local fica obsoleto (stale), resultando em perda aparente de configurações ou dados recém-salvos.
+- **Solução Implementada:** O padrão `EnsureDB()`, invocado sempre que o código acessa caminhos do banco de dados, inspeciona `_G.HaleckAccountImporterDB`, garante a existência de todas as subtabelas aninhadas (`characters`, `journal`, `wealthHistory`, `tradeHistory`, `options`) e retorna a referência viva global.
+
+### 2. Resolução de Primeiro Nome e Sobrenome (`UnitNameUnmodified` via `securecall`)
+- **Particularidade do WoW Forever:** Personagens do WoW Forever possuem sistema de sobrenomes (RP/Vanilla+), retornando Primeiro Nome e Sobrenome.
+- **Anti-Taint:** A execução de `UnitName("player")` a partir de código modificado por addons pode retornar strings truncadas ou o erro de *Secret Unit Name* na build 16001.
+- **Padrão Canônico:**
+  ```lua
+  local firstName, surname
+  if securecall then
+      if UnitNameUnmodified then
+          firstName, surname = securecall(UnitNameUnmodified, unit)
+      elseif UnitName then
+          firstName, surname = securecall(UnitName, unit)
+      end
+  end
+  ```
+  Isso preserva o sobrenome completo (ex: "Arthas Menethil") e garante que a chave do banco de dados permaneça imutável e sem contaminação (taint-free).
+
+### 3. Correções Nativas de Bugs da Interface Blizzard no WoW Forever
+O cliente de teste do WoW Forever possui 3 inconsistências conhecidas no código nativo de Conquistas (`Blizzard_AchievementUI`):
+1. **`AchievementShield_SetPoints`:** Retorna `points == nil` em comparações, gerando erro de `attempt to compare number with nil` na checagem `points < 100`. O patch intercepta e define string vazia com segurança.
+2. **`AchievementFrameComparison_UpdateStatusBars`:** O cliente seleciona a categoria de resumo como a string `"summary"`, e passa para `GetCategoryNumAchievements("summary")` que espera um número. O patch bloqueia chamadas não numéricas.
+3. **`AchievementFrameSummary_UpdateAchievements`:** Conquistas com `points` ou `flags` nulos causam falha em compilações beta. O patch normaliza para `0`.
+4. **`EnsureAchievementUI()`:** Carrega o módulo sob demanda com `C_AddOns.LoadAddOn("Blizzard_AchievementUI")` e aplica os 3 patches preventivamente.
+
+### 4. Livro-Razão de Trocas & Economia (`Trade & Wealth Ledger`)
+- Rastreamento dos eventos `TRADE_SHOW`, `TRADE_UPDATE`, `TRADE_ACCEPT_UPDATE`, `TRADE_CLOSED` e `PLAYER_MONEY`.
+- Registra o parceiro de troca (`NPC` unit em janelas de troca), o dinheiro entregue/recebido e cada item negociado (com quantidade, link e nome).
+- Grava tanto no banco `HaleckAccountImporterDB.tradeHistory` quanto na linha do tempo do Diário de Aventura (`Meu Diário de Aventura` - Subcategoria 10).
+- Mantém o histórico temporal de fortuna (`wealthHistory`) por personagem.
+
+### 5. Protocolo Peer-to-Peer de Notificação de Versão (`HAIVER Protocol`)
+- Utiliza canais nativos de mensagens de addon (`C_ChatInfo.SendAddonMessage` com prefixo `HAIVER`).
+- Comunica com outros usuários do `HaleckAccountImporter` na Guilda (`GUILD`), Grupo de Masmorra (`PARTY`), Raide (`RAID`) ou Instância (`INSTANCE_CHAT`).
+- Ao detectar um usuário com versão superior (ex: v4.3.0 vs v4.2.0), exibe uma notificação limpa no chat fora de combate sem abrir popups incômodos.
+
+### 6. Isolamento de Entrada de Teclado em EditBoxes (`SetPropagateKeyboardInput`)
+- Em EditBoxes com foco (caixas de busca ou cópia de snapshot), as teclas pressionadas pelo usuário (como 'C', 'B', 'M') podem disparar os atalhos globais do WoW (abrir personagem, bolsas, mapa).
+- O padrão `searchBox:SetPropagateKeyboardInput(false)` no `OnEditFocusGained` e `true` no `OnEditFocusLost` isola completamente a digitação, proporcionando a experiência nativa dos melhores addons do jogo.
+
+### 7. Extração Instantânea de Ícones de Itens (`C_Item.GetItemInfoInstant`)
+- Itens recém-vistos que ainda não constam no cache de disco do cliente retornam nulo em `GetItemInfo(itemId)`.
+- O WoW Forever suporta `C_Item.GetItemInfoInstant(itemId)` que retorna o ícone da textura imediatamente sem aguardar o evento `GET_ITEM_INFO_RECEIVED`.
+

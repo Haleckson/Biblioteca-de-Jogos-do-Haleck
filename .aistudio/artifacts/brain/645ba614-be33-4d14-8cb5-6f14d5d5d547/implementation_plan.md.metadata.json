@@ -1,6 +1,6 @@
 {
-  "summary": "Plano de implementação para a reestruturação completa do Painel de Admin em 95% do viewport com navegação em barra lateral fixa à esquerda, abas dedicadas por categoria (Blizzard, Steam, GOG, Mídia & Metadados, e Sistema) e migração de todo o ecossistema do Addon WoW e Simulador In-Game para a sub-aba técnica da Blizzard.",
-  "updatedAt": "2026-09-30T12:58:16.498515102Z",
-  "requestFeedback": true,
-  "userFacing": true
+  "summary":  "Plano de implementação para:\n1. Componente na aba técnica Blizzard com explorador nativo de diretório (File System Access API / webkitdirectory), resolução automática para a pasta Interface/AddOns do WoW Forever (_classic_beta_) e botões distintos de 'Instalar Addon' e 'Atualizar Addon'.\n2. Função de exportação de dados na aba de configurações do WoW com validador de SavedVariables, verificação de integridade de quests e itens conforme o schema do site, e dry-run detalhado com painel de badges de conformidade e auditoria item a item antes da importação definitiva.",
+  "updatedAt":  "2026-10-01T14:33:12.313079391Z",
+  "requestFeedback":  true,
+  "userFacing":  true
 }
