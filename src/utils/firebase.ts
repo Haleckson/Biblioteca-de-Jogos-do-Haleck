@@ -708,3 +708,89 @@ export const queryWoWIdEntitiesFromFirestore = async (
   }
 };
 
+export interface StoredWoWPaths {
+  addonTargetPath?: string;
+  scannerRootPath?: string;
+  selectedWoWVersion?: string;
+  rootPath?: string;
+  versionPaths?: Record<string, string>;
+  lastUpdated?: string;
+}
+
+/**
+ * Saves WoW Addon and Scanner configuration paths to Firebase (both Realtime DB and Firestore)
+ * Ensures paths persist across devices and browser sessions.
+ */
+export const saveWoWPathsToFirebase = async (paths: StoredWoWPaths): Promise<boolean> => {
+  const payload = {
+    ...paths,
+    lastUpdated: new Date().toISOString(),
+  };
+
+  let saved = false;
+
+  // 1. Realtime DB
+  if (db) {
+    try {
+      const dbRef = ref(db, "library/wow_paths");
+      await set(dbRef, payload);
+      saved = true;
+    } catch (err) {
+      console.warn("[Firebase] Aviso ao salvar wow_paths no Realtime DB:", summarizeError(err));
+    }
+  }
+
+  // 2. Firestore Document
+  if (firestoreDb) {
+    try {
+      const docRef = doc(firestoreDb, "app_settings", "wow_paths");
+      await setDoc(docRef, payload, { merge: true });
+      saved = true;
+    } catch (fsErr) {
+      console.warn("[Firebase] Aviso ao salvar wow_paths no Firestore:", summarizeError(fsErr));
+    }
+  }
+
+  return saved;
+};
+
+/**
+ * Real-time listener and synchronizer for WoW paths across devices
+ */
+export const syncWoWPathsFromFirebase = (
+  onPathsLoaded: (paths: StoredWoWPaths | null) => void
+): (() => void) => {
+  if (db) {
+    try {
+      const dbRef = ref(db, "library/wow_paths");
+      const unsub = onValue(
+        dbRef,
+        (snapshot) => {
+          const val = snapshot.val();
+          if (val && (val.addonTargetPath || val.scannerRootPath)) {
+            onPathsLoaded(val);
+          }
+        },
+        (err) => {
+          console.warn("[Firebase] Aviso ao sincronizar wow_paths:", summarizeError(err));
+        }
+      );
+      return unsub;
+    } catch {}
+  }
+
+  // Firestore fallback read once if Realtime DB not available
+  if (firestoreDb) {
+    getDoc(doc(firestoreDb, "app_settings", "wow_paths"))
+      .then((snap) => {
+        if (snap.exists()) {
+          onPathsLoaded(snap.data() as StoredWoWPaths);
+        }
+      })
+      .catch(() => {});
+  }
+
+  return () => {};
+};
+
+

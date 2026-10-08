@@ -1,7 +1,7 @@
 -- ========================================================================
 --  HALECK ACCOUNT IMPORTER - INTERFACE GRÁFICA IN-GAME (UI DUAL-CATEGORY)
 --  Arquivo: AddonInterface.lua
---  Versão: 4.0.0 (ATT-Grade Engine & Meu Diário de Aventura)
+--  Versão: 4.4.0 (ATT-Grade Engine & Meu Diário de Aventura)
 --  Compatibilidade Universal: WoW Forever (16001), Classic Era (11506) & Retail
 --
 --  Identidade Visual Autêntica de World of Warcraft:
@@ -25,6 +25,24 @@ local JournalSearchQuery = ""
 -- Suporte Multi-Versão Seguro para BackdropTemplate
 -- Evita crashes em clientes legados onde BackdropTemplateMixin não existe
 local BACKDROP_TEMPLATE = (BackdropTemplateMixin and "BackdropTemplate") or nil
+
+-- Frame creation helper seguro para todas as versões de WoW (Vanilla 1.12, Camelot 16001, Classic 11506 e Retail)
+-- Evita "bad argument #2 to 'CreateFrame' (string expected, got nil)" e falhas de template em clientes legados
+local _hai_frame_id = 0
+local function SafeCreateFrame(frameType, name, parent, template)
+    if not name or name == "" then
+        _hai_frame_id = _hai_frame_id + 1
+        name = "HAI_AutoFrame_" .. _hai_frame_id
+    end
+    parent = parent or UIParent
+    if template and template ~= "" then
+        local ok, f = pcall(CreateFrame, frameType, name, parent, template)
+        if ok and f then return f end
+    end
+    local ok, f = pcall(CreateFrame, frameType, name, parent)
+    if ok and f then return f end
+    return CreateFrame(frameType, name, parent)
+end
 
 -- Definição dos Parâmetros Granulares Disponíveis para Extração
 local PARAMETERS = {
@@ -103,7 +121,7 @@ end
 -- MODAL DE VISUALIZAÇÃO / CÓPIA DO SNAPSHOT (EXPORT DIALOG)
 -- ========================================================================
 local function ShowExportDialog(snapshot)
-    local frame = HAI_ExportDialog or CreateFrame("Frame", "HAI_ExportDialog", UIParent, BACKDROP_TEMPLATE)
+    local frame = HAI_ExportDialog or SafeCreateFrame("Frame", "HAI_ExportDialog", UIParent, BACKDROP_TEMPLATE)
     frame:SetSize(760, 570)
     frame:SetPoint("CENTER")
     frame:SetMovable(true)
@@ -134,11 +152,11 @@ local function ShowExportDialog(snapshot)
         subTip:SetText("|cff00ff00✔ Snapshot gerado na memória!|r Para gravar no disco agora: clique em |cff00f2fe[Recarregar UI (/reload)]|r ou copie com Ctrl+C.")
         frame.subTip = subTip
 
-        local scroll = CreateFrame("ScrollFrame", "HAI_ExportScroll", frame, "UIPanelScrollFrameTemplate")
+        local scroll = SafeCreateFrame("ScrollFrame", "HAI_ExportScroll", frame, "UIPanelScrollFrameTemplate")
         scroll:SetPoint("TOPLEFT", 22, -72)
         scroll:SetPoint("BOTTOMRIGHT", -38, 68)
 
-        local editBox = CreateFrame("EditBox", nil, scroll)
+        local editBox = SafeCreateFrame("EditBox", "HAI_ExportEditBox", scroll)
         editBox:SetMultiLine(true)
         editBox:SetFontObject("ChatFontNormal")
         editBox:SetWidth(680)
@@ -158,7 +176,7 @@ local function ShowExportDialog(snapshot)
         scroll:SetScrollChild(editBox)
         frame.editBox = editBox
 
-        local btnCopy = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        local btnCopy = SafeCreateFrame("Button", "HAI_ExportBtnCopy", frame, "UIPanelButtonTemplate")
         btnCopy:SetSize(190, 32)
         btnCopy:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 22, 16)
         btnCopy:SetText("📋 Selecionar Texto (Ctrl+C)")
@@ -169,13 +187,13 @@ local function ShowExportDialog(snapshot)
             print("|cff00f2fe[Haleck Importer]|r Texto selecionado! Pressione Ctrl+C para copiar.")
         end)
 
-        local btnClose = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        local btnClose = SafeCreateFrame("Button", "HAI_ExportBtnClose", frame, "UIPanelButtonTemplate")
         btnClose:SetSize(90, 32)
         btnClose:SetPoint("LEFT", btnCopy, "RIGHT", 8, 0)
         btnClose:SetText("Fechar")
         btnClose:SetScript("OnClick", function() frame:Hide() end)
 
-        local btnReload = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        local btnReload = SafeCreateFrame("Button", "HAI_ExportBtnReload", frame, "UIPanelButtonTemplate")
         btnReload:SetSize(220, 32)
         btnReload:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -22, 16)
         btnReload:SetText("|cff00f2fe⚡ Recarregar UI (/reload)|r")
@@ -185,7 +203,7 @@ local function ShowExportDialog(snapshot)
             ReloadUI()
         end)
 
-        local chkCompress = CreateFrame("CheckButton", "HAI_ExportCompressChk", frame, "UICheckButtonTemplate")
+        local chkCompress = SafeCreateFrame("CheckButton", "HAI_ExportCompressChk", frame, "UICheckButtonTemplate")
         chkCompress:SetPoint("LEFT", btnClose, "RIGHT", 10, 0)
         chkCompress:SetChecked(true)
         local chkTxt = chkCompress:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -263,7 +281,7 @@ end
 function HaleckAccountImporter_CreateUI()
     if MainWindow then return MainWindow end
 
-    local win = CreateFrame("Frame", "HaleckMainWindow", UIParent, BACKDROP_TEMPLATE)
+    local win = SafeCreateFrame("Frame", "HaleckMainWindow", UIParent, BACKDROP_TEMPLATE)
     win:SetSize(840, 700)
     win:SetPoint("CENTER")
     win:SetMovable(true)
@@ -285,7 +303,7 @@ function HaleckAccountImporter_CreateUI()
     end
 
     -- Brasão / Ícone com o 'H' Estilizado da Marca Haleck
-    local brandIcon = CreateFrame("Frame", nil, win, BACKDROP_TEMPLATE)
+    local brandIcon = SafeCreateFrame("Frame", "HAI_BrandIcon", win, BACKDROP_TEMPLATE)
     brandIcon:SetSize(36, 36)
     brandIcon:SetPoint("TOPLEFT", win, "TOPLEFT", 20, -14)
     if brandIcon.SetBackdrop then
@@ -318,9 +336,9 @@ function HaleckAccountImporter_CreateUI()
     headerSub:SetText("v4.3.0 • Motor ATT-Grade de Extração Universal & Crônica Permanente do Personagem (WoW Forever)")
 
     -- Botão Fechar Canônico Blizzard ("UIPanelCloseButton")
-    local closeBtn = CreateFrame("Button", nil, win, "UIPanelCloseButton")
+    local closeBtn = SafeCreateFrame("Button", "HAI_CloseBtn", win, "UIPanelCloseButton")
     if not closeBtn then
-        closeBtn = CreateFrame("Button", nil, win)
+        closeBtn = SafeCreateFrame("Button", "HAI_CloseBtnFallback", win)
         closeBtn:SetSize(28, 28)
         local closeText = closeBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
         closeText:SetPoint("CENTER")
@@ -333,7 +351,7 @@ function HaleckAccountImporter_CreateUI()
     end)
 
     -- Banner de Resumo do Personagem & Estatísticas Rápidas
-    local banner = CreateFrame("Frame", nil, win, BACKDROP_TEMPLATE)
+    local banner = SafeCreateFrame("Frame", "HAI_Banner", win, BACKDROP_TEMPLATE)
     banner:SetSize(796, 42)
     banner:SetPoint("TOPLEFT", win, "TOPLEFT", 22, -58)
     if banner.SetBackdrop then
@@ -354,11 +372,11 @@ function HaleckAccountImporter_CreateUI()
     -- ========================================================================
     -- ABAS DE NAVEGAÇÃO SUPERIOR (DUAS CATEGORIAS PRINCIPAIS)
     -- ========================================================================
-    local tabExtraction = CreateFrame("Button", "HAI_Tab1", win, BACKDROP_TEMPLATE)
+    local tabExtraction = SafeCreateFrame("Button", "HAI_Tab1", win, BACKDROP_TEMPLATE)
     tabExtraction:SetSize(250, 34)
     tabExtraction:SetPoint("TOPLEFT", banner, "BOTTOMLEFT", 0, -10)
 
-    local tabJournal = CreateFrame("Button", "HAI_Tab2", win, BACKDROP_TEMPLATE)
+    local tabJournal = SafeCreateFrame("Button", "HAI_Tab2", win, BACKDROP_TEMPLATE)
     tabJournal:SetSize(250, 34)
     tabJournal:SetPoint("LEFT", tabExtraction, "RIGHT", 8, 0)
 
@@ -386,11 +404,11 @@ function HaleckAccountImporter_CreateUI()
     end
 
     -- Containers das duas telas
-    local viewExtraction = CreateFrame("Frame", nil, win)
+    local viewExtraction = SafeCreateFrame("Frame", "HAI_ViewExtraction", win)
     viewExtraction:SetPoint("TOPLEFT", tabExtraction, "BOTTOMLEFT", 0, -8)
     viewExtraction:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -22, 60)
 
-    local viewJournal = CreateFrame("Frame", nil, win)
+    local viewJournal = SafeCreateFrame("Frame", "HAI_ViewJournal", win)
     viewJournal:SetPoint("TOPLEFT", tabExtraction, "BOTTOMLEFT", 0, -8)
     viewJournal:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -22, 20)
     viewJournal:Hide()
@@ -418,11 +436,11 @@ function HaleckAccountImporter_CreateUI()
     -- ========================================================================
     -- CATEGORIA 1: CENTRAL DE EXTRAÇÃO & PARÂMETROS
     -- ========================================================================
-    local scrollExtraction = CreateFrame("ScrollFrame", "HAI_ExtScroll", viewExtraction, "UIPanelScrollFrameTemplate")
+    local scrollExtraction = SafeCreateFrame("ScrollFrame", "HAI_ExtScroll", viewExtraction, "UIPanelScrollFrameTemplate")
     scrollExtraction:SetPoint("TOPLEFT", viewExtraction, "TOPLEFT", 0, 0)
     scrollExtraction:SetPoint("BOTTOMRIGHT", viewExtraction, "BOTTOMRIGHT", -20, 0)
 
-    local contentExtraction = CreateFrame("Frame", nil, scrollExtraction)
+    local contentExtraction = SafeCreateFrame("Frame", "HAI_ExtContent", scrollExtraction)
     contentExtraction:SetSize(776, #PARAMETERS * 38)
     scrollExtraction:SetScrollChild(contentExtraction)
 
@@ -442,7 +460,7 @@ function HaleckAccountImporter_CreateUI()
 
     for i, param in ipairs(PARAMETERS) do
         local yPos = -((i - 1) * 38)
-        local row = CreateFrame("Button", nil, contentExtraction, BACKDROP_TEMPLATE)
+        local row = SafeCreateFrame("Button", "HAI_ParamRow_" .. i, contentExtraction, BACKDROP_TEMPLATE)
         row:SetSize(766, 34)
         row:SetPoint("TOPLEFT", contentExtraction, "TOPLEFT", 0, yPos)
         if row.SetBackdrop then
@@ -499,13 +517,13 @@ function HaleckAccountImporter_CreateUI()
     end
 
     -- Barra Inferior da Categoria 1
-    local bottomBar = CreateFrame("Frame", nil, win)
+    local bottomBar = SafeCreateFrame("Frame", "HAI_BottomBar", win)
     bottomBar:SetPoint("BOTTOMLEFT", win, "BOTTOMLEFT", 22, 14)
     bottomBar:SetPoint("BOTTOMRIGHT", win, "BOTTOMRIGHT", -22, 14)
     bottomBar:SetHeight(40)
     win.bottomBarExtraction = bottomBar
 
-    local btnSelectAll = CreateFrame("Button", nil, bottomBar, "UIPanelButtonTemplate")
+    local btnSelectAll = SafeCreateFrame("Button", "HAI_BtnSelectAll", bottomBar, "UIPanelButtonTemplate")
     btnSelectAll:SetSize(110, 28)
     btnSelectAll:SetPoint("LEFT", bottomBar, "LEFT", 0, 6)
     btnSelectAll:SetText("Marcar Todos")
@@ -515,7 +533,7 @@ function HaleckAccountImporter_CreateUI()
         UpdateExtractionCounter()
     end)
 
-    local btnDeselectAll = CreateFrame("Button", nil, bottomBar, "UIPanelButtonTemplate")
+    local btnDeselectAll = SafeCreateFrame("Button", "HAI_BtnDeselectAll", bottomBar, "UIPanelButtonTemplate")
     btnDeselectAll:SetSize(110, 28)
     btnDeselectAll:SetPoint("LEFT", btnSelectAll, "RIGHT", 6, 0)
     btnDeselectAll:SetText("Desmarcar Todos")
@@ -530,7 +548,7 @@ function HaleckAccountImporter_CreateUI()
     win.counterLabel = counterLabel
     UpdateExtractionCounter()
 
-    local btnSaveExport = CreateFrame("Button", nil, bottomBar, "UIPanelButtonTemplate")
+    local btnSaveExport = SafeCreateFrame("Button", "HAI_BtnSaveExport", bottomBar, "UIPanelButtonTemplate")
     btnSaveExport:SetSize(190, 34)
     btnSaveExport:SetPoint("RIGHT", bottomBar, "RIGHT", 0, 4)
     btnSaveExport:SetText("|cffffd100💾 Salvar Dados|r")
@@ -544,7 +562,7 @@ function HaleckAccountImporter_CreateUI()
         end
     end)
 
-    local btnReloadUI = CreateFrame("Button", nil, bottomBar, "UIPanelButtonTemplate")
+    local btnReloadUI = SafeCreateFrame("Button", "HAI_BtnReloadUI", bottomBar, "UIPanelButtonTemplate")
     btnReloadUI:SetSize(160, 34)
     btnReloadUI:SetPoint("RIGHT", btnSaveExport, "LEFT", -6, 0)
     btnReloadUI:SetText("|cff00f2fe⚡ Recarregar UI|r")
@@ -554,7 +572,7 @@ function HaleckAccountImporter_CreateUI()
         ReloadUI()
     end)
 
-    local btnViewJson = CreateFrame("Button", nil, bottomBar, "UIPanelButtonTemplate")
+    local btnViewJson = SafeCreateFrame("Button", "HAI_BtnViewJson", bottomBar, "UIPanelButtonTemplate")
     btnViewJson:SetSize(120, 34)
     btnViewJson:SetPoint("RIGHT", btnReloadUI, "LEFT", -6, 0)
     btnViewJson:SetText("📋 Ver Código")
@@ -570,7 +588,7 @@ function HaleckAccountImporter_CreateUI()
     -- ========================================================================
     -- CATEGORIA 2: MEU DIÁRIO DE AVENTURA
     -- ========================================================================
-    local journalSidebar = CreateFrame("Frame", nil, viewJournal, BACKDROP_TEMPLATE)
+    local journalSidebar = SafeCreateFrame("Frame", "HAI_JournalSidebar", viewJournal, BACKDROP_TEMPLATE)
     journalSidebar:SetSize(220, 530)
     journalSidebar:SetPoint("TOPLEFT", viewJournal, "TOPLEFT", 0, 0)
     if journalSidebar.SetBackdrop then
@@ -584,7 +602,7 @@ function HaleckAccountImporter_CreateUI()
         journalSidebar:SetBackdropBorderColor(0.14, 0.18, 0.26, 0.7)
     end
 
-    local journalMainArea = CreateFrame("Frame", nil, viewJournal, BACKDROP_TEMPLATE)
+    local journalMainArea = SafeCreateFrame("Frame", "HAI_JournalMainArea", viewJournal, BACKDROP_TEMPLATE)
     journalMainArea:SetPoint("TOPLEFT", journalSidebar, "TOPRIGHT", 10, 0)
     journalMainArea:SetPoint("BOTTOMRIGHT", viewJournal, "BOTTOMRIGHT", 0, 0)
     if journalMainArea.SetBackdrop then
@@ -599,7 +617,7 @@ function HaleckAccountImporter_CreateUI()
     end
 
     -- Barra de Busca do Diário com Botão de Limpar
-    local searchBox = CreateFrame("EditBox", "HAI_JournalSearchBox", journalMainArea, BACKDROP_TEMPLATE)
+    local searchBox = SafeCreateFrame("EditBox", "HAI_JournalSearchBox", journalMainArea, BACKDROP_TEMPLATE)
     searchBox:SetSize(520, 30)
     searchBox:SetPoint("TOPLEFT", journalMainArea, "TOPLEFT", 12, -10)
     searchBox:SetAutoFocus(false)
@@ -632,7 +650,7 @@ function HaleckAccountImporter_CreateUI()
     searchPlaceholder:SetPoint("LEFT", searchBox, "LEFT", 8, 0)
     searchPlaceholder:SetText("🔍 Digite para filtrar memórias, chefes, amigos...")
 
-    local searchClearBtn = CreateFrame("Button", nil, searchBox)
+    local searchClearBtn = SafeCreateFrame("Button", "HAI_JournalSearchClearBtn", searchBox)
     searchClearBtn:SetSize(20, 20)
     searchClearBtn:SetPoint("RIGHT", searchBox, "RIGHT", -6, 0)
     local clearTxt = searchClearBtn:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -664,11 +682,11 @@ function HaleckAccountImporter_CreateUI()
     end)
 
     -- Scroll do Conteúdo do Diário
-    local scrollJournal = CreateFrame("ScrollFrame", "HAI_JournalScroll", journalMainArea, "UIPanelScrollFrameTemplate")
+    local scrollJournal = SafeCreateFrame("ScrollFrame", "HAI_JournalScroll", journalMainArea, "UIPanelScrollFrameTemplate")
     scrollJournal:SetPoint("TOPLEFT", searchBox, "BOTTOMLEFT", 0, -8)
     scrollJournal:SetPoint("BOTTOMRIGHT", journalMainArea, "BOTTOMRIGHT", -28, 12)
 
-    local contentJournal = CreateFrame("Frame", nil, scrollJournal)
+    local contentJournal = SafeCreateFrame("Frame", "HAI_JournalContent", scrollJournal)
     contentJournal:SetSize(526, 600)
     scrollJournal:SetScrollChild(contentJournal)
 
@@ -689,7 +707,7 @@ function HaleckAccountImporter_CreateUI()
 
     local subcatButtons = {}
     for i, sc in ipairs(SUBCATS) do
-        local btn = CreateFrame("Button", nil, journalSidebar, BACKDROP_TEMPLATE)
+        local btn = SafeCreateFrame("Button", "HAI_JournalSubcatBtn_" .. i, journalSidebar, BACKDROP_TEMPLATE)
         btn:SetSize(204, 34)
         btn:SetPoint("TOPLEFT", journalSidebar, "TOPLEFT", 8, -6 - ((i - 1) * 38))
         if btn.SetBackdrop then
@@ -768,7 +786,7 @@ function HaleckAccountImporter_CreateUI()
             win.journalCardPool[idx]:Show()
             return win.journalCardPool[idx]
         end
-        local c = CreateFrame("Frame", nil, contentJournal, BACKDROP_TEMPLATE)
+        local c = SafeCreateFrame("Frame", "HAI_JournalCard_" .. idx, contentJournal, BACKDROP_TEMPLATE)
         c:SetSize(520, 52)
         if c.SetBackdrop then
             c:SetBackdrop({
@@ -1280,13 +1298,10 @@ local function UpdateTopBanner(win)
 end
 
 -- ========================================================================
--- COMANDOS SLASH UNIFICADOS COM SUB-COMANDOS
+-- COMANDOS SLASH UNIFICADOS COM SUB-COMANDOS & DIÁRIO DEDICADO
 -- ========================================================================
 SLASH_HALECK1 = "/hai"
 SLASH_HALECK2 = "/haleck"
-SLASH_HALECK3 = "/diario"
-SLASH_HALECK4 = "/adventure"
-SLASH_HALECK5 = "/journal"
 
 SlashCmdList["HALECK"] = function(msg)
     if (InCombatLockdown and InCombatLockdown()) or (_G["HaleckAccountImporter_IsInCombat"] and _G["HaleckAccountImporter_IsInCombat"]()) then
@@ -1305,37 +1320,73 @@ SlashCmdList["HALECK"] = function(msg)
             ShowExportDialog(snapshot)
         end
         return
+    elseif param == "version" or param == "ver" then
+        print(string.format("|cff00f2fe[Haleck Importer]|r Versão ativa: |cffffd100v%s|r (WoW Forever 16001 / Classic Era).", (addon and addon.Version) or "4.3.0"))
+        if _G["HaleckAccountImporter_BroadcastVersion"] then
+            _G["HaleckAccountImporter_BroadcastVersion"]()
+        end
+        return
+    elseif param == "minimap" then
+        if HaleckMinimapButton then
+            if HaleckMinimapButton:IsShown() then
+                HaleckMinimapButton:Hide()
+                print("|cff00f2fe[Haleck Importer]|r Botão do minimapa ocultado. Digite |cffffd100/hai minimap|r para reexibir.")
+            else
+                HaleckMinimapButton:Show()
+                print("|cff00f2fe[Haleck Importer]|r Botão do minimapa visível.")
+            end
+        end
+        return
+    elseif param == "journal" or param == "diario" then
+        if _G["HAI_Tab2"] then _G["HAI_Tab2"]:Click() end
+        if not win:IsShown() then win:Show() end
+        return
     elseif param == "help" then
         print("|cffffd100[Haleck Account Importer v4.3.0]|r Comandos disponíveis:")
         print("  |cff00f2fe/hai|r ou |cff00f2fe/haleck|r - Abrir janela principal (Central de Extração)")
         print("  |cff00f2fe/diario|r ou |cff00f2fe/journal|r - Abrir diretamente Meu Diário de Aventura")
         print("  |cff00f2fe/hai save|r - Gerar snapshot manual imediato e exibir janela de exportação")
         print("  |cff00f2fe/hai version|r - Verificar versão instalada e anunciar na guilda/grupo")
+        print("  |cff00f2fe/hai minimap|r - Alternar visibilidade do botão do minimapa")
         return
     end
 
-    if msg and (msg:lower():find("diario") or msg:lower():find("journal") or msg:lower():find("adventure")) then
-        if _G["HAI_Tab2"] then _G["HAI_Tab2"]:Click() end
-    end
     if win:IsShown() then win:Hide() else win:Show() end
 end
 
+-- Slash command dedicado para abertura instantânea do Diário de Aventura
+SLASH_HALECKDIARIO1 = "/diario"
+SLASH_HALECKDIARIO2 = "/adventure"
+SLASH_HALECKDIARIO3 = "/journal"
+SlashCmdList["HALECKDIARIO"] = function()
+    if (InCombatLockdown and InCombatLockdown()) or (_G["HaleckAccountImporter_IsInCombat"] and _G["HaleckAccountImporter_IsInCombat"]()) then
+        print("|cffff9900[Haleck Importer]|r Você está em combate! O Diário de Aventura abrirá assim que o combate terminar.")
+        return
+    end
+    local win = HaleckAccountImporter_CreateUI()
+    UpdateTopBanner(win)
+    if _G["HAI_Tab2"] then _G["HAI_Tab2"]:Click() end
+    if not win:IsShown() then win:Show() end
+end
+
 -- ========================================================================
--- BOTÃO DE MINIMAPA COM O 'H' ESTILIZADO (ROTAÇÃO RADIAL 360°)
+-- BOTÃO DE MINIMAPA COM SUPORTE UNIVERSAL (ELLESMERE, BUTTON DRAWER, MBF, LDB)
 -- ========================================================================
 local function CreateMinimapButton()
-    if HaleckMinimapButton then return end
-    local btn = CreateFrame("Button", "HaleckMinimapButton", Minimap)
-    btn:SetSize(34, 34)
+    if HaleckMinimapButton then return HaleckMinimapButton end
+
+    local btn = SafeCreateFrame("Button", "HaleckMinimapButton", Minimap)
+    btn:SetSize(33, 33)
     btn:SetFrameStrata("MEDIUM")
+    btn:SetToplevel(true)
 
     local savedAngle = (HaleckAccountImporterDB and HaleckAccountImporterDB.minimapPos) or 220
     local rad = math.rad(savedAngle)
     local radius = 80
     btn:SetPoint("CENTER", Minimap, "CENTER", math.cos(rad) * radius, math.sin(rad) * radius)
 
-    -- Fundo escuro obsidiana
-    local bg = btn:CreateTexture(nil, "BACKGROUND")
+    -- 1. Textura de Fundo (Requerida por gavetas de botões como Ellesmere e Button Drawer)
+    local bg = btn:CreateTexture("HaleckMinimapButtonBg", "BACKGROUND")
     bg:SetSize(22, 22)
     bg:SetPoint("CENTER", 0, 0)
     if bg.SetColorTexture then
@@ -1346,8 +1397,19 @@ local function CreateMinimapButton()
     end
     btn.bg = bg
 
-    -- Halo / Brilho interno neon ciano
-    local glow = btn:CreateTexture(nil, "BORDER")
+    -- 2. Ícone Principal (CRÍTICO: EllesmereUI, Button Drawer e MBF buscam btn.icon / HaleckMinimapButtonIcon)
+    local icon = btn:CreateTexture("HaleckMinimapButtonIcon", "ARTWORK")
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER", 0, 0)
+    icon:SetTexture("Interface\\Icons\\INV_Misc_Rune_01")
+    if icon.SetTexCoord then
+        icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
+    end
+    btn.icon = icon
+    _G["HaleckMinimapButtonIcon"] = icon
+
+    -- 3. Halo / Brilho interno neon ciano
+    local glow = btn:CreateTexture("HaleckMinimapButtonGlow", "BORDER")
     glow:SetSize(24, 24)
     glow:SetPoint("CENTER", 0, 0)
     glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
@@ -1355,8 +1417,8 @@ local function CreateMinimapButton()
     glow:SetBlendMode("ADD")
     btn.glow = glow
 
-    -- O 'H' ESTILIZADO NA TEMÁTICA DO SITE (HALECK CYAN BRAND)
-    local letterH = btn:CreateFontString(nil, "ARTWORK", "GameFontHighlightHuge")
+    -- 4. O 'H' ESTILIZADO NA TEMÁTICA DO SITE (HALECK CYAN BRAND)
+    local letterH = btn:CreateFontString("HaleckMinimapButtonText", "OVERLAY", "GameFontHighlightHuge")
     letterH:SetPoint("CENTER", 0, 0)
     letterH:SetText("|cff00f2feH|r")
     if letterH.SetShadowColor then
@@ -1365,41 +1427,62 @@ local function CreateMinimapButton()
     end
     btn.letterH = letterH
 
-    -- Anel de Rastreamento Clássico do Minimapa de WoW
-    local border = btn:CreateTexture(nil, "OVERLAY")
+    -- 5. Anel de Rastreamento Clássico (Gavetas como Ellesmere ocultam o border automaticamente)
+    local border = btn:CreateTexture("HaleckMinimapButtonBorder", "OVERLAY")
     border:SetSize(54, 54)
     border:SetPoint("TOPLEFT", 0, 0)
     border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
     border:SetVertexColor(0.85, 0.72, 0.35, 1.0)
     btn.border = border
+    _G["HaleckMinimapButtonBorder"] = border
 
     btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
     btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 
-    -- Suporte a arrasto radial ao redor do minimapa com persistência de ângulo
+    -- 6. Suporte a arrasto radial seguro (desativa se reparentado em uma gaveta como Ellesmere)
     btn:RegisterForDrag("LeftButton")
-    btn:SetScript("OnDragStart", function(self) self.isDragging = true end)
-    btn:SetScript("OnDragStop", function(self)
-        self.isDragging = false
-        if HaleckAccountImporterDB and self.currentAngle then
-            HaleckAccountImporterDB.minimapPos = self.currentAngle
+    btn:SetScript("OnDragStart", function(self)
+        if self:GetParent() ~= Minimap and (not MinimapBackdrop or self:GetParent() ~= MinimapBackdrop) then
+            return -- Ancorado em uma gaveta de addons (ex: Ellesmere), desativar arrasto livre
         end
-    end)
-    btn:SetScript("OnUpdate", function(self)
-        if self.isDragging then
+        self.isDragging = true
+        self:SetScript("OnUpdate", function(s)
             local mx, my = Minimap:GetCenter()
+            if not mx or not my then return end
             local cx, cy = GetCursorPosition()
-            local scale = UIParent:GetEffectiveScale()
+            local scale = Minimap:GetEffectiveScale() or UIParent:GetEffectiveScale() or 1
             cx, cy = cx / scale, cy / scale
             local angle = math.deg(math.atan2(cy - my, cx - mx))
+            if angle < 0 then angle = angle + 360 end
             self.currentAngle = angle
             local curRad = math.rad(angle)
             self:ClearAllPoints()
             self:SetPoint("CENTER", Minimap, "CENTER", math.cos(curRad) * radius, math.sin(curRad) * radius)
+            if HaleckAccountImporterDB then
+                HaleckAccountImporterDB.minimapPos = angle
+            end
+        end)
+    end)
+    btn:SetScript("OnDragStop", function(self)
+        self:SetScript("OnUpdate", nil)
+        self.wasDragging = true
+        if C_Timer and C_Timer.After then
+            C_Timer.After(0.2, function() self.wasDragging = false; self.isDragging = false end)
+        else
+            self.wasDragging = false
+            self.isDragging = false
+        end
+        if HaleckAccountImporterDB and self.currentAngle then
+            HaleckAccountImporterDB.minimapPos = self.currentAngle
         end
     end)
 
     btn:SetScript("OnClick", function(self, button)
+        if self.isDragging or self.wasDragging then return end
+        if (InCombatLockdown and InCombatLockdown()) or (_G["HaleckAccountImporter_IsInCombat"] and _G["HaleckAccountImporter_IsInCombat"]()) then
+            print("|cffff9900[Haleck Importer]|r Você está em combate! Ações de interface protegidas estão bloqueadas temporariamente.")
+            return
+        end
         pcall(function() PlaySound(SOUNDKIT and SOUNDKIT.IG_MAINMENU_OPEN or 841) end)
         local win = HaleckAccountImporter_CreateUI()
         UpdateTopBanner(win)
@@ -1419,10 +1502,10 @@ local function CreateMinimapButton()
         GameTooltip:AddLine("|cff00f2feHaleck|r |cffffd100Account Importer & Diário|r")
         GameTooltip:AddLine("|cffffffffWoW Forever Beta (Build 16001)|r", 0.7, 0.8, 0.9)
         GameTooltip:AddLine(" ")
-        GameTooltip:AddLine("|cffffffffClique Esquerdo:|r Abrir Central de Extração", 0.9, 0.9, 0.9)
-        GameTooltip:AddLine("|cffffcc00Clique Direito:|r Abrir Meu Diário de Aventura", 0.9, 0.9, 0.9)
+        GameTooltip:AddLine("|cffffffffClique Esquerdo:|r Abrir Painel de Importação (|cff00f2fe/hai|r)", 0.9, 0.9, 0.9)
+        GameTooltip:AddLine("|cffffcc00Clique Direito:|r Abrir Meu Diário de Aventura (|cff00f2fe/diario|r)", 0.9, 0.9, 0.9)
         GameTooltip:AddLine("|cff888888Arrastar:|r Reposicionar ao redor do Minimapa", 0.7, 0.7, 0.7)
-        GameTooltip:AddLine("Comandos: |cff00f2fe/hai|r ou |cff00f2fe/diario|r", 0.7, 0.7, 0.7)
+        GameTooltip:AddLine("Compatível com gavetas (Ellesmere, Button Drawer, MBF)", 0.4, 0.85, 1.0)
         GameTooltip:Show()
     end)
     btn:SetScript("OnLeave", function(self)
@@ -1430,6 +1513,58 @@ local function CreateMinimapButton()
         if self.glow then self.glow:SetVertexColor(0.0, 0.85, 1.0, 0.6) end
         GameTooltip:Hide()
     end)
+
+    -- 7. Registro em LibDataBroker-1.1 & LibDBIcon-1.0 (Compatibilidade com Ellesmere, Button Drawer, SexyMap)
+    if LibStub then
+        local LDB = LibStub("LibDataBroker-1.1", true)
+        local LibDBIcon = LibStub("LibDBIcon-1.0", true)
+        if LDB then
+            local dataObj = LDB:NewDataObject("HaleckAccountImporter", {
+                type = "data source",
+                text = "Haleck Importer",
+                icon = "Interface\\Icons\\INV_Misc_Rune_01",
+                OnClick = function(f, b)
+                    if b == "RightButton" then
+                        _G["HaleckAccountImporter_OpenJournal"]()
+                    else
+                        _G["HaleckAccountImporter_ToggleUI"]()
+                    end
+                end,
+                OnTooltipShow = function(tooltip)
+                    tooltip:AddLine("|cff00f2feHaleck|r |cffffd100Account Importer & Diário|r")
+                    tooltip:AddLine("|cffffffffClique Esquerdo:|r Painel de Importação (|cff00f2fe/hai|r)")
+                    tooltip:AddLine("|cffffcc00Clique Direito:|r Jornal de Aventura (|cff00f2fe/diario|r)")
+                end,
+            })
+            if LibDBIcon and dataObj then
+                HaleckAccountImporterDB = HaleckAccountImporterDB or {}
+                HaleckAccountImporterDB.minimap = HaleckAccountImporterDB.minimap or { hide = false }
+                pcall(function()
+                    LibDBIcon:Register("HaleckAccountImporter", dataObj, HaleckAccountImporterDB.minimap)
+                end)
+            end
+        end
+    end
+
+    -- 8. Registro no Addon Compartment Oficial da Blizzard (Retail / Modern FrameXML)
+    if AddonCompartmentFrame and AddonCompartmentFrame.RegisterAddOn then
+        pcall(function()
+            AddonCompartmentFrame:RegisterAddOn({
+                text = "Haleck Account Importer & Diário",
+                icon = "Interface\\Icons\\INV_Misc_Rune_01",
+                notCheckable = true,
+                func = function(f, arg1, arg2, checked, mouseButton)
+                    if mouseButton == "RightButton" then
+                        _G["HaleckAccountImporter_OpenJournal"]()
+                    else
+                        _G["HaleckAccountImporter_ToggleUI"]()
+                    end
+                end,
+            })
+        end)
+    end
+
+    return btn
 end
 
 -- ========================================================================
@@ -1481,9 +1616,10 @@ addon.OpenJournal = _G["HaleckAccountImporter_OpenJournal"]
 addon.OpenExtraction = _G["HaleckAccountImporter_OpenExtraction"]
 addon.SaveSnapshot = _G["HaleckAccountImporter_SaveSnapshot"]
 
--- Registrador de Inicialização
-local loader = CreateFrame("Frame")
+-- Registrador de Inicialização Seguro
+local loader = SafeCreateFrame("Frame", "HAILoaderFrame", UIParent)
 loader:RegisterEvent("PLAYER_LOGIN")
 loader:SetScript("OnEvent", function(self, event)
     CreateMinimapButton()
+    print("|cff00f2fe[Haleck Account Importer v4.4.0]|r Addon pronto! Comandos: |cffffd100/hai|r (Painel de Importação) e |cffffd100/diario|r (Jornal de Aventura).")
 end)

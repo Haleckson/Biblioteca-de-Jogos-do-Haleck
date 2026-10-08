@@ -1,0 +1,22 @@
+## Interface: 16001
+## AllowLoadGameType: camelot
+## Title: |cff00e5ffHaleck|r Account Importer |cffd8b25cForever|r
+## Title-enUS: |cff00e5ffHaleck|r Account Importer |cffd8b25cForever|r
+## Title-ptBR: |cff00e5ffHaleck|r Importador de Conta |cffd8b25cForever|r
+## Notes: Exportador definitivo de conta e personagens para WoW Forever (Vanilla+ Build 16001). Coleta completa de equipamentos, bolsas, banco, talentos, estatísticas completas, missões, reputações, coleções e marcos. Comandos: /haif ou /foreverimporter. Botão no Minimapa compatível com EllesmereUI e gavetas de addons.
+## Notes-enUS: Ultimate account and character exporter for WoW Forever (Vanilla+ Build 16001). Full capture of gear, bags, bank, talents, full stats, quests, reputations, collections, and milestones. Commands: /haif or /foreverimporter. Minimap button compatible with EllesmereUI and addon drawers.
+## Notes-ptBR: Exportador definitivo de conta e personagens para WoW Forever (Vanilla+ Build 16001). Coleta completa de equipamentos, bolsas, banco, talentos, estatísticas completas, missões, reputações, coleções e marcos. Comandos: /haif ou /foreverimporter. Botão no Minimapa compatível com EllesmereUI e gavetas de addons.
+## Author: Haleck
+## Version: 5.0.0-Forever
+## X-Build-Target: World of Warcraft: Forever 1.60.1 (build 70170)
+## X-Category: Character & Account Sync
+## SavedVariables: HaleckAccountImporterForeverDB
+## SavedVariablesPerCharacter: HaleckAccountImporterForeverCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\Icons\INV_Misc_Rune_01
+## AddonCompartmentFunc: HaleckAccountImporterForever_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: HaleckAccountImporterForever_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: HaleckAccountImporterForever_OnAddonCompartmentLeave
+
+HaleckAccountImporterForever.lua

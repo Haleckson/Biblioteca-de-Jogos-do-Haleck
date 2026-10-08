@@ -1,6 +1,6 @@
-## Interface: 40400
-## Title: |cff00f2feHaleck|r Account Importer & Adventure Journal (Cataclysm & MoP Classic)
-## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for Cataclysm & MoP Classic.
+## Interface: 50400
+## Title: |cff00f2feHaleck|r Account Importer & Adventure Journal (MoP Classic)
+## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for Mists of Pandaria Classic.
 ## Author: Haleck
 ## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB

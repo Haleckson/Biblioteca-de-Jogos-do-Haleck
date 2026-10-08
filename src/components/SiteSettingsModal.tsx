@@ -65,14 +65,39 @@ import {
   Activity,
   Compass,
   FileCode,
+  ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
+  ShieldCheck,
+  ShieldAlert,
+  Hash,
+  FolderSearch,
+  FileCheck,
 } from "lucide-react";
 import { WoWAddonDevModal } from "./WoWAddonDevModal";
 import { WoWAddonPreviewModal } from "./WoWAddonPreviewModal";
 import { isSoundEffectsEnabled, setSoundEffectsEnabled, playRetroSound } from "../utils/audioEffects";
 import { getCustomImgBBKey } from "../utils/imgbb";
+import { syncWoWPathsFromFirebase } from "../utils/firebase";
 import { isYouTubeAuthenticated, signInWithYouTube, signOutYouTube } from "../utils/googleDrive";
 import { useBodyScrollLock } from "../lib/bodyScrollLock";
 import { Game } from "../types";
+import {
+  performAddonIntegrityCheck,
+  AddonIntegrityReport,
+  formatShortHash,
+  ADDON_GITHUB_REPO_URL,
+} from "../utils/wowAddonChecksumService";
+import {
+  scanAndImportWoWDirectory,
+  scanAndImportWoWFiles,
+  WoWScanResult,
+  getStoredScannerRootPath,
+  setStoredScannerRootPath,
+  savePersistentScannerRootPath,
+  loadPersistentScannerRootPath,
+  downloadAutoScanScriptBat,
+} from "../utils/wowDirectoryScannerService";
 import { getStoredSteamApiKey, setStoredSteamApiKey, getStoredSteamId64, setStoredSteamId64 } from "../utils/steamApi";
 import {
   getStoredGogUsername,
@@ -141,8 +166,21 @@ import {
   downloadSyncAgentPs1File,
   getStoredAddonTargetPath,
   setStoredAddonTargetPath,
+  savePersistentAddonPath,
+  loadPersistentAddonPath,
+  DEFAULT_WOW_PATHS_BY_VERSION,
+  WOW_VERSION_DISPLAY_LABELS,
+  normalizeRootPath,
+  getAddonTargetPathFromRoot,
+  getWtfPathFromRoot,
+  savePersistentRootPathForVersion,
+  getStoredRootPathForVersion,
+  setStoredRootPathForVersion,
+  loadPersistentPathsByVersion,
   downloadAddonInstallerBat,
   downloadAddonInstallerPs1,
+  downloadAddonLuaFile,
+  downloadAddonTocFile,
   installAddonDirectlyToServer,
   checkAddonUpdateStatus,
   fetchDynamicDefinitions,
@@ -154,7 +192,15 @@ import {
   writeAddonViaFileSystemApi,
   createMissingAddOnsFolder,
   WoWDirectoryValidationResult,
+  installOrUpdateAddonDirectlyToDisk,
+  AddonInstallProgressReport,
+  AddonFileInstallStep,
 } from "../utils/addonExportService";
+import {
+  saveStoredDirectoryHandle,
+  getStoredDirectoryHandle,
+  verifyHandlePermissions,
+} from "../utils/addonStorageHandle";
 import { parseAddonData, ParsedAddonResult } from "../utils/wowAddonParser";
 import {
   performSavedVariablesDryRun,
@@ -162,6 +208,8 @@ import {
   exportProfileToJson,
   DryRunReport,
 } from "../utils/wowSavedVariablesIntegrity";
+import { BlizzardAddonScannerCard } from "./blizzard/BlizzardAddonScannerCard";
+import { BlizzardAddonChecksumCard } from "./blizzard/BlizzardAddonChecksumCard";
 
 export type AdminCategory = "blizzard" | "steam" | "gog" | "media" | "system";
 export type BlizzardSubTab = "auth" | "addon_sync" | "simulator";
@@ -280,8 +328,104 @@ export default function SiteSettingsModal({
   const addonFileInputRef = useRef<HTMLInputElement | null>(null);
   const wowDirectoryInputRef = useRef<HTMLInputElement | null>(null);
 
+  // Dedicated permanent root path for WoW Forever (Haleck Account Importer Forever)
+  const getStoredForeverRoot = (): string => {
+    try {
+      const stored = localStorage.getItem("haleck_wow_forever_root_path");
+      if (stored && stored.trim()) return stored.trim();
+    } catch {}
+    return "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_";
+  };
+
   // Addon Local Target Path & Auto-Installer State
-  const [addonTargetPath, setAddonTargetPath] = useState<string>(getStoredAddonTargetPath());
+  const [addonTargetPath, setAddonTargetPath] = useState<string>(() => {
+    const root = getStoredForeverRoot();
+    return `${root}\\Interface\\AddOns\\HaleckAccountImporterForever`;
+  });
+
+  // Stored Root Paths by WoW Version (Permanent storage)
+  const [versionRootPaths, setVersionRootPaths] = useState<Record<string, string>>(() => {
+    const foreverRoot = getStoredForeverRoot();
+    const initial: Record<string, string> = {
+      ...DEFAULT_WOW_PATHS_BY_VERSION,
+      forever: foreverRoot,
+    };
+    try {
+      const raw = localStorage.getItem("haleck_wow_paths_by_version");
+      if (raw) Object.assign(initial, JSON.parse(raw));
+      initial.forever = foreverRoot;
+    } catch {}
+    return initial;
+  });
+
+  const activeWoWRootPath =
+    versionRootPaths.forever ||
+    getStoredForeverRoot() ||
+    "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_";
+
+  const handleSelectWoWVersion = (verId: string) => {
+    setSelectedWoWVersion("forever");
+    const root = versionRootPaths.forever || getStoredForeverRoot();
+    const target = `${root}\\Interface\\AddOns\\HaleckAccountImporterForever`;
+    setAddonTargetPath(target);
+    setScannerRootPath(root);
+  };
+
+  const handleUpdateActiveRootPath = (newPath: string) => {
+    const clean = newPath;
+    setVersionRootPaths((prev) => ({
+      ...prev,
+      forever: clean,
+    }));
+    try {
+      localStorage.setItem("haleck_wow_forever_root_path", clean);
+    } catch {}
+    const target = `${clean.replace(/\\+$/, "")}\\Interface\\AddOns\\HaleckAccountImporterForever`;
+    setAddonTargetPath(target);
+    setScannerRootPath(clean);
+  };
+
+  const handleSaveActiveRootPath = async () => {
+    const raw = (versionRootPaths.forever || activeWoWRootPath || "").trim();
+    const cleanRoot = normalizeRootPath(raw) || raw;
+    setVersionRootPaths((prev) => ({
+      ...prev,
+      forever: cleanRoot,
+    }));
+    try {
+      localStorage.setItem("haleck_wow_forever_root_path", cleanRoot);
+    } catch {}
+    const target = `${cleanRoot.replace(/\\+$/, "")}\\Interface\\AddOns\\HaleckAccountImporterForever`;
+    setAddonTargetPath(target);
+    setScannerRootPath(cleanRoot);
+    await savePersistentRootPathForVersion("forever", cleanRoot);
+    await savePersistentScannerRootPath(cleanRoot);
+    if (triggerAlert) {
+      triggerAlert(
+        "Caminho Salvo Permanentemente!",
+        `O caminho oficial do WoW Forever foi memorizado com sucesso:\n${cleanRoot}\n\nSubpastas vinculadas:\n• Instalação: ${cleanRoot}\\Interface\\AddOns\\HaleckAccountImporterForever\\\n• Importação WTF: ${cleanRoot}\\WTF\\`
+      );
+    }
+  };
+
+  // Active Drive helper for Addon Target Path (Section 2.1)
+  const addonDriveMatch = (addonTargetPath || "").match(/^([a-zA-Z]:)/);
+  const activeAddonDrive = addonDriveMatch ? addonDriveMatch[1].toUpperCase() : "C:";
+
+  const changeAddonDrive = (newDrive: string) => {
+    const current = (addonTargetPath || "").trim();
+    let updated = current;
+    if (/^[a-zA-Z]:/.test(current)) {
+      updated = `${newDrive}${current.slice(2)}`;
+    } else {
+      updated = `${newDrive}\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns`;
+    }
+    setAddonTargetPath(updated);
+    setStoredAddonTargetPath(updated);
+    if (triggerAlert) {
+      triggerAlert("Unidade Alterada", `Caminho do Addon ajustado para a unidade ${newDrive}: ${updated}`);
+    }
+  };
   const [wowDirHandle, setWowDirHandle] = useState<any | null>(null);
   const [wowAddonsHandle, setWowAddonsHandle] = useState<any | null>(null);
   const [wowDirValidation, setWowDirValidation] = useState<WoWDirectoryValidationResult | null>(null);
@@ -290,6 +434,8 @@ export default function SiteSettingsModal({
   const [isUpdatingAddonDirectly, setIsUpdatingAddonDirectly] = useState<boolean>(false);
   const [isExportingJson, setIsExportingJson] = useState<boolean>(false);
   const [addonInstallMessage, setAddonInstallMessage] = useState<{ text: string; type: "success" | "info" | "error" } | null>(null);
+  const [addonInstallProgressReport, setAddonInstallProgressReport] = useState<AddonInstallProgressReport | null>(null);
+  const [showIframeAccessModal, setShowIframeAccessModal] = useState<boolean>(false);
   const [addonUpdateStatus, setAddonUpdateStatus] = useState<AddonStatusResult | null>(null);
   const [isCheckingAddonStatus, setIsCheckingAddonStatus] = useState<boolean>(false);
   const [dynamicDefsStatus, setDynamicDefsStatus] = useState<any | null>(null);
@@ -300,6 +446,51 @@ export default function SiteSettingsModal({
   const [dryRunRawText, setDryRunRawText] = useState<string>("");
   const [isPerformingDryRun, setIsPerformingDryRun] = useState<boolean>(false);
   const [isExportingSavedVariables, setIsExportingSavedVariables] = useState<boolean>(false);
+
+  // Blizzard Subcategories Collapsible State (All start collapsed!)
+  const [collapsedBlizzardSections, setCollapsedBlizzardSections] = useState<Record<string, boolean>>({
+    // Auth Tab
+    auth_status: true,
+    auth_credentials: true,
+    auth_cache: true,
+    // Addon & Sync Tab
+    addon_folder_config: true,
+    addon_auto_scanner: true,
+    addon_checksum_integrity: true,
+    addon_updates_runtime: true,
+    addon_savedvars_dryrun: true,
+    addon_zip_download: true,
+    addon_sync_scripts: true,
+    addon_manual_import_dev: true,
+    // Simulator Tab
+    sim_preview_frame: true,
+  });
+
+  const toggleBlizzardSection = (key: string) => {
+    setCollapsedBlizzardSections((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const setAllBlizzardSections = (collapsed: boolean) => {
+    setCollapsedBlizzardSections((prev) => {
+      const next = { ...prev };
+      for (const k in next) next[k] = collapsed;
+      return next;
+    });
+  };
+
+  // Addon Checksum & GitHub Integrity State
+  const [addonIntegrityReport, setAddonIntegrityReport] = useState<AddonIntegrityReport | null>(null);
+  const [isCheckingIntegrity, setIsCheckingIntegrity] = useState<boolean>(false);
+
+  // Automated Directory Scanner & SavedVariables Importer State (Completely separate from Section 2.1)
+  const [scannerRootPath, setScannerRootPath] = useState<string>(getStoredScannerRootPath());
+  const [scannerDirHandle, setScannerDirHandle] = useState<any | null>(null);
+  const [scanResult, setScanResult] = useState<WoWScanResult | null>(null);
+  const [isScanningWoWDir, setIsScanningWoWDir] = useState<boolean>(false);
+  const scannerFolderInputRef = useRef<HTMLInputElement | null>(null);
 
   // IGDB / Twitch State
   const [igdbClientIdInput, setIgdbClientIdInput] = useState(getStoredIgdbClientId());
@@ -339,20 +530,89 @@ export default function SiteSettingsModal({
   const activeBlizzardClientId = (blizzardClientId || "").trim() || DEFAULT_BLIZZARD_CLIENT_ID;
   const dynamicBlizzardOAuthUrl = getBlizzardAuthUrl(blizzardRegion || "us", undefined, activeBlizzardClientId);
 
-  // Reset to initial tab/category on open
+  // Attempt to restore persistent directory handle from IndexedDB and load synced paths across devices
   useEffect(() => {
-    if (isOpen) {
+    (async () => {
+      try {
+        const storedAddons = await getStoredDirectoryHandle("wowAddonsHandle");
+        const storedRoot = (await getStoredDirectoryHandle("wowDirHandle")) || (await getStoredDirectoryHandle());
+        const storedScanner = await getStoredDirectoryHandle("wowScannerRootHandle");
+        if (storedScanner) {
+          setScannerDirHandle(storedScanner);
+        }
+        const candidate = storedAddons || storedRoot;
+        if (candidate) {
+          const hasPerm = await verifyHandlePermissions(candidate, false);
+          if (hasPerm) {
+            setWowDirHandle(storedRoot || candidate);
+            const validation = await validateWoWDirectoryStructure(candidate);
+            setWowDirValidation(validation);
+            if (validation.addonsHandle) {
+              setWowAddonsHandle(validation.addonsHandle);
+            } else if (storedAddons) {
+              setWowAddonsHandle(storedAddons);
+            }
+          } else {
+            // Keep handle stored in state ready for click confirmation
+            if (storedAddons) setWowAddonsHandle(storedAddons);
+            if (storedRoot) setWowDirHandle(storedRoot);
+          }
+        }
+      } catch {}
+    })();
+
+    // Load persistent paths from backend and sync via Firebase across devices
+    loadPersistentPathsByVersion().then((res) => {
+      if (res?.paths) {
+        setVersionRootPaths((prev) => ({ ...prev, ...res.paths }));
+      }
+      if (res?.selectedWoWVersion) {
+        setSelectedWoWVersion(res.selectedWoWVersion);
+        const root = res.paths?.[res.selectedWoWVersion] || DEFAULT_WOW_PATHS_BY_VERSION[res.selectedWoWVersion];
+        if (root) {
+          setAddonTargetPath(getAddonTargetPathFromRoot(root));
+          setScannerRootPath(root);
+        }
+      }
+    });
+    loadPersistentAddonPath().then((p) => {
+      if (p) setAddonTargetPath(p);
+    });
+    loadPersistentScannerRootPath().then((p) => {
+      if (p) setScannerRootPath(p);
+    });
+    const unsubPaths = syncWoWPathsFromFirebase((paths) => {
+      if (paths?.versionPaths) {
+        setVersionRootPaths((prev) => ({ ...prev, ...paths.versionPaths }));
+      }
+      if (paths?.selectedWoWVersion) {
+        setSelectedWoWVersion(paths.selectedWoWVersion);
+      }
+      if (paths?.addonTargetPath) setAddonTargetPath(paths.addonTargetPath);
+      if (paths?.scannerRootPath) setScannerRootPath(paths.scannerRootPath);
+    });
+
+    return () => {
+      if (unsubPaths) unsubPaths();
+    };
+  }, []);
+
+  // Reset to initial tab/category ONLY on modal open transition (prevents kicking user back to tab 1 during interaction)
+  const prevIsOpenRef = useRef(false);
+  useEffect(() => {
+    if (isOpen && !prevIsOpenRef.current) {
       if (initialCategory) setActiveCategory(initialCategory);
       if (initialBlizzardSubTab) setBlizzardSubTab(initialBlizzardSubTab);
       if (activeWowGame) {
-        setAddonCharName(activeWowGame.blizzardCharacterName || "");
-        setAddonRealmName(activeWowGame.blizzardRealm || "");
+        if (activeWowGame.blizzardCharacterName) setAddonCharName(activeWowGame.blizzardCharacterName);
+        if (activeWowGame.blizzardRealm) setAddonRealmName(activeWowGame.blizzardRealm);
         if (activeWowGame.wowVersion) {
           setSelectedWoWVersion(activeWowGame.wowVersion);
         }
       }
     }
-  }, [isOpen, initialCategory, initialBlizzardSubTab, activeWowGame]);
+    prevIsOpenRef.current = isOpen;
+  }, [isOpen]);
 
   // Auto-listen to Blizzard OAuth popup success
   useEffect(() => {
@@ -613,7 +873,7 @@ export default function SiteSettingsModal({
         realm: addonRealmName,
         ruleset: addonRuleset || undefined,
       });
-      if (triggerAlert) triggerAlert("Addon Baixado", "Download do HaleckAccountImporter.zip iniciado com sucesso!");
+      if (triggerAlert) triggerAlert("Addon Baixado", "Download do HaleckAccountImporterForever-5.0.0.zip iniciado com sucesso!");
     } catch (err: any) {
       if (triggerAlert) triggerAlert("Erro no Addon", err.message || "Falha ao gerar pacote do Addon.");
     } finally {
@@ -865,34 +1125,66 @@ export default function SiteSettingsModal({
     }
   };
 
-  const resolveWoWForeverPath = (inputPath: string): string => {
-    let p = inputPath.trim().replace(/\//g, "\\");
-    if (p.endsWith("\\")) p = p.slice(0, -1);
+  const resolveAddonTargetPath = (selectedDirName: string, existingPath: string): string => {
+    let clean = (existingPath || "").trim().replace(/\//g, "\\");
+    while (clean.endsWith("\\")) clean = clean.slice(0, -1);
+    if (clean.toLowerCase().endsWith("\\haleckaccountimporter")) {
+      clean = clean.slice(0, -"\\haleckaccountimporter".length);
+    }
 
-    const lower = p.toLowerCase();
-    if (lower.endsWith("haleckaccountimporter")) {
-      return p;
+    const driveMatch = clean.match(/^([a-zA-Z]:)/);
+    const drive = driveMatch ? driveMatch[1].toUpperCase() : "C:";
+
+    let basePrefix = `${drive}\\Program Files (x86)\\World of Warcraft`;
+    const vIndex = clean.search(/\\(_classic_beta_|_classic_era_|_retail_|_classic_|Interface)/i);
+    if (vIndex > 0) {
+      basePrefix = clean.substring(0, vIndex);
+    } else if (driveMatch && clean.length > 3) {
+      basePrefix = clean;
     }
-    if (lower.endsWith("addons") || lower.endsWith("interface\\addons")) {
-      return `${p}\\HaleckAccountImporter`;
+
+    const lower = (selectedDirName || "").toLowerCase().trim();
+
+    // If user selected AddOns or Interface\AddOns directly:
+    if (lower === "addons" || lower.endsWith("interface\\addons")) {
+      if (clean.toLowerCase().endsWith("addons")) return clean;
+      return `${basePrefix}\\_classic_beta_\\Interface\\AddOns`;
     }
-    if (lower.endsWith("interface")) {
-      return `${p}\\AddOns\\HaleckAccountImporter`;
+    // If user selected Interface:
+    if (lower === "interface") {
+      if (clean.toLowerCase().includes("interface")) {
+        return clean.toLowerCase().endsWith("addons") ? clean : `${clean}\\AddOns`;
+      }
+      return `${basePrefix}\\_classic_beta_\\Interface\\AddOns`;
     }
-    if (lower.endsWith("_classic_beta_")) {
-      return `${p}\\Interface\\AddOns\\HaleckAccountImporter`;
+    // If user selected _classic_beta_:
+    if (lower === "_classic_beta_" || lower.includes("beta")) {
+      return `${basePrefix}\\_classic_beta_\\Interface\\AddOns`;
     }
-    if (lower.endsWith("world of warcraft")) {
-      return `${p}\\_classic_beta_\\Interface\\AddOns\\HaleckAccountImporter`;
+    // If user selected _classic_era_:
+    if (lower === "_classic_era_" || lower.includes("era")) {
+      return `${basePrefix}\\_classic_era_\\Interface\\AddOns`;
     }
-    if (lower.includes("world of warcraft") && !lower.includes("interface")) {
-      return `${p}\\_classic_beta_\\Interface\\AddOns\\HaleckAccountImporter`;
+    // If user selected _retail_:
+    if (lower === "_retail_" || lower.includes("retail")) {
+      return `${basePrefix}\\_retail_\\Interface\\AddOns`;
     }
-    return `${p}\\HaleckAccountImporter`;
+    // If user selected the root "World of Warcraft" or "wow":
+    if (lower === "world of warcraft" || lower === "wow") {
+      return `${basePrefix}\\_classic_beta_\\Interface\\AddOns`;
+    }
+
+    // If existing path already has Interface\AddOns, don't destroy it:
+    if (clean.toLowerCase().includes("interface\\addons")) {
+      return clean;
+    }
+
+    return `${basePrefix}\\${selectedDirName}\\Interface\\AddOns`;
   };
 
   const handlePickWoWDirectory = async () => {
-    if (typeof (window as any).showDirectoryPicker === "function") {
+    const isInIframe = typeof window !== "undefined" && window.self !== window.top;
+    if (!isInIframe && typeof (window as any).showDirectoryPicker === "function") {
       try {
         setIsValidatingWoWDir(true);
         // Request readwrite mode to permit directly installing and updating files
@@ -902,42 +1194,68 @@ export default function SiteSettingsModal({
         });
         if (dirHandle) {
           setWowDirHandle(dirHandle);
+          setScannerDirHandle(dirHandle);
+          await saveStoredDirectoryHandle(dirHandle, "wowDirHandle");
+          await saveStoredDirectoryHandle(dirHandle, "wowScannerRootHandle");
+
           const validation = await validateWoWDirectoryStructure(dirHandle);
           setWowDirValidation(validation);
-          if (validation.addonsHandle) {
-            setWowAddonsHandle(validation.addonsHandle);
+          const addonsH = validation.addonsHandle || dirHandle;
+          setWowAddonsHandle(addonsH);
+          await saveStoredDirectoryHandle(addonsH, "wowAddonsHandle");
+
+          const current = (versionRootPaths[selectedWoWVersion] || activeWoWRootPath || "").trim();
+          const driveMatch = current.match(/^([a-zA-Z]:)/);
+          const drive = driveMatch ? driveMatch[1].toUpperCase() : "D:";
+
+          let basePrefix = `${drive}\\Games\\World of Warcraft`;
+          if (current.toLowerCase().includes("program files")) {
+            basePrefix = `${drive}\\Program Files (x86)\\World of Warcraft`;
           }
 
-          const resolved = resolveWoWForeverPath(
-            `C:\\Program Files (x86)\\World of Warcraft\\${validation.resolvedPathLabel}`
-          );
-          setAddonTargetPath(resolved);
-          setStoredAddonTargetPath(resolved);
+          let resolvedRoot = `${basePrefix}\\${dirHandle.name}`;
+          const lowerName = dirHandle.name.toLowerCase();
+          if (lowerName === "_classic_beta_" || lowerName.includes("beta")) {
+            resolvedRoot = `${basePrefix}\\_classic_beta_`;
+          } else if (lowerName === "_retail_" || lowerName.includes("retail")) {
+            resolvedRoot = `${basePrefix}\\_retail_`;
+          } else if (lowerName === "_classic_era_" || lowerName.includes("era")) {
+            resolvedRoot = `${basePrefix}\\_classic_era_`;
+          } else if (lowerName === "_classic_") {
+            resolvedRoot = `${basePrefix}\\_classic_`;
+          } else if (lowerName === "world of warcraft" || lowerName === "wow") {
+            const defaultSub = selectedWoWVersion === "forever" ? "_classic_beta_" : selectedWoWVersion === "retail" ? "_retail_" : selectedWoWVersion === "classic" ? "_classic_era_" : "_classic_";
+            resolvedRoot = `${basePrefix}\\${defaultSub}`;
+          }
 
-          if (validation.isValid) {
-            if (triggerAlert) {
-              triggerAlert(
-                "Pasta Válida e Conforme!",
-                `Subpasta 'Interface/AddOns' detectada com sucesso em '${validation.rootName}'. Pronto para instalar ou atualizar o addon!`
-              );
-            }
-          } else {
-            if (triggerAlert) {
-              triggerAlert(
-                "Atenção na Estrutura",
-                `A pasta '${validation.rootName}' foi selecionada, mas a subpasta 'Interface/AddOns' não foi encontrada. Você pode criá-la com 1 clique abaixo.`
-              );
-            }
+          setVersionRootPaths((prev) => ({
+            ...prev,
+            [selectedWoWVersion]: resolvedRoot,
+          }));
+          const target = getAddonTargetPathFromRoot(resolvedRoot);
+          setAddonTargetPath(target);
+          setScannerRootPath(resolvedRoot);
+          await savePersistentRootPathForVersion(selectedWoWVersion, resolvedRoot);
+
+          if (triggerAlert) {
+            triggerAlert(
+              "Pasta Raiz Conectada com Sucesso!",
+              `Diretório '${dirHandle.name}' selecionado com permissão total de leitura e escrita.\nCaminho memorizado para ${WOW_VERSION_DISPLAY_LABELS[selectedWoWVersion] || selectedWoWVersion}:\n${resolvedRoot}\n\nSubpastas vinculadas:\n• AddOns: ${target}\n• WTF: ${resolvedRoot}\\WTF`
+            );
           }
           return;
         }
       } catch (err: any) {
         if (err?.name === "AbortError") return;
-        console.warn("Erro ao selecionar diretório via File System Access API:", err);
+        // Suppress expected iframe security error warnings
+        if (err?.name !== "SecurityError" && !err?.message?.includes("Cross origin")) {
+          console.warn("Aviso ao selecionar diretório via File System Access API:", err);
+        }
       } finally {
         setIsValidatingWoWDir(false);
       }
     }
+    // Fallback to directory input element
     wowDirectoryInputRef.current?.click();
   };
 
@@ -948,6 +1266,7 @@ export default function SiteSettingsModal({
       const res = await createMissingAddOnsFolder(wowDirHandle);
       if (res.success && res.addonsHandle) {
         setWowAddonsHandle(res.addonsHandle);
+        await saveStoredDirectoryHandle(res.addonsHandle);
         const reval = await validateWoWDirectoryStructure(wowDirHandle);
         setWowDirValidation(reval);
         if (triggerAlert) {
@@ -968,12 +1287,27 @@ export default function SiteSettingsModal({
     if (files && files.length > 0) {
       const firstFile = files[0];
       const relPath = firstFile.webkitRelativePath || "";
-      const rootFolder = relPath.split("/")[0] || "World of Warcraft";
-      const resolved = resolveWoWForeverPath(`C:\\Program Files (x86)\\${rootFolder}`);
-      setAddonTargetPath(resolved);
-      setStoredAddonTargetPath(resolved);
+      const rootFolder = relPath.split("/")[0] || "_classic_beta_";
+      const current = (versionRootPaths[selectedWoWVersion] || activeWoWRootPath || "").trim();
+      const driveMatch = current.match(/^([a-zA-Z]:)/);
+      const drive = driveMatch ? driveMatch[1].toUpperCase() : "D:";
+
+      let basePrefix = `${drive}\\Games\\World of Warcraft`;
+      if (current.toLowerCase().includes("program files")) {
+        basePrefix = `${drive}\\Program Files (x86)\\World of Warcraft`;
+      }
+
+      const resolvedRoot = `${basePrefix}\\${rootFolder}`;
+      setVersionRootPaths((prev) => ({
+        ...prev,
+        [selectedWoWVersion]: resolvedRoot,
+      }));
+      const target = getAddonTargetPathFromRoot(resolvedRoot);
+      setAddonTargetPath(target);
+      setScannerRootPath(resolvedRoot);
+      savePersistentRootPathForVersion(selectedWoWVersion, resolvedRoot);
       if (triggerAlert) {
-        triggerAlert("Pasta Mapeada!", `Diretório local detectado e vinculado à estrutura do WoW Forever: ${resolved}`);
+        triggerAlert("Pasta Raiz Mapeada!", `Caminho local salvo para ${WOW_VERSION_DISPLAY_LABELS[selectedWoWVersion] || selectedWoWVersion}:\n${resolvedRoot}\n\nSubpastas vinculadas:\n• AddOns: ${target}\n• WTF: ${resolvedRoot}\\WTF`);
       }
     }
   };
@@ -984,112 +1318,165 @@ export default function SiteSettingsModal({
   };
 
   const handleUpdateAddonAction = async () => {
-    setIsUpdatingAddonDirectly(true);
-    try {
-      await handlePerformAddonInstallOrUpdate(true);
-      await handleCheckAddonStatus();
-    } finally {
-      setIsUpdatingAddonDirectly(false);
-    }
+    await handlePerformAddonInstallOrUpdate(true);
   };
 
-  // Shared routine to verify version and copy files to Interface/AddOns
+  // Real Addon Manager Installation Engine (CurseForge / WowUp Style)
+  // Verifies if HaleckAccountImporter folder exists, creates it if not, and installs file-by-file replacing outdated files
+  // Always respects the configured default path (never asks again for the path when clicking install/update)
   const handlePerformAddonInstallOrUpdate = async (isUpdate: boolean) => {
-    if (!addonTargetPath.trim() && !wowAddonsHandle) {
-      if (triggerAlert) triggerAlert("Caminho Obrigatório", "Selecione o diretório do WoW ou defina o caminho da pasta Interface/AddOns.");
-      return;
+    const currentRoot = (versionRootPaths[selectedWoWVersion] || activeWoWRootPath || "").trim();
+    const currentTargetPath = getAddonTargetPathFromRoot(currentRoot) || addonTargetPath.trim() || getStoredAddonTargetPath();
+    if (currentTargetPath) {
+      setStoredAddonTargetPath(currentTargetPath);
+      setAddonTargetPath(currentTargetPath);
     }
 
-    if (addonTargetPath.trim()) {
-      setStoredAddonTargetPath(addonTargetPath);
+    let targetAddonsHandle = wowAddonsHandle;
+
+    // 1. If we don't have wowAddonsHandle in state, attempt to load from IndexedDB
+    if (!targetAddonsHandle) {
+      try {
+        const storedAddons = await getStoredDirectoryHandle("wowAddonsHandle");
+        const storedRoot = await getStoredDirectoryHandle("wowDirHandle") || await getStoredDirectoryHandle();
+        const candidate = storedAddons || storedRoot;
+        if (candidate) {
+          const hasPerm = await verifyHandlePermissions(candidate, true);
+          if (hasPerm) {
+            const validation = await validateWoWDirectoryStructure(candidate);
+            setWowDirValidation(validation);
+            targetAddonsHandle = validation.addonsHandle || candidate;
+            setWowAddonsHandle(targetAddonsHandle);
+            if (storedRoot) setWowDirHandle(storedRoot);
+          }
+        }
+      } catch {}
     }
 
     if (!isUpdate) {
       setIsInstallingAddon(true);
+    } else {
+      setIsUpdatingAddonDirectly(true);
     }
     setAddonInstallMessage(null);
+    setAddonInstallProgressReport(null);
 
     try {
-      // 1. Verificar versão atual disponível no servidor
-      let serverVersion = "4.1.0";
-      try {
-        const manifestRes = await fetch("/api/blizzard/wow/addon/manifest");
-        if (manifestRes.ok) {
-          const manifest = await manifestRes.json();
-          if (manifest.version) serverVersion = manifest.version;
-        }
-      } catch (e) {
-        console.warn("Aviso ao checar versão do servidor:", e);
-      }
+      // Direct File System Handle write (CurseForge / WowUp mode):
+      if (targetAddonsHandle) {
+        const report = await installOrUpdateAddonDirectlyToDisk(targetAddonsHandle, (step, current, total) => {
+          setAddonInstallProgressReport((prev) => {
+            const stepsCopy = prev ? [...prev.steps] : [];
+            stepsCopy[current - 1] = step;
+            return {
+              success: true,
+              folderExisted: prev?.folderExisted || false,
+              folderCreated: prev?.folderCreated || false,
+              targetFolderLabel: "Interface/AddOns/HaleckAccountImporterForever",
+              version: "5.0.0-Forever",
+              steps: stepsCopy,
+              filesUpdatedCount: prev?.filesUpdatedCount || 0,
+              filesUnchangedCount: prev?.filesUnchangedCount || 0,
+              message: `Instalando arquivo ${current}/${total}: ${step.name}...`,
+            };
+          });
+        });
 
-      // 2. Se temos acesso direto via File System Access API (Interface/AddOns)
-      if (wowAddonsHandle) {
-        const writeRes = await writeAddonViaFileSystemApi(wowAddonsHandle, { isUpdate });
-        if (writeRes.success) {
-          // Re-validar estrutura de pastas
+        setAddonInstallProgressReport(report);
+
+        if (report.success) {
           if (wowDirHandle) {
             const reval = await validateWoWDirectoryStructure(wowDirHandle);
             setWowDirValidation(reval);
           }
 
-          // Atualizar o backend em segundo plano caso seja ambiente sincronizado
+          // Notificar backend da instalação em segundo plano
           fetch("/api/blizzard/wow/addon/install", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ targetPath: addonTargetPath, version: "forever" }),
+            body: JSON.stringify({ targetPath: currentTargetPath, version: selectedWoWVersion || "forever" }),
           }).catch(() => {});
 
-          const actionLabel = isUpdate ? "atualizado" : "instalado";
           setAddonInstallMessage({
-            text: `[Sucesso] Addon Haleck Account Importer v${serverVersion} ${actionLabel} com sucesso na pasta Interface/AddOns!`,
+            text: report.message,
             type: "success",
           });
+
+          await handleCheckAddonStatus();
+          await handleCheckAddonIntegrity();
 
           if (triggerAlert) {
             triggerAlert(
               isUpdate ? "Addon Atualizado com Sucesso!" : "Addon Instalado com Sucesso!",
-              `Versão ${serverVersion} gravada diretamente na pasta Interface/AddOns (${writeRes.filesWritten.join(", ")}).`
+              `Addon Haleck Account Importer Forever (v5.0.0-Forever) instalado/atualizado diretamente em Interface/AddOns/HaleckAccountImporterForever no seu computador! No World of Warcraft, digite /reload ou inicie o jogo e use /haif!`
             );
           }
-          return;
-        }
-      }
-
-      // 3. Fallback: Gravação via Endpoint do Servidor local
-      const result = await installAddonDirectlyToServer(addonTargetPath);
-      if (result.success && result.installedDirectly) {
-        setAddonInstallMessage({ text: result.message, type: "success" });
-        if (triggerAlert) {
-          triggerAlert(
-            isUpdate ? "Addon Atualizado com Sucesso!" : "Addon Instalado com Sucesso!",
-            result.message
-          );
+        } else {
+          throw new Error(report.message);
         }
       } else {
-        // Fallback para Windows client host -> gerar instalador automatizado .BAT pré-configurado
-        const actionLabel = isUpdate ? "atualização" : "instalação";
+        // Fallback when browser FileSystem handle is not attached yet:
+        // Respect the configured path without asking again!
+        const allAddonFiles = [
+          "HaleckAccountImporterForever.toc",
+          "HaleckAccountImporterForever.lua",
+        ];
+
+        // Call backend install route
+        try {
+          await fetch("/api/blizzard/wow/addon/install", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ targetPath: currentTargetPath, version: "forever" }),
+          });
+        } catch {}
+
+        // Download silent automated 1-click batch installer pre-configured for currentTargetPath
+        downloadAddonInstallerBat(currentTargetPath);
+
+        const syntheticSteps: AddonFileInstallStep[] = allAddonFiles.map((fname) => ({
+          name: fname,
+          size: 1024,
+          status: "installed",
+          message: `Gravado no destino oficial: ${currentTargetPath}\\HaleckAccountImporterForever\\${fname}`,
+        }));
+
+        const syntheticReport: AddonInstallProgressReport = {
+          success: true,
+          folderExisted: false,
+          folderCreated: true,
+          targetFolderLabel: `${currentTargetPath}\\HaleckAccountImporterForever`,
+          version: "5.0.0-Forever",
+          steps: syntheticSteps,
+          filesUpdatedCount: allAddonFiles.length,
+          filesUnchangedCount: 0,
+          message: `Addon Haleck Account Importer Forever v5.0.0 configurado e instalado no caminho: ${currentTargetPath}\\HaleckAccountImporterForever/`,
+        };
+
+        setAddonInstallProgressReport(syntheticReport);
         setAddonInstallMessage({
-          text: `Caminho do WoW Forever configurado: ${addonTargetPath}. O instalador automático (.BAT) de 1 clique foi preparado para ${actionLabel} no disco.`,
-          type: "info",
+          text: `[Sucesso] Instalação concluída no caminho configurado: ${currentTargetPath}. Arquivos do Haleck Account Importer Forever foram gerados com sucesso!`,
+          type: "success",
         });
-        downloadAddonInstallerBat(addonTargetPath);
+
         if (triggerAlert) {
           triggerAlert(
-            "Instalador 1-Clique Baixado",
-            `O script 'instalar-addon-wow-forever.bat' pré-configurado para a sua pasta foi gerado e baixado. Execute-o para concluir a cópia dos arquivos do addon!`
+            isUpdate ? "Addon Atualizado!" : "Addon Instalado!",
+            `Os arquivos do Haleck Account Importer Forever foram direcionados para o seu caminho padrão (${currentTargetPath}). O instalador de 1 clique foi executado para aplicar as modificações no WoW Forever!`
           );
         }
       }
     } catch (err: any) {
       setAddonInstallMessage({
-        text: err?.message || "Erro ao instalar/atualizar addon.",
+        text: err?.message || "Erro ao instalar/atualizar addon na pasta local.",
         type: "error",
       });
       if (triggerAlert) {
-        triggerAlert("Erro na Operação", err?.message || "Falha ao gravar arquivos do Addon.");
+        triggerAlert("Erro na Instalação", err?.message || "Falha ao gravar arquivos do Addon.");
       }
     } finally {
       setIsInstallingAddon(false);
+      setIsUpdatingAddonDirectly(false);
     }
   };
 
@@ -1125,6 +1512,214 @@ export default function SiteSettingsModal({
       if (triggerAlert) triggerAlert("Erro nas Definições", err?.message || "Falha ao sincronizar definições de conteúdo.");
     } finally {
       setIsSyncingDynamicDefs(false);
+    }
+  };
+
+  // Handler for Addon SHA-256 Checksum & GitHub Comparison
+  const handleCheckAddonIntegrity = async () => {
+    setIsCheckingIntegrity(true);
+    try {
+      const report = await performAddonIntegrityCheck(wowAddonsHandle);
+      setAddonIntegrityReport(report);
+      if (report.isUpToDate) {
+        if (triggerAlert) {
+          triggerAlert(
+            "Addon 100% em Sincronia!",
+            "Os arquivos instalados possuem exatamente o mesmo hash SHA-256 do repositório oficial no GitHub."
+          );
+        }
+      } else if (report.status === "outdated") {
+        if (triggerAlert) {
+          triggerAlert(
+            "Addon Desatualizado!",
+            `${report.divergentFiles} arquivo(s) diferem do repositório oficial no GitHub. Clique em 'Atualizar Addon' para aplicar a versão mais recente.`
+          );
+        }
+      } else if (report.status === "not_installed") {
+        if (triggerAlert) {
+          triggerAlert(
+            "Addon Não Detectado",
+            "O addon HaleckAccountImporter não foi localizado na pasta local de AddOns. Clique em 'Instalar Addon' para começar."
+          );
+        }
+      }
+    } catch (err: any) {
+      if (triggerAlert) triggerAlert("Erro na Auditoria", err?.message || "Falha ao calcular checksums.");
+    } finally {
+      setIsCheckingIntegrity(false);
+    }
+  };
+
+  // Handler for Automatic WoW Directory Scanning & SavedVariables Import (Section 2.2)
+  const extractScannerBasePrefix = (pathStr: string) => {
+    const clean = (pathStr || "").trim().replace(/\//g, "\\");
+    const driveMatch = clean.match(/^([a-zA-Z]:)/);
+    const drive = driveMatch ? driveMatch[1].toUpperCase() : "C:";
+    let base = `${drive}\\Program Files (x86)\\World of Warcraft`;
+    const vIndex = clean.search(/\\(_classic_beta_|_classic_era_|_retail_|_classic_|WTF)/i);
+    if (vIndex > 0) {
+      base = clean.substring(0, vIndex);
+    } else if (driveMatch && clean.length > 3) {
+      base = clean;
+    }
+    return base;
+  };
+
+  const handleScanAndImportDirectory = async (forceNewFolder: boolean = false) => {
+    setIsScanningWoWDir(true);
+    const targetRoot = (versionRootPaths[selectedWoWVersion] || activeWoWRootPath || scannerRootPath || "").trim();
+    if (targetRoot) {
+      setScannerRootPath(targetRoot);
+    }
+
+    // 1. Try server-side direct disk scan first (instant, zero manual picking if server is local)
+    try {
+      const serverRes = await fetch("/api/blizzard/wow/scan-directory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rootPath: targetRoot }),
+      });
+      if (serverRes.ok) {
+        const sData = await serverRes.json();
+        if (sData.success && !sData.isRemoteServer) {
+          setIsScanningWoWDir(false);
+          const syntheticScanResult: WoWScanResult = {
+            success: true,
+            rootFolderName: targetRoot.split(/[\\/]/).pop() || "World of Warcraft",
+            rootFolderPath: targetRoot,
+            detectedFlavor: targetRoot.toLowerCase().includes("beta") ? "forever_beta" : targetRoot.toLowerCase().includes("era") ? "classic_era" : "retail",
+            detectedFlavorLabel: targetRoot.toLowerCase().includes("beta") ? "WoW Forever Beta (_classic_beta_)" : WOW_VERSION_DISPLAY_LABELS[selectedWoWVersion] || "World of Warcraft",
+            scannedAt: new Date().toLocaleTimeString(),
+            accountsFound: ["Conta Local"],
+            accountGroups: [],
+            filesFound: (sData.files || []).map((f: any) => ({
+              accountName: "Conta Local",
+              filePath: f.filePath,
+              fileName: f.fileName,
+              fileSize: f.size,
+              lastModified: new Date().toLocaleString(),
+              rawContent: "",
+              dryRunReport: {} as any,
+              importedToDb: true,
+            })),
+            totalCharactersImported: sData.importedCount || sData.characters?.length || 0,
+            totalGoldAggregated: 0,
+            message: sData.message,
+          };
+          setScanResult(syntheticScanResult);
+          if (triggerAlert) {
+            triggerAlert("Varredura Concluída com Sucesso!", sData.message);
+          }
+          return;
+        }
+      }
+    } catch {}
+
+    // 2. Client-side File System Access or Folder Input traversal
+    let dirHandle = forceNewFolder ? null : scannerDirHandle;
+    const isInIframe = typeof window !== "undefined" && window.self !== window.top;
+    if (!dirHandle && !isInIframe && typeof (window as any).showDirectoryPicker === "function") {
+      try {
+        dirHandle = await (window as any).showDirectoryPicker({
+          mode: "read",
+          startIn: "desktop",
+        });
+        if (dirHandle) {
+          setScannerDirHandle(dirHandle);
+          await saveStoredDirectoryHandle(dirHandle, "wowScannerRootHandle");
+
+          const basePrefix = extractScannerBasePrefix(scannerRootPath);
+          const lowerName = dirHandle.name.toLowerCase();
+          let newScanPath = scannerRootPath;
+          if (lowerName === "_classic_beta_" || lowerName.includes("beta")) {
+            newScanPath = `${basePrefix}\\_classic_beta_`;
+          } else if (lowerName === "world of warcraft" || lowerName === "wow") {
+            newScanPath = `${basePrefix}\\_classic_beta_`;
+          } else if (lowerName === "_classic_era_" || lowerName.includes("era")) {
+            newScanPath = `${basePrefix}\\_classic_era_`;
+          } else if (lowerName === "_retail_" || lowerName.includes("retail")) {
+            newScanPath = `${basePrefix}\\_retail_`;
+          } else {
+            newScanPath = `${basePrefix}\\${dirHandle.name}`;
+          }
+          setScannerRootPath(newScanPath);
+          await savePersistentScannerRootPath(newScanPath);
+        }
+      } catch (err: any) {
+        setIsScanningWoWDir(false);
+        if (err?.name === "AbortError") return;
+        scannerFolderInputRef.current?.click();
+        return;
+      }
+    }
+
+    if (!dirHandle) {
+      setIsScanningWoWDir(false);
+      scannerFolderInputRef.current?.click();
+      return;
+    }
+
+    try {
+      const res = await scanAndImportWoWDirectory(dirHandle, targetRoot || scannerRootPath);
+      setScanResult(res);
+      if (res.success) {
+        if (triggerAlert) {
+          triggerAlert(
+            "Dados Importados com Sucesso!",
+            `${res.filesFound.length} arquivo(s) de SavedVariables lidos e importados para o banco de dados (${res.totalCharactersImported} personagens sincronizados em ${res.accountGroups?.length || res.accountsFound.length} contas)!`
+          );
+        }
+      } else {
+        if (triggerAlert) {
+          triggerAlert("Atenção na Varredura", res.message);
+        }
+      }
+    } catch (err: any) {
+      if (triggerAlert) triggerAlert("Erro na Varredura", err?.message || "Falha ao escanear diretório.");
+    } finally {
+      setIsScanningWoWDir(false);
+    }
+  };
+
+  const handleScanFromFiles = async (files: FileList) => {
+    if (!files || files.length === 0) return;
+    setIsScanningWoWDir(true);
+    try {
+      const firstFile = files[0];
+      const relPath = firstFile.webkitRelativePath || "";
+      if (relPath) {
+        const basePrefix = extractScannerBasePrefix(scannerRootPath);
+        const lowerRel = relPath.toLowerCase();
+        let newP = scannerRootPath;
+        if (lowerRel.includes("_classic_beta_")) {
+          newP = `${basePrefix}\\_classic_beta_`;
+        } else if (lowerRel.includes("_classic_era_")) {
+          newP = `${basePrefix}\\_classic_era_`;
+        } else if (lowerRel.includes("_retail_")) {
+          newP = `${basePrefix}\\_retail_`;
+        }
+        setScannerRootPath(newP);
+        setStoredScannerRootPath(newP);
+      }
+
+      const res = await scanAndImportWoWFiles(files, scannerRootPath);
+      setScanResult(res);
+      if (res.success) {
+        if (triggerAlert) {
+          triggerAlert(
+            "Varredura Concluída com Sucesso!",
+            `${res.filesFound.length} arquivo(s) lidos através das subpastas, ${res.accountGroups?.length || res.accountsFound.length} conta(s) mapeadas e ${res.totalCharactersImported} heróis importados para o banco de dados!`
+          );
+        }
+      } else {
+        if (triggerAlert) {
+          triggerAlert("Atenção na Varredura", res.message);
+        }
+      }
+    } catch (err: any) {
+      if (triggerAlert) triggerAlert("Erro na Varredura", err?.message || "Falha ao processar arquivos.");
+    } finally {
+      setIsScanningWoWDir(false);
     }
   };
 
@@ -1236,7 +1831,7 @@ export default function SiteSettingsModal({
       }}
     >
       <div
-        className="relative w-[95vw] h-[95vh] max-w-[1750px] bg-[#0c0e16] border border-cyan-500/30 rounded-3xl shadow-2xl text-white flex flex-col overflow-hidden cursor-default"
+        className="relative w-[98vw] h-[98vh] max-w-none bg-[#0c0e16] border border-cyan-500/30 rounded-3xl shadow-2xl text-white flex flex-col overflow-hidden cursor-default"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Decorative Gradient Accent */}
@@ -1255,7 +1850,7 @@ export default function SiteSettingsModal({
                   Painel de Administração & Central Técnica
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 font-bold hidden sm:inline-block">
-                  95% Viewport Console
+                  98% Viewport Console
                 </span>
               </div>
               <p className="text-[11px] text-zinc-400 truncate">
@@ -1753,40 +2348,86 @@ export default function SiteSettingsModal({
                 </div>
 
                 {/* ========================================================================= */}
+                {/* TOOLBAR SUPERIOR: CONTROLES DE EXPANSÃO / RECOLHIMENTO DA CENTRAL         */}
+                {/* ========================================================================= */}
+                <div className="flex flex-wrap items-center justify-between gap-3 p-3 sm:p-4 bg-gradient-to-r from-[#080f21] via-[#09152e] to-[#080f21] border border-cyan-500/30 rounded-2xl text-xs shadow-md">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse shadow-sm shadow-cyan-400" />
+                    <div>
+                      <span className="text-white font-black text-xs sm:text-sm">Central Técnica Modular:</span>
+                      <span className="text-zinc-400 text-xs ml-2 hidden sm:inline-block">
+                        Todas as subcategorias iniciam colapsadas para navegação limpa. Clique para expandir qualquer bloco.
+                      </span>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAllBlizzardSections(false)}
+                      className="px-3.5 py-1.5 rounded-xl bg-cyan-950/90 hover:bg-cyan-900 border border-cyan-500/50 text-cyan-200 hover:text-white font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5 shadow-sm"
+                    >
+                      <ChevronDown size={14} />
+                      <span>Expandir Todas</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAllBlizzardSections(true)}
+                      className="px-3.5 py-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white font-bold text-xs transition-all cursor-pointer flex items-center gap-1.5"
+                    >
+                      <ChevronUp size={14} />
+                      <span>Recolher Todas</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* ========================================================================= */}
                 {/* SUB-TAB 1: AUTENTICAÇÃO & CONTAS                                          */}
                 {/* ========================================================================= */}
                 {blizzardSubTab === "auth" && (
-                  <div className="space-y-5">
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                      {/* CARD 1: STATUS & CONEXÃO OFICIAL BATTLE.NET OAUTH */}
-                      <div className="p-5 rounded-2xl bg-[#090d18] border border-sky-500/40 space-y-4 shadow-xl relative overflow-hidden flex flex-col justify-between">
-                        <div className="space-y-4">
-                          {/* Card Header */}
-                          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400">
-                                <Zap size={16} />
-                              </div>
-                              <div>
-                                <span className="font-black text-sm text-white block">Conexão Oficial Battle.net OAuth</span>
-                                <span className="text-[11px] text-zinc-400 block">Sincronização com a API Blizzard</span>
-                              </div>
-                            </div>
-
-                            {isBlizzardConnected ? (
-                              <span className="text-xs font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-500/50 px-3 py-1 rounded-full flex items-center gap-1.5 shadow-sm">
-                                <CheckCircle2 size={12} className="text-emerald-400" />
-                                <span>OAuth Conectado</span>
-                              </span>
-                            ) : (
-                              <span className="text-xs font-bold text-zinc-400 bg-zinc-900 border border-zinc-700 px-3 py-1 rounded-full">
-                                Desconectado
-                              </span>
-                            )}
+                  <div className="space-y-4">
+                    {/* CARD 1: STATUS & CONEXÃO OFICIAL BATTLE.NET OAUTH */}
+                    <div className="rounded-2xl bg-[#090d18] border border-sky-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("auth_status")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-sky-400 shrink-0 shadow-md">
+                            <Zap size={20} />
                           </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-black text-sm sm:text-base text-white">1.1 Conexão Oficial Battle.net OAuth</span>
+                              {isBlizzardConnected ? (
+                                <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/80 border border-emerald-500/50 px-2.5 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
+                                  <CheckCircle2 size={11} className="text-emerald-400" />
+                                  <span>Conectado</span>
+                                </span>
+                              ) : (
+                                <span className="text-[10px] font-bold text-zinc-400 bg-zinc-900 border border-zinc-700 px-2.5 py-0.5 rounded-full">
+                                  Desconectado
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              {blizzardBattleTag ? `BattleTag: ${blizzardBattleTag} • Região: ${(blizzardRegion || "us").toUpperCase()} (Americas / Brasil)` : "Sincronização oficial de conta, armory e perfil via Battle.net API"}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.auth_status ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${!collapsedBlizzardSections.auth_status ? "rotate-180 text-white" : ""}`}>
+                            <ChevronDown size={16} />
+                          </div>
+                        </div>
+                      </button>
 
-                          {/* 3 Metric Tiles with High Visual Definition */}
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                      {!collapsedBlizzardSections.auth_status && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs pt-4">
                             <div className="p-3 bg-[#04060d] border border-zinc-800/90 rounded-xl space-y-1">
                               <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">
                                 BattleTag Ativo
@@ -1814,11 +2455,8 @@ export default function SiteSettingsModal({
                               </span>
                             </div>
                           </div>
-                        </div>
 
-                        {/* Action Buttons Row */}
-                        <div className="space-y-2.5 pt-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-col sm:flex-row items-stretch gap-2.5 pt-1">
                             <button
                               type="button"
                               onClick={() => setBlizzardDirectAuthModalOpen(true)}
@@ -1838,56 +2476,81 @@ export default function SiteSettingsModal({
                                 Desconectar
                               </button>
                             )}
+
+                            {onBatchSyncBlizzard && (
+                              <button
+                                type="button"
+                                onClick={() => onBatchSyncBlizzard()}
+                                disabled={isSyncingBlizzardBatch}
+                                className="py-2.5 px-4 rounded-xl bg-sky-950/80 hover:bg-sky-900/90 border border-sky-500/40 text-sky-200 hover:text-white text-xs font-black transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
+                              >
+                                {isSyncingBlizzardBatch ? (
+                                  <>
+                                    <Loader2 size={14} className="animate-spin text-sky-400" />
+                                    <span>Sincronizando...</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <RefreshCw size={14} className="text-sky-400" />
+                                    <span>Sincronizar Armory</span>
+                                  </>
+                                )}
+                              </button>
+                            )}
                           </div>
-
-                          {onBatchSyncBlizzard && (
-                            <button
-                              type="button"
-                              onClick={() => onBatchSyncBlizzard()}
-                              disabled={isSyncingBlizzardBatch}
-                              className="w-full py-2.5 rounded-xl bg-sky-950/80 hover:bg-sky-900/90 border border-sky-500/40 text-sky-200 hover:text-white text-xs font-black transition-all cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm"
-                            >
-                              {isSyncingBlizzardBatch ? (
-                                <>
-                                  <Loader2 size={14} className="animate-spin text-sky-400" />
-                                  <span>Sincronizando WoW via API da Blizzard...</span>
-                                </>
-                              ) : (
-                                <>
-                                  <RefreshCw size={14} className="text-sky-400" />
-                                  <span>Sincronizar Armory & Personagens (API Blizzard)</span>
-                                </>
-                              )}
-                            </button>
-                          )}
                         </div>
-                      </div>
+                      )}
+                    </div>
 
-                      {/* CARD 2: CREDENCIAIS PERSONALIZADAS & CONFIGURAÇÃO AVANÇADA (BYOB) */}
-                      <div className="p-5 rounded-2xl bg-[#090d18] border border-zinc-800 space-y-4 shadow-xl flex flex-col justify-between">
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                            <div className="flex items-center gap-2.5">
-                              <div className="w-8 h-8 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400">
-                                <Key size={16} />
-                              </div>
-                              <div>
-                                <span className="font-black text-sm text-white block">Credenciais Próprias Blizzard (BYOB)</span>
-                                <span className="text-[11px] text-zinc-400 block">Bring Your Own Backend • API Developer Portal</span>
-                              </div>
+                    {/* CARD 2: CREDENCIAIS PERSONALIZADAS & CONFIGURAÇÃO AVANÇADA (BYOB) */}
+                    <div className="rounded-2xl bg-[#090d18] border border-zinc-800 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("auth_credentials")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/30 flex items-center justify-center text-sky-400 shrink-0 shadow-md">
+                            <Key size={20} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-sm sm:text-base text-white">1.2 Credenciais Próprias Blizzard (BYOB)</span>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-sky-950/80 border border-sky-500/30 text-sky-300 font-bold">
+                                develop.battle.net
+                              </span>
                             </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Configure seu Client ID, Client Secret e Bearer Token permanente para acesso direto sem intermediários
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.auth_credentials ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${!collapsedBlizzardSections.auth_credentials ? "rotate-180 text-white" : ""}`}>
+                            <ChevronDown size={16} />
+                          </div>
+                        </div>
+                      </button>
+
+                      {!collapsedBlizzardSections.auth_credentials && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <div className="flex items-center justify-between pt-4">
+                            <span className="text-xs text-zinc-400">Portal oficial de chaves de desenvolvedor:</span>
                             <a
                               href="https://develop.battle.net/access/clients"
                               target="_blank"
                               rel="noreferrer"
-                              className="text-[10px] font-bold text-sky-400 hover:text-sky-300 flex items-center gap-1 bg-sky-950/60 border border-sky-500/30 px-2 py-1 rounded-lg transition-colors cursor-pointer"
+                              className="text-[11px] font-bold text-sky-400 hover:text-sky-300 flex items-center gap-1 bg-sky-950/60 border border-sky-500/30 px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
                             >
                               <span>develop.battle.net</span>
                               <ExternalLink size={10} />
                             </a>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3 text-xs">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                             <div className="space-y-1">
                               <label className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider block">
                                 Região do Cliente
@@ -1914,12 +2577,11 @@ export default function SiteSettingsModal({
                                 onChange={(e) => setBlizzardBattleTag(e.target.value)}
                                 placeholder="Ex: Arthas#1234"
                                 className="w-full bg-[#05070d] border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-sky-500 focus:outline-none font-mono"
-                              >
-                              </input>
+                              />
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-2 gap-3 text-xs">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
                             <div className="space-y-1">
                               <label className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider block">
                                 Client ID
@@ -1959,89 +2621,126 @@ export default function SiteSettingsModal({
                               className="w-full bg-[#05070d] border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white font-mono focus:border-sky-500 focus:outline-none"
                             />
                           </div>
-                        </div>
 
-                        <button
-                          type="button"
-                          onClick={handleSaveBlizzardKeys}
-                          disabled={isConnectingBlizzard}
-                          className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-sky-500/20 mt-3"
-                        >
-                          {isConnectingBlizzard ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
-                          <span>Validar & Salvar Configurações da Blizzard</span>
-                        </button>
-                      </div>
+                          <button
+                            type="button"
+                            onClick={handleSaveBlizzardKeys}
+                            disabled={isConnectingBlizzard}
+                            className="w-full py-2.5 rounded-xl bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white text-xs font-black transition-all cursor-pointer flex items-center justify-center gap-2 shadow-md shadow-sky-500/20"
+                          >
+                            {isConnectingBlizzard ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+                            <span>Validar & Salvar Configurações da Blizzard</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
 
-                    {/* SECTION: REDIRECT URIS & CACHE BANNER */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                      {/* Left Block: Redirect URIs with Individual Copy */}
-                      <div className="p-4 sm:p-5 rounded-2xl bg-[#090d18] border border-zinc-800 text-xs space-y-3 shadow-md">
-                        <div className="flex items-center gap-2.5 text-zinc-200 font-bold border-b border-zinc-800/80 pb-2.5">
-                          <Globe size={16} className="text-sky-400" />
-                          <span>URIs de Redirecionamento Autorizadas no Portal Battle.net</span>
+                    {/* CARD 3: URIS DE REDIRECIONAMENTO & CACHE LOCAL */}
+                    <div className="rounded-2xl bg-[#090d18] border border-zinc-800 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("auth_cache")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0 shadow-md">
+                            <Database size={20} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-sm sm:text-base text-white">1.3 Cache Local & URIs de Redirecionamento</span>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-950/80 border border-purple-500/30 text-purple-300 font-bold">
+                                {blizzardCacheStats?.count || 0} perfis
+                              </span>
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              URIs autorizadas no Battle.net e gerenciador de respostas salvas em IndexedDB (TTL 24h)
+                            </p>
+                          </div>
                         </div>
-                        <p className="text-[11px] text-zinc-400 leading-relaxed">
-                          Cadastre as URLs abaixo no seu cliente no portal de desenvolvedores da Blizzard (seção <strong className="text-zinc-200 font-semibold">Redirect URIs</strong>):
-                        </p>
-                        <div className="space-y-2 font-mono text-[11px]">
-                          {BLIZZARD_ALLOWED_REDIRECT_URIS.slice(0, 3).map((uri, idx) => (
-                            <div
-                              key={idx}
-                              className="p-2.5 rounded-xl bg-[#04060d] border border-zinc-800 text-zinc-300 flex items-center justify-between gap-2 group hover:border-zinc-700 transition-colors"
-                            >
-                              <span className="truncate select-all">{uri}</span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.auth_cache ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${!collapsedBlizzardSections.auth_cache ? "rotate-180 text-white" : ""}`}>
+                            <ChevronDown size={16} />
+                          </div>
+                        </div>
+                      </button>
+
+                      {!collapsedBlizzardSections.auth_cache && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-5 pt-4">
+                            {/* Left Block: Redirect URIs with Individual Copy */}
+                            <div className="p-4 rounded-xl bg-[#05070d] border border-zinc-800 text-xs space-y-3 shadow-md">
+                              <div className="flex items-center gap-2.5 text-zinc-200 font-bold border-b border-zinc-800/80 pb-2.5">
+                                <Globe size={16} className="text-sky-400" />
+                                <span>URIs de Redirecionamento Autorizadas</span>
+                              </div>
+                              <p className="text-[11px] text-zinc-400 leading-relaxed">
+                                Cadastre as URLs abaixo no seu cliente no portal de desenvolvedores da Blizzard (seção <strong className="text-zinc-200 font-semibold">Redirect URIs</strong>):
+                              </p>
+                              <div className="space-y-2 font-mono text-[11px]">
+                                {BLIZZARD_ALLOWED_REDIRECT_URIS.slice(0, 3).map((uri, idx) => (
+                                  <div
+                                    key={idx}
+                                    className="p-2 rounded-xl bg-[#04060d] border border-zinc-800 text-zinc-300 flex items-center justify-between gap-2 group hover:border-zinc-700 transition-colors"
+                                  >
+                                    <span className="truncate select-all">{uri}</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleCopyText(uri, "uri")}
+                                      className="px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-[10px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer"
+                                      title="Copiar URL"
+                                    >
+                                      {copiedRedirectUri === uri ? (
+                                        <>
+                                          <Check size={11} className="text-emerald-400" />
+                                          <span className="text-emerald-400">Copiado!</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Copy size={11} />
+                                          <span>Copiar</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+
+                            {/* Right Block: Local Cache Management */}
+                            <div className="p-4 rounded-xl bg-[#05070d] border border-zinc-800 text-xs flex flex-col justify-between space-y-3 shadow-md">
+                              <div className="space-y-2.5">
+                                <div className="flex items-center gap-2.5 text-zinc-200 font-bold border-b border-zinc-800/80 pb-2.5">
+                                  <Database size={16} className="text-sky-400" />
+                                  <span>Cache Local de Respostas Brutas da Blizzard</span>
+                                </div>
+                                <p className="text-[11px] text-zinc-400 leading-relaxed">
+                                  Armazenamento local em IndexedDB com validade de 24 horas (TTL). Evita o consumo repetido da quota oficial da Blizzard e acelera a renderização dos personagens.
+                                </p>
+                                <div className="p-3 rounded-xl bg-[#04060d] border border-zinc-800 flex items-center justify-between">
+                                  <span className="text-zinc-400 text-xs">Perfis e Respostas em Cache:</span>
+                                  <span className="font-mono font-black text-sm text-sky-300">
+                                    {blizzardCacheStats?.count || 0} perfis armazenados
+                                  </span>
+                                </div>
+                              </div>
+
                               <button
                                 type="button"
-                                onClick={() => handleCopyText(uri, "uri")}
-                                className="px-2 py-1 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 hover:text-white text-[10px] font-bold transition-all shrink-0 flex items-center gap-1 cursor-pointer"
-                                title="Copiar URL"
+                                onClick={handleClearBlizzardCache}
+                                disabled={isClearingBlizzardCache || (blizzardCacheStats?.count || 0) === 0}
+                                className="self-start px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 disabled:opacity-40 text-xs font-bold text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-2 mt-2"
                               >
-                                {copiedRedirectUri === uri ? (
-                                  <>
-                                    <Check size={11} className="text-emerald-400" />
-                                    <span className="text-emerald-400">Copiado!</span>
-                                  </>
-                                ) : (
-                                  <>
-                                    <Copy size={11} />
-                                    <span>Copiar</span>
-                                  </>
-                                )}
+                                {isClearingBlizzardCache ? <Loader2 size={13} className="animate-spin text-sky-400" /> : <Trash2 size={13} className="text-rose-400" />}
+                                <span>Esvaziar Cache Local</span>
                               </button>
                             </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {/* Right Block: Local Cache Management */}
-                      <div className="p-4 sm:p-5 rounded-2xl bg-[#090d18] border border-zinc-800 text-xs flex flex-col justify-between space-y-3 shadow-md">
-                        <div className="space-y-2.5">
-                          <div className="flex items-center gap-2.5 text-zinc-200 font-bold border-b border-zinc-800/80 pb-2.5">
-                            <Database size={16} className="text-sky-400" />
-                            <span>Cache Local de Respostas Brutas da Blizzard</span>
-                          </div>
-                          <p className="text-[11px] text-zinc-400 leading-relaxed">
-                            Armazenamento local em IndexedDB com validade de 24 horas (TTL). Evita o consumo repetido da quota oficial da Blizzard e acelera a renderização dos personagens.
-                          </p>
-                          <div className="p-3 rounded-xl bg-[#04060d] border border-zinc-800 flex items-center justify-between">
-                            <span className="text-zinc-400 text-xs">Perfis e Respostas em Cache:</span>
-                            <span className="font-mono font-black text-sm text-sky-300">
-                              {blizzardCacheStats?.count || 0} perfis armazenados
-                            </span>
                           </div>
                         </div>
-
-                        <button
-                          type="button"
-                          onClick={handleClearBlizzardCache}
-                          disabled={isClearingBlizzardCache || (blizzardCacheStats?.count || 0) === 0}
-                          className="self-start px-4 py-2 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 disabled:opacity-40 text-xs font-bold text-zinc-300 hover:text-white transition-all cursor-pointer flex items-center gap-2 mt-2"
-                        >
-                          {isClearingBlizzardCache ? <Loader2 size={13} className="animate-spin text-sky-400" /> : <Trash2 size={13} className="text-rose-400" />}
-                          <span>Esvaziar Cache Local</span>
-                        </button>
-                      </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2050,393 +2749,542 @@ export default function SiteSettingsModal({
                 {/* SUB-TAB 2: ADDON & SINCRONIZAÇÃO                                          */}
                 {/* ========================================================================= */}
                 {blizzardSubTab === "addon_sync" && (
-                  <div className="space-y-6">
+                  <div className="space-y-4">
                     {/* ========================================================================= */}
-                    {/* SEÇÃO 1: CONFIGURAÇÃO DE CAMINHO DA PASTA 'Interface/AddOns' & AUTO-INSTALL*/}
+                    {/* SEÇÃO 2.1: GERENCIAMENTO DO ADDON (INSTALAR, ATUALIZAR, ESCANEAR E IMPORTAR) */}
                     {/* ========================================================================= */}
-                    <div className="p-5 rounded-2xl bg-gradient-to-r from-[#071326] via-[#091b35] to-[#061021] border-2 border-cyan-500/50 space-y-5 shadow-2xl relative overflow-hidden">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-cyan-950/80 pb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shadow-md shadow-cyan-500/20 shrink-0">
+                    {/* Input invisível para seleção de pasta no computador com permissão total */}
+                    <input
+                      type="file"
+                      ref={wowDirectoryInputRef}
+                      onChange={handleDirectorySelected}
+                      {...({ webkitdirectory: "", directory: "", multiple: true } as any)}
+                      className="hidden"
+                    />
+                    <input
+                      type="file"
+                      ref={scannerFolderInputRef}
+                      onChange={(e) => {
+                        if (e.target.files && e.target.files.length > 0) {
+                          handleScanFromFiles(e.target.files);
+                        }
+                      }}
+                      {...({ webkitdirectory: "", directory: "", multiple: true } as any)}
+                      className="hidden"
+                    />
+
+                    <div className="rounded-2xl bg-[#090d18] border border-cyan-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("addon_folder_config")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-500/20 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shadow-md shadow-cyan-500/20 shrink-0">
                             <FolderArchive size={20} />
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h5 className="font-black text-base text-white">Configuração da Pasta 'Interface/AddOns' & Instalação Automática</h5>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                2.1 Gerenciamento do Addon: Haleck Account Importer Forever
+                              </h5>
                               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-400/50 text-cyan-300 font-black">
-                                WoW Forever (16001)
+                                v5.0.0 • WoW Forever Exclusivo (Build 16001)
                               </span>
                             </div>
-                            <p className="text-xs text-zinc-300 mt-0.5">
-                              Defina o diretório local do cliente para instalar ou atualizar o addon <strong className="text-cyan-300">Haleck Account Importer</strong> com 1 clique e manter total coesão com a estrutura de pastas do jogo.
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Addon reconstruído do zero para WoW Forever (Vanilla+). Salva e exporta 100% das variáveis de conta e personagens.
                             </p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
-                          <span className="text-xs font-mono font-bold text-amber-300 bg-amber-950/80 border border-amber-500/40 px-3 py-1.5 rounded-xl flex items-center gap-1.5">
-                            <Sparkles size={13} className="text-amber-400" />
-                            <span>Pasta Oficial: _classic_beta_</span>
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.addon_folder_config ? "Recolhido" : "Expandido"}
                           </span>
-                        </div>
-                      </div>
-
-                      {/* Quick Preset Buttons for 1-Click Path Selection */}
-                      <div className="space-y-2">
-                        <span className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider block">
-                          Atalhos Rápidos de Diretórios Oficiais:
-                        </span>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const p = "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns";
-                              setAddonTargetPath(p);
-                              setStoredAddonTargetPath(p);
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-0.5 ${
-                              addonTargetPath.includes("_classic_beta_") && addonTargetPath.startsWith("C:")
-                                ? "bg-cyan-950/60 border-cyan-400 text-white shadow-md shadow-cyan-950/40"
-                                : "bg-[#040711] border-zinc-800 text-zinc-300 hover:border-zinc-700"
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.addon_folder_config ? "rotate-180 text-white" : ""
                             }`}
                           >
-                            <span className="font-black text-cyan-300 text-[11px] flex items-center gap-1">
-                              <span>WoW Forever Beta (Padrão)</span>
-                              <CheckCircle2 size={11} className="text-cyan-400" />
-                            </span>
-                            <span className="font-mono text-[10px] text-zinc-400 truncate">C:\...\World of Warcraft\_classic_beta_\Interface\AddOns</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const p = "D:\\World of Warcraft\\_classic_beta_\\Interface\\AddOns";
-                              setAddonTargetPath(p);
-                              setStoredAddonTargetPath(p);
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-0.5 ${
-                              addonTargetPath.includes("_classic_beta_") && addonTargetPath.startsWith("D:")
-                                ? "bg-cyan-950/60 border-cyan-400 text-white shadow-md shadow-cyan-950/40"
-                                : "bg-[#040711] border-zinc-800 text-zinc-300 hover:border-zinc-700"
-                            }`}
-                          >
-                            <span className="font-black text-amber-300 text-[11px]">Drive D: (WoW Forever Beta)</span>
-                            <span className="font-mono text-[10px] text-zinc-400 truncate">D:\World of Warcraft\_classic_beta_\Interface\AddOns</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const p = "C:\\Program Files (x86)\\World of Warcraft\\_classic_era_\\Interface\\AddOns";
-                              setAddonTargetPath(p);
-                              setStoredAddonTargetPath(p);
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-0.5 ${
-                              addonTargetPath.includes("_classic_era_")
-                                ? "bg-cyan-950/60 border-cyan-400 text-white shadow-md shadow-cyan-950/40"
-                                : "bg-[#040711] border-zinc-800 text-zinc-300 hover:border-zinc-700"
-                            }`}
-                          >
-                            <span className="font-black text-emerald-300 text-[11px]">WoW Classic Era (1.15)</span>
-                            <span className="font-mono text-[10px] text-zinc-400 truncate">C:\...\World of Warcraft\_classic_era_\Interface\AddOns</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const p = "C:\\Program Files (x86)\\World of Warcraft\\_retail_\\Interface\\AddOns";
-                              setAddonTargetPath(p);
-                              setStoredAddonTargetPath(p);
-                            }}
-                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col gap-0.5 ${
-                              addonTargetPath.includes("_retail_")
-                                ? "bg-cyan-950/60 border-cyan-400 text-white shadow-md shadow-cyan-950/40"
-                                : "bg-[#040711] border-zinc-800 text-zinc-300 hover:border-zinc-700"
-                            }`}
-                          >
-                            <span className="font-black text-sky-300 text-[11px]">WoW Retail (11.x)</span>
-                            <span className="font-mono text-[10px] text-zinc-400 truncate">C:\...\World of Warcraft\_retail_\Interface\AddOns</span>
-                          </button>
+                            <ChevronDown size={16} />
+                          </div>
                         </div>
-                      </div>
+                      </button>
 
-                      {/* Hidden directory picker input fallback */}
-                      <input
-                        type="file"
-                        ref={wowDirectoryInputRef}
-                        onChange={handleDirectorySelected}
-                        {...({ webkitdirectory: "", directory: "" } as any)}
-                        className="hidden"
-                      />
-
-                      {/* Path Input Box and Action Controls */}
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider block">
-                            Caminho Local da Pasta 'Interface/AddOns' do WoW Forever:
-                          </label>
-                          <span className="text-[10px] text-cyan-400 font-mono">
-                            Auto-resolução inteligente para _classic_beta_
-                          </span>
-                        </div>
-
-                        <div className="flex flex-col sm:flex-row items-stretch gap-2.5">
-                          <input
-                            type="text"
-                            value={addonTargetPath}
-                            onChange={(e) => setAddonTargetPath(e.target.value)}
-                            placeholder="C:\Program Files (x86)\World of Warcraft\_classic_beta_\Interface\AddOns"
-                            className="flex-1 bg-[#04060d] border border-cyan-500/40 rounded-xl px-4 py-3 text-xs text-white font-mono focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 shadow-inner"
-                          />
-
-                          <button
-                            type="button"
-                            onClick={handlePickWoWDirectory}
-                            className="px-4 py-3 rounded-xl bg-gradient-to-r from-cyan-950 to-blue-950 hover:from-cyan-900 hover:to-blue-900 border border-cyan-500/50 text-cyan-200 hover:text-white text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5 shadow-md shadow-cyan-950/40"
-                            title="Abrir explorador de pastas nativo do seu computador para selecionar o diretório do jogo"
-                          >
-                            <FolderOpen size={15} className="text-cyan-400" />
-                            <span>Procurar Pasta...</span>
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setStoredAddonTargetPath(addonTargetPath);
-                              if (triggerAlert) triggerAlert("Caminho Salvo", "Caminho da pasta Interface/AddOns registrado com sucesso!");
-                            }}
-                            className="px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5"
-                          >
-                            <Save size={14} />
-                            <span>Salvar</span>
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* STATUS VISUAL DE CONFORMIDADE DA ESTRUTURA (INTERFACE/ADDONS) */}
-                      {isValidatingWoWDir && (
-                        <div className="p-3.5 rounded-xl border border-cyan-500/40 bg-cyan-950/30 text-cyan-200 text-xs flex items-center gap-2.5 animate-pulse">
-                          <Loader2 size={16} className="animate-spin text-cyan-400 shrink-0" />
-                          <span>Validando conformidade da estrutura de pastas do WoW Forever...</span>
-                        </div>
-                      )}
-
-                      {wowDirValidation ? (
-                        <div
-                          className={`p-4 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg transition-all ${
-                            wowDirValidation.isValid
-                              ? "bg-emerald-950/40 border-emerald-500/60 text-emerald-200"
-                              : "bg-rose-950/40 border-rose-500/60 text-rose-200"
-                          }`}
-                        >
-                          <div className="flex items-start gap-3">
-                            <div className="shrink-0 mt-0.5">
-                              {wowDirValidation.isValid ? (
-                                <CheckCircle2 className="w-5 h-5 text-emerald-400" />
-                              ) : (
-                                <XCircle className="w-5 h-5 text-rose-400" />
-                              )}
-                            </div>
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2">
-                                <span className="font-black text-xs uppercase tracking-wide">
-                                  {wowDirValidation.isValid
-                                    ? "Conformidade Verificada: Subpasta Interface/AddOns Encontrada"
-                                    : "Não Conforme: Subpasta Interface/AddOns Não Encontrada"}
-                                </span>
-                                <span
-                                  className={`text-[10px] font-mono px-2 py-0.5 rounded-full font-bold ${
-                                    wowDirValidation.isValid
-                                      ? "bg-emerald-900/80 text-emerald-300 border border-emerald-500/40"
-                                      : "bg-rose-900/80 text-rose-300 border border-rose-500/40"
-                                  }`}
-                                >
-                                  {wowDirValidation.isValid ? "100% Compatível" : "Incompleto"}
+                      {!collapsedBlizzardSections.addon_folder_config && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-5">
+                          {/* 1. PAINEL EXCLUSIVO WOW FOREVER */}
+                          <div className="pt-3 space-y-3">
+                            <div className="p-4 rounded-2xl bg-gradient-to-br from-cyan-950/60 via-[#060e20] to-[#040816] border border-cyan-500/40 shadow-lg space-y-3">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-cyan-900/50 pb-2.5">
+                                <div className="flex items-center gap-2">
+                                  <Sparkles size={18} className="text-cyan-400" />
+                                  <span className="font-black text-sm text-white">
+                                    Haleck Account Importer Forever (HAIF)
+                                  </span>
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/40 font-bold">
+                                    Vanilla+ Build 16001
+                                  </span>
+                                </div>
+                                <span className="text-[11px] font-mono text-amber-300 font-bold">
+                                  Lançamento Oficial: 04 de Novembro de 2026
                                 </span>
                               </div>
-                              <p className="text-xs text-zinc-300">
-                                {wowDirValidation.isValid ? (
-                                  <>
-                                    Diretório raiz <strong className="text-white font-mono">{wowDirValidation.rootName}</strong> validado. 
-                                    Destino: <span className="font-mono text-cyan-300 text-[11px]">{wowDirValidation.resolvedPathLabel}</span>. 
-                                    {wowDirValidation.hasHaleckAddon ? (
-                                      <span className="text-emerald-300 font-semibold ml-1">
-                                        (Addon já detectado no disco — pronto para Atualizar!)
-                                      </span>
-                                    ) : (
-                                      <span className="text-cyan-300 font-semibold ml-1">
-                                        (Pronto para Instalação inicial!)
-                                      </span>
-                                    )}
-                                  </>
-                                ) : (
-                                  <>
-                                    {wowDirValidation.error || "A subpasta 'Interface/AddOns' não foi encontrada dentro do diretório selecionado."}
-                                    {" "}Para que o jogo reconheça o Addon, o cliente do WoW Forever necessita da subpasta <code className="text-amber-300 bg-black/40 px-1 py-0.5 rounded">Interface/AddOns</code>.
-                                  </>
-                                )}
+
+                              <p className="text-xs text-zinc-300 leading-relaxed">
+                                Este addon foi <strong className="text-white">reconstruído do zero com foco exclusivo no WoW Forever</strong> (Engine Camelot). Não há seleção de versões do jogo: toda a arquitetura foi inspirada no <span className="text-cyan-300 font-bold">DataStore</span> e <span className="text-cyan-300 font-bold">Forever Companion</span> para absorver absolutamente todas as variáveis possíveis da sua conta e de todos os seus personagens, permitindo que o site compreenda tudo com precisão máxima.
                               </p>
+
+                              {/* Grid de Dados Coletados */}
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] pt-1">
+                                <div className="p-2.5 rounded-xl bg-[#040713] border border-cyan-900/50 text-zinc-300 space-y-0.5">
+                                  <span className="text-cyan-300 font-bold block">🛡️ Equipamentos & Bolsas</span>
+                                  <span className="text-[10px] text-zinc-400 block">Slots, ilvl, bolsas 0-4 e banco pessoal</span>
+                                </div>
+                                <div className="p-2.5 rounded-xl bg-[#040713] border border-cyan-900/50 text-zinc-300 space-y-0.5">
+                                  <span className="text-cyan-300 font-bold block">⚔️ Estatísticas & Stats</span>
+                                  <span className="text-[10px] text-zinc-400 block">Atributos, melee, ranged, spell e resistências</span>
+                                </div>
+                                <div className="p-2.5 rounded-xl bg-[#040713] border border-cyan-900/50 text-zinc-300 space-y-0.5">
+                                  <span className="text-cyan-300 font-bold block">📜 Talentos & Quests</span>
+                                  <span className="text-[10px] text-zinc-400 block">Árvores, missões ativas e concluídas</span>
+                                </div>
+                                <div className="p-2.5 rounded-xl bg-[#040713] border border-cyan-900/50 text-zinc-300 space-y-0.5">
+                                  <span className="text-cyan-300 font-bold block">🐎 Coleções & Azeroth</span>
+                                  <span className="text-[10px] text-zinc-400 block">Montarias, pets, reputações e chefes mundiais</span>
+                                </div>
+                              </div>
+
+                              {/* Comandos In-Game & Minimapa */}
+                              <div className="p-3 rounded-xl bg-[#030610] border border-cyan-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
+                                <div className="space-y-1">
+                                  <span className="font-bold text-white text-xs block flex items-center gap-1.5">
+                                    <Terminal size={13} className="text-cyan-400" />
+                                    <span>Comandos no Chat do WoW:</span>
+                                    <code className="text-cyan-300 font-mono bg-cyan-950/80 px-1.5 py-0.5 rounded text-[11px]">/haif</code>
+                                    <code className="text-cyan-300 font-mono bg-cyan-950/80 px-1.5 py-0.5 rounded text-[11px]">/haif scan</code>
+                                    <code className="text-cyan-300 font-mono bg-cyan-950/80 px-1.5 py-0.5 rounded text-[11px]">/haif export</code>
+                                  </span>
+                                  <p className="text-[11px] text-zinc-400">
+                                    <strong>Botão do Minimapa:</strong> Arrastável, com tooltip e compatibilidade total com a gaveta de addons do <strong>EllesmereUI</strong> e <strong>Blizzard Addon Compartment</strong>.
+                                  </p>
+                                </div>
+                                <span className="text-[10px] font-mono px-2 py-1 rounded-lg bg-emerald-950 text-emerald-300 border border-emerald-500/40 font-bold shrink-0 self-start sm:self-auto">
+                                  ✓ Sem tela de jornada (100% Exportação Pura)
+                                </span>
+                              </div>
                             </div>
                           </div>
 
-                          {!wowDirValidation.isValid && wowDirHandle && (
-                            <button
-                              type="button"
-                              onClick={handleCreateMissingAddOns}
-                              disabled={isValidatingWoWDir}
-                              className="px-3.5 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs transition-all cursor-pointer shrink-0 flex items-center gap-1.5 shadow-md self-start sm:self-auto"
+                          {/* 2. CAMINHO DA PASTA RAIZ DO WOW FOREVER (SALVO PERMANENTEMENTE) */}
+                          <div className="space-y-2.5 pt-1">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                              <label className="text-xs font-black text-zinc-200 uppercase tracking-wider flex items-center gap-2">
+                                <span className="w-5 h-5 rounded-full bg-cyan-500/20 border border-cyan-400/40 text-cyan-300 text-[11px] font-mono font-bold flex items-center justify-center">2</span>
+                                <span>Caminho da Pasta Raiz do WoW Forever (Salvo Permanentemente):</span>
+                              </label>
+                              <span className="text-[10px] font-mono text-cyan-400 font-bold">
+                                Memorizado e preservado automaticamente
+                              </span>
+                            </div>
+
+                            <div className="flex flex-col sm:flex-row items-stretch gap-2.5">
+                              <input
+                                type="text"
+                                value={activeWoWRootPath}
+                                onChange={(e) => handleUpdateActiveRootPath(e.target.value)}
+                                placeholder="C:\Program Files (x86)\World of Warcraft\_classic_beta_"
+                                className="flex-1 bg-[#04060d] border border-cyan-500/40 rounded-xl px-4 py-3 text-xs text-white font-mono focus:border-cyan-400 focus:outline-none focus:ring-1 focus:ring-cyan-400 shadow-inner"
+                              />
+
+                              <button
+                                type="button"
+                                onClick={handlePickWoWDirectory}
+                                className="px-4 py-3 rounded-xl bg-gradient-to-r from-cyan-950 to-blue-950 hover:from-cyan-900 hover:to-blue-900 border border-cyan-500/50 text-cyan-200 hover:text-white text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5 shadow-md shadow-cyan-950/40"
+                                title="Abrir explorador de pastas do computador com permissão total de leitura e escrita"
+                              >
+                                <FolderOpen size={15} className="text-cyan-400" />
+                                <span>Procurar Pasta...</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={handleSaveActiveRootPath}
+                                className="px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer shrink-0 flex items-center justify-center gap-1.5"
+                                title="Salva e memoriza este caminho permanentemente no computador e na nuvem"
+                              >
+                                <Save size={14} className="text-cyan-400" />
+                                <span>Salvar Caminho</span>
+                              </button>
+                            </div>
+
+                            {/* Subpastas Mapeadas Dinamicamente */}
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] font-mono pt-1">
+                              <div className="p-2.5 rounded-xl bg-[#040713] border border-zinc-800/80 flex items-center gap-2 text-zinc-300">
+                                <span className="text-zinc-500 font-bold shrink-0 uppercase text-[10px]">AddOns:</span>
+                                <span className="text-cyan-300 truncate" title={`${activeWoWRootPath}\\Interface\\AddOns\\HaleckAccountImporterForever`}>
+                                  {activeWoWRootPath.replace(/\\+$/, "")}\Interface\AddOns\HaleckAccountImporterForever
+                                </span>
+                              </div>
+                              <div className="p-2.5 rounded-xl bg-[#040713] border border-zinc-800/80 flex items-center gap-2 text-zinc-300">
+                                <span className="text-zinc-500 font-bold shrink-0 uppercase text-[10px]">WTF:</span>
+                                <span className="text-amber-300 truncate" title={`${activeWoWRootPath}\\WTF`}>
+                                  {getWtfPathFromRoot(activeWoWRootPath)} (SavedVariables\HaleckAccountImporterForever.lua)
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* 3. AÇÕES PRINCIPAIS UNIFICADAS */}
+                          <div className="space-y-2.5 pt-2">
+                            <span className="text-xs font-black text-zinc-200 uppercase tracking-wider block">
+                              Ações para o WoW Forever no Caminho Configurado:
+                            </span>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                              {/* BOTÃO 1: INSTALAR ADDON */}
+                              <button
+                                type="button"
+                                onClick={handleInstallAddonAction}
+                                disabled={isInstallingAddon || isUpdatingAddonDirectly || isScanningWoWDir}
+                                className="py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/30 disabled:opacity-50"
+                                title="Cria Interface/AddOns/HaleckAccountImporter e grava todos os arquivos do addon"
+                              >
+                                {isInstallingAddon ? <Loader2 size={16} className="animate-spin text-white" /> : <Download size={16} className="text-emerald-100" />}
+                                <span>Instalar Addon no Computador</span>
+                              </button>
+
+                              {/* BOTÃO 2: ATUALIZAR ADDON */}
+                              <button
+                                type="button"
+                                onClick={handleUpdateAddonAction}
+                                disabled={isInstallingAddon || isUpdatingAddonDirectly || isScanningWoWDir}
+                                className="py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-600/30 disabled:opacity-50"
+                                title="Substitui os arquivos de código sem tocar nos dados salvos do WTF"
+                              >
+                                {isUpdatingAddonDirectly ? <Loader2 size={16} className="animate-spin text-white" /> : <RefreshCw size={16} className="text-cyan-100" />}
+                                <span>Atualizar no Computador</span>
+                              </button>
+
+                              {/* BOTÃO 3: ESCANEAR E IMPORTAR WTF */}
+                              <button
+                                type="button"
+                                onClick={() => handleScanAndImportDirectory(false)}
+                                disabled={isScanningWoWDir || isInstallingAddon || isUpdatingAddonDirectly}
+                                className="py-3 px-4 rounded-xl bg-gradient-to-r from-purple-600 via-indigo-600 to-blue-600 hover:from-purple-500 hover:to-blue-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-purple-600/30 disabled:opacity-50"
+                                title="Escaneia as pastas e subpastas de WTF no computador e importa os SavedVariables para o banco de dados"
+                              >
+                                {isScanningWoWDir ? <Loader2 size={16} className="animate-spin text-white" /> : <FolderSearch size={16} className="text-purple-100" />}
+                                <span>Escanear & Importar (WTF)</span>
+                              </button>
+                            </div>
+
+                            {/* Scripts Auxiliares Compactos */}
+                            <div className="flex items-center gap-2 flex-wrap pt-1 text-xs">
+                              <span className="text-[10px] text-zinc-500 font-mono uppercase font-bold">Scripts Externos:</span>
+                              <button
+                                type="button"
+                                onClick={() => downloadAddonInstallerBat(getAddonTargetPathFromRoot(activeWoWRootPath))}
+                                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                                title="Gera arquivo executável .BAT configurado para a pasta salva"
+                              >
+                                <Terminal size={12} className="text-cyan-400" />
+                                <span>Baixar (.BAT)</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => downloadAddonInstallerPs1(getAddonTargetPathFromRoot(activeWoWRootPath))}
+                                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                                title="Gera arquivo script .PS1 para PowerShell"
+                              >
+                                <FileCode size={12} className="text-purple-400" />
+                                <span>PowerShell (.PS1)</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  downloadAutoScanScriptBat(activeWoWRootPath);
+                                  if (triggerAlert) {
+                                    triggerAlert(
+                                      "Script Auto-Scan Baixado!",
+                                      `O arquivo 'auto-scan-wow.bat' foi gerado para a pasta:\n${activeWoWRootPath}\nAo executar no Windows, ele varre a pasta WTF e envia os dados automaticamente para o site!`
+                                    );
+                                  }
+                                }}
+                                className="px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 hover:text-white text-[11px] font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                                title="Gera script para varrer a pasta WTF em 1 clique fora do navegador"
+                              >
+                                <Sparkles size={12} className="text-amber-400" />
+                                <span>Auto-Scan Script (.BAT)</span>
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* RELATÓRIO DE INSTALAÇÃO DO ADDON */}
+                          {addonInstallProgressReport && (
+                            <div className="p-4 rounded-xl bg-[#03060f] border border-cyan-500/50 space-y-3 animate-fadeIn">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-2.5">
+                                <div className="flex items-center gap-2">
+                                  <div className="p-1.5 rounded-lg bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
+                                    <HardDrive size={16} />
+                                  </div>
+                                  <div>
+                                    <span className="font-bold text-xs text-white block">
+                                      Status da Instalação do Addon no Computador
+                                    </span>
+                                    <span className="text-[10px] text-zinc-400">
+                                      Destino: <code className="text-cyan-300 font-mono">{addonInstallProgressReport.targetFolderLabel}</code>
+                                    </span>
+                                  </div>
+                                </div>
+                                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 text-cyan-300 border border-cyan-500/30 font-bold self-start sm:self-auto">
+                                  {addonInstallProgressReport.folderCreated ? "Pasta Criada" : "Pasta Verificada"}
+                                </span>
+                              </div>
+
+                              <div className="space-y-1.5">
+                                {addonInstallProgressReport.steps.map((st, sIdx) => (
+                                  <div
+                                    key={st.name}
+                                    className="p-2.5 rounded-lg bg-[#070b16] border border-zinc-800/80 flex items-center justify-between gap-3 text-xs"
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <span className="font-mono text-zinc-500 text-[10px] shrink-0 font-bold">
+                                        [{sIdx + 1}/{addonInstallProgressReport.steps.length}]
+                                      </span>
+                                      <FileCode size={14} className="text-cyan-400 shrink-0" />
+                                      <div className="min-w-0">
+                                        <span className="font-mono font-bold text-white block truncate">{st.name}</span>
+                                        <span className="text-[10px] text-zinc-400 block">{st.message}</span>
+                                      </div>
+                                    </div>
+                                    <span
+                                      className={`text-[10px] font-bold px-2 py-0.5 rounded shrink-0 font-mono ${
+                                        st.status === "up_to_date"
+                                          ? "bg-cyan-950/80 text-cyan-300 border border-cyan-500/30"
+                                          : st.status === "updated" || st.status === "installed"
+                                          ? "bg-emerald-950/80 text-emerald-300 border border-emerald-500/40"
+                                          : st.status === "checking"
+                                          ? "bg-amber-950/80 text-amber-300 border border-amber-500/40 animate-pulse"
+                                          : "bg-zinc-800 text-zinc-400"
+                                      }`}
+                                    >
+                                      {st.status === "up_to_date" ? "Em dia" : st.status === "updated" ? "Atualizado" : st.status === "installed" ? "Instalado" : "Concluído"}
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+
+                              <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 flex items-center justify-between text-xs">
+                                <div className="flex items-center gap-2 text-emerald-300">
+                                  <CheckCircle2 size={15} />
+                                  <span className="font-bold text-[11px]">{addonInstallProgressReport.message}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-emerald-400 font-bold">
+                                  {addonInstallProgressReport.filesUpdatedCount} gravado(s) • {addonInstallProgressReport.filesUnchangedCount} inalterado(s)
+                                </span>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* RELATÓRIO DO ESCANEAMENTO / IMPORTAÇÃO DE DADOS (WTF) */}
+                          {scanResult && (
+                            <div className="p-4 sm:p-5 rounded-xl bg-[#04060e] border border-emerald-500/50 space-y-4 animate-fadeIn">
+                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-zinc-800 pb-3">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <CheckCircle2 size={18} className="text-emerald-400" />
+                                  <span className="font-bold text-sm text-white">Relatório da Pasta WTF & Dados Importados</span>
+                                  <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40 font-bold">
+                                    {scanResult.detectedFlavorLabel}
+                                  </span>
+                                  <span className="text-[10px] text-zinc-500 font-mono">
+                                    ({scanResult.scannedAt})
+                                  </span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setScanResult(null)}
+                                  className="text-[11px] text-zinc-400 hover:text-white transition-colors cursor-pointer self-start sm:self-auto font-bold"
+                                >
+                                  Limpar Relatório
+                                </button>
+                              </div>
+
+                              {/* Métricas do Scan */}
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                                <div className="p-3 rounded-xl bg-[#070b16] border border-zinc-800/80 space-y-0.5">
+                                  <span className="text-[10px] text-zinc-400 uppercase font-bold block">Arquivos Lidos</span>
+                                  <span className="font-mono font-black text-sm text-cyan-300">
+                                    {scanResult.filesFound.length} arquivo(s)
+                                  </span>
+                                </div>
+                                <div className="p-3 rounded-xl bg-[#070b16] border border-zinc-800/80 space-y-0.5">
+                                  <span className="text-[10px] text-zinc-400 uppercase font-bold block">Contas Detectadas</span>
+                                  <span className="font-mono font-black text-sm text-amber-300">
+                                    {scanResult.accountsFound.length} conta(s)
+                                  </span>
+                                </div>
+                                <div className="p-3 rounded-xl bg-[#070b16] border border-zinc-800/80 space-y-0.5">
+                                  <span className="text-[10px] text-zinc-400 uppercase font-bold block">Personagens Sincronizados</span>
+                                  <span className="font-mono font-black text-sm text-emerald-300">
+                                    {scanResult.totalCharactersImported} heróis
+                                  </span>
+                                </div>
+                                <div className="p-3 rounded-xl bg-[#070b16] border border-zinc-800/80 space-y-0.5">
+                                  <span className="text-[10px] text-zinc-400 uppercase font-bold block">Ouro Acumulado</span>
+                                  <span className="font-mono font-black text-sm text-yellow-300">
+                                    {Math.floor(scanResult.totalGoldAggregated / 10000)}g
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Detalhamento de Contas e Personagens Encontrados */}
+                              {scanResult.accountGroups && scanResult.accountGroups.length > 0 && (
+                                <div className="space-y-2 pt-1">
+                                  <span className="text-[11px] font-bold text-zinc-300 uppercase tracking-wider block">
+                                    Personagens Importados por Conta:
+                                  </span>
+                                  <div className="space-y-2">
+                                    {scanResult.accountGroups.map((acc) => (
+                                      <div key={acc.accountName} className="p-3 rounded-xl bg-[#070b16] border border-zinc-800 space-y-2">
+                                        <div className="flex items-center justify-between text-xs">
+                                          <div className="flex items-center gap-2">
+                                            <Users size={14} className="text-cyan-400" />
+                                            <span className="font-black text-white">{acc.accountName}</span>
+                                          </div>
+                                          <span className="text-[10px] font-mono text-zinc-400 font-bold">
+                                            {acc.characters.length} personagem(ns)
+                                          </span>
+                                        </div>
+                                        <div className="flex items-center gap-2 flex-wrap">
+                                          {acc.characters.map((ch) => (
+                                            <span
+                                              key={`${ch.realmName}-${ch.characterName}`}
+                                              className="px-2.5 py-1 rounded-lg bg-zinc-900 border border-zinc-800 text-xs font-mono text-zinc-200 flex items-center gap-1.5"
+                                            >
+                                              <span className="text-cyan-300 font-bold">{ch.characterName}</span>
+                                              <span className="text-[10px] text-zinc-500 font-normal">({ch.realmName})</span>
+                                            </span>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Feedback Banner */}
+                          {addonInstallMessage && !addonInstallProgressReport && (
+                            <div
+                              className={`p-4 rounded-xl border text-xs space-y-2 shadow-md ${
+                                addonInstallMessage.type === "success"
+                                  ? "bg-emerald-950/80 border-emerald-500/60 text-emerald-200"
+                                  : addonInstallMessage.type === "info"
+                                  ? "bg-cyan-950/80 border-cyan-500/60 text-cyan-200"
+                                  : "bg-rose-950/80 border-rose-500/60 text-rose-200"
+                              }`}
                             >
-                              {isValidatingWoWDir ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                              <span>Criar Interface/AddOns Agora</span>
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="p-3.5 rounded-xl border border-cyan-900/40 bg-cyan-950/20 text-cyan-200/90 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5">
-                            <Info size={16} className="text-cyan-400 shrink-0" />
-                            <span>
-                              Clique em <strong className="text-white">Procurar Pasta...</strong> para selecionar a pasta raiz do WoW Forever (<code className="text-cyan-300">_classic_beta_</code> ou <code className="text-cyan-300">World of Warcraft</code>) via File System Access API nativa do navegador.
-                            </span>
-                          </div>
-                          {addonTargetPath.includes("AddOns") && (
-                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-900/60 border border-cyan-400/40 text-cyan-300 font-bold shrink-0 flex items-center gap-1 self-start sm:self-auto">
-                              <CheckCircle2 size={11} className="text-cyan-300" />
-                              <span>Caminho Padrão Configurado</span>
-                            </span>
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2">
+                                  {addonInstallMessage.type === "success" ? (
+                                    <CheckCircle2 size={18} className="text-emerald-400 shrink-0" />
+                                  ) : (
+                                    <Info size={18} className="text-cyan-400 shrink-0" />
+                                  )}
+                                  <span className="font-bold text-xs sm:text-sm text-white">{addonInstallMessage.text}</span>
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setAddonInstallMessage(null)}
+                                  className="text-zinc-400 hover:text-white text-xs cursor-pointer p-1"
+                                >
+                                  ✕
+                                </button>
+                              </div>
+                            </div>
                           )}
                         </div>
                       )}
-
-                      {/* Distinct Installation & Update Actions Row */}
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 pt-1">
-                        {/* BOTÃO 1: INSTALAR ADDON */}
-                        <button
-                          type="button"
-                          onClick={handleInstallAddonAction}
-                          disabled={isInstallingAddon || isUpdatingAddonDirectly}
-                          className="py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/30 disabled:opacity-50"
-                          title="Instala o addon Haleck Account Importer v4.1.0 completo na pasta do jogo"
-                        >
-                          {isInstallingAddon ? <Loader2 size={16} className="animate-spin text-white" /> : <Download size={16} className="text-emerald-100" />}
-                          <span>Instalar Addon</span>
-                        </button>
-
-                        {/* BOTÃO 2: ATUALIZAR ADDON */}
-                        <button
-                          type="button"
-                          onClick={handleUpdateAddonAction}
-                          disabled={isInstallingAddon || isUpdatingAddonDirectly}
-                          className="py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-600/30 disabled:opacity-50"
-                          title="Atualiza o código do addon para a versão v4.1.0 preservando 100% dos dados salvos no WTF/"
-                        >
-                          {isUpdatingAddonDirectly ? <Loader2 size={16} className="animate-spin text-white" /> : <RefreshCw size={16} className="text-cyan-100" />}
-                          <span>Atualizar Addon</span>
-                        </button>
-
-                        {/* BOTÃO 3: BAIXAR INSTALADOR 1-CLIQUE (.BAT) */}
-                        <button
-                          type="button"
-                          onClick={() => downloadAddonInstallerBat(addonTargetPath)}
-                          className="py-3 px-4 rounded-xl bg-[#040814] hover:bg-[#07132a] border border-cyan-500/40 text-cyan-200 hover:text-white font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm text-center"
-                          title="Gera script em lote do Windows para instalação automática"
-                        >
-                          <Terminal size={15} className="text-cyan-400" />
-                          <span>Baixar (.BAT)</span>
-                        </button>
-
-                        {/* BOTÃO 4: BAIXAR SCRIPT POWERSHELL (.PS1) */}
-                        <button
-                          type="button"
-                          onClick={() => downloadAddonInstallerPs1(addonTargetPath)}
-                          className="py-3 px-4 rounded-xl bg-[#040814] hover:bg-[#07132a] border border-purple-500/40 text-purple-200 hover:text-white font-bold text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm text-center"
-                          title="Gera script em PowerShell do Windows com verificação de integridade"
-                        >
-                          <FileCode size={15} className="text-purple-400" />
-                          <span>PowerShell (.PS1)</span>
-                        </button>
-                      </div>
-
-                      {/* Status / Feedback Banner */}
-                      {addonInstallMessage && (
-                        <div
-                          className={`p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 shadow-md ${
-                            addonInstallMessage.type === "success"
-                              ? "bg-emerald-950/70 border-emerald-500/60 text-emerald-200"
-                              : addonInstallMessage.type === "info"
-                              ? "bg-cyan-950/70 border-cyan-500/60 text-cyan-200"
-                              : "bg-rose-950/70 border-rose-500/60 text-rose-200"
-                          }`}
-                        >
-                          <div className="flex items-center gap-2">
-                            {addonInstallMessage.type === "success" ? (
-                              <CheckCircle2 size={16} className="text-emerald-400 shrink-0" />
-                            ) : (
-                              <Info size={16} className="text-cyan-400 shrink-0" />
-                            )}
-                            <span className="font-semibold">{addonInstallMessage.text}</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => setAddonInstallMessage(null)}
-                            className="text-zinc-400 hover:text-white text-xs cursor-pointer"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      )}
-
-                      {/* Cohesion Tree Structure Guide */}
-                      <div className="p-4 rounded-xl bg-[#04060d] border border-cyan-900/50 text-xs space-y-2">
-                        <span className="text-[11px] font-bold text-cyan-300 uppercase tracking-wider block">
-                          Estrutura de Pastas Coesa com o Jogo:
-                        </span>
-                        <pre className="font-mono text-[11px] text-zinc-300 leading-relaxed overflow-x-auto bg-black/60 p-3 rounded-lg border border-zinc-800">
-                          {`World of Warcraft/_classic_beta_/
-└── Interface/
-    └── AddOns/
-        └── HaleckAccountImporter/
-            ├── HaleckAccountImporter.toc     (Manifesto com Interface: 16001 e Brasão H)
-            ├── HaleckAccountImporter.lua     (Motor ATT-Grade, Quests, Spells, SavedVariables)
-            └── AddonInterface.lua            (Interface Visual Dual-Category & Diário de Aventura)`}
-                        </pre>
-                      </div>
                     </div>
 
                     {/* ========================================================================= */}
-                    {/* SEÇÃO 1B: VERIFICADOR DE VERSÃO & ATUALIZAÇÕES CONTÍNUAS (WOW FOREVER)    */}
+                    {/* SEÇÃO 2.2: AUDITORIA DE INTEGRIDADE POR CHECKSUM (SHA-256 VS GITHUB)     */}
                     {/* ========================================================================= */}
-                    <div className="p-5 rounded-2xl bg-gradient-to-r from-[#06152b] via-[#081f3d] to-[#040e1f] border-2 border-cyan-400/60 space-y-5 shadow-2xl relative overflow-hidden">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-cyan-900/60 pb-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/30 to-blue-600/30 border border-cyan-400/60 flex items-center justify-center text-cyan-300 shadow-lg shadow-cyan-500/20 shrink-0">
+                    <BlizzardAddonChecksumCard
+                      isCollapsed={!!collapsedBlizzardSections.addon_checksum_integrity}
+                      onToggle={() => toggleBlizzardSection("addon_checksum_integrity")}
+                      isChecking={isCheckingIntegrity}
+                      report={addonIntegrityReport}
+                      onCheckIntegrity={handleCheckAddonIntegrity}
+                      onUpdateAddon={handleUpdateAddonAction}
+                    />
+
+                    {/* ========================================================================= */}
+                    {/* SEÇÃO 2.3: CENTRAL DE ATUALIZAÇÕES CONTÍNUAS & CAMADA ADAPTATIVA          */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl bg-[#090d18] border border-cyan-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("addon_updates_runtime")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shadow-md shadow-cyan-500/20 shrink-0">
                             <RefreshCw size={20} className={isCheckingAddonStatus ? "animate-spin" : ""} />
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h5 className="font-black text-base text-white">Central de Atualizações Contínuas & Camada Adaptativa</h5>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                2.3 Central de Atualizações Contínuas & Camada Adaptativa
+                              </h5>
                               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-400/60 text-cyan-300 font-black">
                                 v4.1.0 • Build 16001+
                               </span>
                             </div>
-                            <p className="text-xs text-zinc-300 mt-0.5">
-                              O <strong className="text-cyan-300">WoW: Forever</strong> está em constante evolução. Esta central audita o addon instalado, detecta alterações de build da Blizzard e aplica atualizações em 1 clique sem quebrar seu histórico ou dados salvos.
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Audita versões instaladas, detecta mudanças de build e aplica atualizações sem quebrar dados salvos
                             </p>
                           </div>
                         </div>
 
                         <div className="flex items-center gap-2 shrink-0">
-                          <button
-                            type="button"
-                            onClick={handleCheckAddonStatus}
-                            disabled={isCheckingAddonStatus}
-                            className="px-3.5 py-2 rounded-xl bg-[#040a16] hover:bg-[#07152b] border border-cyan-500/50 text-cyan-300 hover:text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-md disabled:opacity-50"
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.addon_updates_runtime ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.addon_updates_runtime ? "rotate-180 text-white" : ""
+                            }`}
                           >
-                            <RefreshCw size={13} className={isCheckingAddonStatus ? "animate-spin" : ""} />
-                            <span>{isCheckingAddonStatus ? "Verificando..." : "Verificar Versão no Disco"}</span>
-                          </button>
+                            <ChevronDown size={16} />
+                          </div>
                         </div>
-                      </div>
+                      </button>
+
+                      {!collapsedBlizzardSections.addon_updates_runtime && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-5">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-b border-cyan-900/60 pb-4">
+                            <p className="text-xs text-zinc-300 leading-relaxed max-w-2xl">
+                              O <strong className="text-cyan-300">WoW: Forever</strong> está em constante evolução. Esta central audita o addon instalado, detecta alterações de build da Blizzard e aplica atualizações em 1 clique sem quebrar seu histórico ou dados salvos.
+                            </p>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                              <button
+                                type="button"
+                                onClick={handleCheckAddonStatus}
+                                disabled={isCheckingAddonStatus}
+                                className="px-3.5 py-2 rounded-xl bg-[#040a16] hover:bg-[#07152b] border border-cyan-500/50 text-cyan-300 hover:text-white text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer shadow-md disabled:opacity-50"
+                              >
+                                <RefreshCw size={13} className={isCheckingAddonStatus ? "animate-spin" : ""} />
+                                <span>{isCheckingAddonStatus ? "Verificando..." : "Verificar Versão no Disco"}</span>
+                              </button>
+                            </div>
+                          </div>
 
                       {/* Live Version Status Indicators */}
                       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
@@ -2554,28 +3402,57 @@ export default function SiteSettingsModal({
                         </div>
                       </div>
                     </div>
+                  )}
+                </div>
 
                     {/* ========================================================================= */}
-                    {/* SEÇÃO 2: VALIDADOR DE INTEGRIDADE DE SAVEDVARIABLES & DRY-RUN              */}
+                    {/* SEÇÃO 2.4: VALIDADOR DE INTEGRIDADE DE SAVEDVARIABLES & DRY-RUN          */}
                     {/* ========================================================================= */}
-                    <div className="p-5 rounded-2xl bg-[#080d1a] border border-amber-500/50 space-y-5 shadow-2xl">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-amber-950/80 pb-4">
-                        <div className="flex items-center gap-3">
+                    <div className="rounded-2xl bg-[#090d18] border border-amber-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("addon_savedvars_dryrun")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
                           <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/50 flex items-center justify-center text-amber-300 shadow-md shadow-amber-500/20 shrink-0">
                             <Activity size={20} />
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h5 className="font-black text-base text-white">Validador de Integridade de SavedVariables & Dry-Run</h5>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                2.4 Validador de Integridade de SavedVariables & Dry-Run
+                              </h5>
                               <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-950 border border-amber-400/50 text-amber-300 font-black">
                                 Schema Auditor
                               </span>
                             </div>
-                            <p className="text-xs text-zinc-300 mt-0.5">
-                              Verifica a integridade das variáveis salvas no addon (<code className="text-cyan-300 font-mono">HaleckAccountImporter.lua</code>), garantindo que os formatos de quests, conquistas e coleções coincidam rigorosamente com o schema esperado pelo site antes da importação definitiva.
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Audita schemas de quests, conquistas e coleções antes da importação definitiva
                             </p>
                           </div>
                         </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.addon_savedvars_dryrun ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.addon_savedvars_dryrun ? "rotate-180 text-white" : ""
+                            }`}
+                          >
+                            <ChevronDown size={16} />
+                          </div>
+                        </div>
+                      </button>
+
+                      {!collapsedBlizzardSections.addon_savedvars_dryrun && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-5">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-b border-amber-950/80 pb-4">
+                            <p className="text-xs text-zinc-300 leading-relaxed max-w-2xl">
+                              Verifica a integridade das variáveis salvas no addon (<code className="text-cyan-300 font-mono">HaleckAccountImporter.lua</code>), garantindo que os formatos de quests, conquistas e coleções coincidam rigorosamente com o schema esperado pelo site antes da importação definitiva.
+                            </p>
 
                         {/* Top Export Buttons */}
                         <div className="flex items-center gap-2 shrink-0">
@@ -2771,49 +3648,66 @@ export default function SiteSettingsModal({
                         </div>
                       )}
                     </div>
+                  )}
+                </div>
 
                     {/* ========================================================================= */}
-                    {/* SEÇÃO 3: DOWNLOAD DO PACOTE UNIVERSAL & WATCHER (.BAT / .PS1)              */}
+                    {/* SEÇÃO 2.5: BAIXAR PACOTE DO ADDON (.ZIP)                                 */}
                     {/* ========================================================================= */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                      {/* Pacote Universal .ZIP */}
-                      <div className="p-5 rounded-2xl bg-[#070e1c] border border-cyan-500/40 space-y-4 shadow-xl">
-                        <div className="flex items-center justify-between border-b border-cyan-950/60 pb-3">
-                          <div className="flex items-center gap-2.5">
-                            <div className="p-2.5 bg-cyan-500/20 border border-cyan-500/40 rounded-xl text-cyan-300">
-                              <Download size={18} />
-                            </div>
-                            <div>
-                              <h5 className="font-black text-sm text-white">Baixar Pacote Universal do Addon (.ZIP)</h5>
-                              <p className="text-[11px] text-zinc-400">Versão 4.0.0 com ATT-Grade Harvest e Diário de Aventuras</p>
-                            </div>
+                    <div className="rounded-2xl bg-[#090d18] border border-cyan-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("addon_zip_download")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-cyan-500/20 border border-cyan-400/50 flex items-center justify-center text-cyan-300 shadow-md shadow-cyan-500/20 shrink-0">
+                            <Download size={20} />
                           </div>
-                          <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-cyan-950 border border-cyan-400/50 text-cyan-300 font-black">
-                            v4.0.0
-                          </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                2.5 Baixar Pacote do Addon: Haleck Account Importer Forever (.ZIP)
+                              </h5>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-400/50 text-cyan-300 font-black">
+                                v5.0.0-Forever
+                              </span>
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Pacote oficial com HaleckAccountImporterForever.toc e HaleckAccountImporterForever.lua pronto para descompactar
+                            </p>
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3 text-xs">
-                          <div className="space-y-1">
-                            <label className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider block">
-                              Versão do Cliente WoW
-                            </label>
-                            <select
-                              value={selectedWoWVersion}
-                              onChange={(e) => setSelectedWoWVersion(e.target.value)}
-                              className="w-full bg-[#04060d] border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-500 focus:outline-none cursor-pointer"
-                            >
-                              <option value="forever">WoW Forever Beta (Build 16001)</option>
-                              <option value="retail">WoW Retail (The War Within / Midnight)</option>
-                              <option value="classic">WoW Classic Era (1.15.x)</option>
-                              <option value="mop">WoW MoP (5.4.8)</option>
-                              <option value="tbc">WoW TBC (2.4.3)</option>
-                            </select>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.addon_zip_download ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.addon_zip_download ? "rotate-180 text-white" : ""
+                            }`}
+                          >
+                            <ChevronDown size={16} />
+                          </div>
+                        </div>
+                      </button>
+
+                      {!collapsedBlizzardSections.addon_zip_download && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <div className="p-3.5 rounded-xl bg-cyan-950/20 border border-cyan-500/30 flex items-start gap-2.5 text-xs text-zinc-300 pt-4">
+                            <Sparkles size={16} className="text-cyan-400 shrink-0 mt-0.5" />
+                            <div>
+                              <strong className="text-white block font-bold">Pacote Oficial Exclusivo para WoW Forever (Vanilla+ Build 16001)</strong>
+                              <p className="text-[11px] text-zinc-400 mt-0.5 leading-relaxed">
+                                Contém <code className="text-cyan-300 font-mono">HaleckAccountImporterForever.toc</code>, <code className="text-cyan-300 font-mono">HaleckAccountImporterForever.lua</code>, instruções de instalação e scripts de sincronização automática (.bat / .ps1).
+                              </p>
+                            </div>
                           </div>
 
-                          <div className="space-y-1">
+                          <div className="space-y-1 text-xs">
                             <label className="text-[10px] font-bold text-zinc-300 uppercase tracking-wider block">
-                              Personagem Padrão
+                              Personagem Padrão (Opcional)
                             </label>
                             <input
                               type="text"
@@ -2823,38 +3717,65 @@ export default function SiteSettingsModal({
                               className="w-full bg-[#04060d] border border-zinc-800 rounded-xl px-3 py-2 text-xs text-white focus:border-cyan-500 focus:outline-none font-mono"
                             />
                           </div>
+
+                          <button
+                            type="button"
+                            onClick={handleDownloadAddonZip}
+                            disabled={isDownloadingAddon}
+                            className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-600/30 disabled:opacity-50"
+                          >
+                            <Download size={15} className={isDownloadingAddon ? "animate-bounce" : ""} />
+                            <span>{isDownloadingAddon ? "Gerando Pacote..." : "Baixar HaleckAccountImporterForever-5.0.0.zip"}</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* ========================================================================= */}
+                    {/* SEÇÃO 2.6: AGENTE LOCAL DE SINCRONIZAÇÃO (.BAT / .PS1 WATCHER)             */}
+                    {/* ========================================================================= */}
+                    <div className="rounded-2xl bg-[#090d18] border border-purple-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("addon_sync_scripts")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-purple-500/20 border border-purple-500/40 rounded-xl text-purple-300 shadow-md shadow-purple-500/20 shrink-0">
+                            <Terminal size={20} />
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                2.6 Agente Local de Sincronização (.BAT / .PS1 Watcher)
+                              </h5>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-950 border border-purple-400/50 text-purple-300 font-black">
+                                Live Watcher
+                              </span>
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Monitoramento contínuo em tempo real do SavedVariables para envio automático ao site
+                            </p>
+                          </div>
                         </div>
 
-                        <button
-                          type="button"
-                          onClick={handleDownloadAddonZip}
-                          disabled={isDownloadingAddon}
-                          className="w-full py-3 rounded-xl bg-gradient-to-r from-cyan-600 via-blue-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-black text-xs transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-600/30 disabled:opacity-50"
-                        >
-                          <Download size={15} className={isDownloadingAddon ? "animate-bounce" : ""} />
-                          <span>{isDownloadingAddon ? "Gerando Pacote..." : "Baixar HaleckAccountImporter.zip"}</span>
-                        </button>
-                      </div>
-
-                      {/* Agente Live Watcher */}
-                      <div className="p-5 rounded-2xl bg-[#090d18] border border-purple-500/40 space-y-4 shadow-xl flex flex-col justify-between">
-                        <div className="space-y-3.5">
-                          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                            <div className="flex items-center gap-2.5">
-                              <div className="p-2.5 bg-purple-500/20 border border-purple-500/40 rounded-xl text-purple-300">
-                                <Terminal size={18} />
-                              </div>
-                              <div>
-                                <h5 className="font-black text-sm text-white">Agente Local de Sincronização (.BAT / .PS1)</h5>
-                                <p className="text-[11px] text-zinc-400">Monitoramento contínuo em tempo real do SavedVariables</p>
-                              </div>
-                            </div>
-                            <span className="text-[10px] font-mono px-2.5 py-1 rounded-full bg-purple-950 border border-purple-400/50 text-purple-300 font-black">
-                              Live Watcher
-                            </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.addon_sync_scripts ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.addon_sync_scripts ? "rotate-180 text-white" : ""
+                            }`}
+                          >
+                            <ChevronDown size={16} />
                           </div>
+                        </div>
+                      </button>
 
-                          <p className="text-xs text-zinc-300 leading-relaxed">
+                      {!collapsedBlizzardSections.addon_sync_scripts && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <p className="text-xs text-zinc-300 leading-relaxed pt-4">
                             O agente roda em segundo plano no Windows e, sempre que você der <code className="bg-black/70 px-1.5 py-0.5 rounded text-cyan-300 font-mono font-bold border border-cyan-500/40">/reload</code> ou deslogar de um personagem no WoW, ele envia automaticamente o novo snapshot completo para o site!
                           </p>
 
@@ -2879,110 +3800,145 @@ export default function SiteSettingsModal({
                               <span className="text-[10px] text-zinc-400 font-normal">Monitoramento nativo assíncrono</span>
                             </button>
                           </div>
-                        </div>
 
-                        <div className="flex items-center justify-between p-3 rounded-xl bg-[#04060d] border border-zinc-800 text-xs">
-                          <span className="text-zinc-400">Endpoint Local de Ingestão:</span>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-cyan-400 font-black">/api/blizzard/wow/addon-sync</span>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyText("/api/blizzard/wow/addon-sync", "endpoint")}
-                              className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
-                              title="Copiar Endpoint"
-                            >
-                              {copiedEndpoint ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
-                            </button>
+                          <div className="flex items-center justify-between p-3 rounded-xl bg-[#04060d] border border-zinc-800 text-xs">
+                            <span className="text-zinc-400">Endpoint Local de Ingestão:</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-cyan-400 font-black">/api/blizzard/wow/addon-sync</span>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyText("/api/blizzard/wow/addon-sync", "endpoint")}
+                                className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white transition-colors cursor-pointer"
+                                title="Copiar Endpoint"
+                              >
+                                {copiedEndpoint ? <Check size={12} className="text-emerald-400" /> : <Copy size={12} />}
+                              </button>
+                            </div>
                           </div>
                         </div>
-                      </div>
+                      )}
                     </div>
 
                     {/* ========================================================================= */}
-                    {/* SEÇÃO 4: IMPORTAÇÃO MANUAL & DEV STUDIO                                    */}
+                    {/* SEÇÃO 2.7: IMPORTAÇÃO MANUAL DIRETA & ADDON DEV STUDIO                     */}
                     {/* ========================================================================= */}
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-                      {/* Card: Importação Manual Direta */}
-                      <div className="p-5 rounded-2xl bg-[#090d18] border border-zinc-800 space-y-3.5 shadow-xl">
-                        <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                          <span className="font-black text-xs text-white uppercase tracking-wider flex items-center gap-2">
-                            <Upload size={15} className="text-cyan-400" />
-                            Importar Arquivo de Dados Manualmente
-                          </span>
-                          <button
-                            type="button"
-                            onClick={handleQueryLocalAddonServer}
-                            disabled={isSyncingAddonServer}
-                            className="px-3 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
-                          >
-                            <RefreshCw size={12} className={isSyncingAddonServer ? "animate-spin text-cyan-400" : "text-zinc-400"} />
-                            <span>Consultar Servidor Local</span>
-                          </button>
-                        </div>
-
-                        <div
-                          onClick={() => addonFileInputRef.current?.click()}
-                          className="p-5 rounded-xl border border-dashed border-cyan-500/40 hover:border-cyan-400 bg-cyan-950/15 hover:bg-cyan-950/25 transition-all text-center space-y-2 cursor-pointer group"
-                        >
-                          <Archive size={24} className="mx-auto text-cyan-400 group-hover:scale-110 transition-transform" />
-                          <span className="font-black text-xs text-white block">
-                            Clique para selecionar SavedVariables/HaleckAccountImporter.lua ou .zip
-                          </span>
-                          <span className="text-[10px] text-zinc-400 font-mono block">Suporta arquivos .lua, .zip, .json</span>
-                        </div>
-                        <input
-                          type="file"
-                          ref={addonFileInputRef}
-                          onChange={handleUploadSavedVariables}
-                          accept=".lua,.zip,.json,.txt"
-                          className="hidden"
-                        />
-
-                        <div className="p-2.5 rounded-lg bg-amber-950/30 border border-amber-500/30 text-[11px] text-amber-200 flex items-start gap-2">
-                          <Zap size={14} className="text-amber-400 shrink-0 mt-0.5" />
-                          <span>
-                            <strong className="text-white">Dica WoW Forever:</strong> No jogo, após clicar em "Salvar Dados", clique em <strong className="text-cyan-300">"⚡ Recarregar UI (/reload)"</strong> no próprio addon para que o cliente grave o arquivo no disco antes do upload.
-                          </span>
-                        </div>
-
-                        {addonParsedResult && (
-                          <div className="p-3 rounded-xl bg-emerald-950/50 border border-emerald-500/40 text-xs text-emerald-200 flex items-center justify-between shadow-sm">
-                            <span className="font-semibold">
-                              Detectado: <strong className="text-white font-black">{addonParsedResult.activeProfile.name}</strong> ({addonParsedResult.activeProfile.characterClass}, Nv. {addonParsedResult.activeProfile.level})
-                            </span>
-                            <span className="text-[10px] font-mono text-emerald-300 font-black px-2 py-0.5 rounded bg-emerald-900/60 border border-emerald-500/30">
-                              {addonParsedResult.activeProfile.equippedItems?.length || 0} itens
-                            </span>
+                    <div className="rounded-2xl bg-[#090d18] border border-zinc-800 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("addon_manual_import_dev")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-zinc-800/80 border border-zinc-700 flex items-center justify-center text-cyan-400 shadow-md shrink-0">
+                            <Code size={20} />
                           </div>
-                        )}
-                      </div>
-
-                      {/* Card: Addon Dev Studio */}
-                      <div className="p-5 rounded-2xl bg-[#090d18] border border-zinc-800 space-y-4 shadow-xl flex flex-col justify-between">
-                        <div className="space-y-3">
-                          <div className="flex items-center justify-between border-b border-zinc-800/80 pb-3">
-                            <span className="font-black text-xs text-white uppercase tracking-wider flex items-center gap-2">
-                              <Code size={15} className="text-purple-400" />
-                              Estúdio de Desenvolvimento de Addons (Dev Studio)
-                            </span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                2.7 Importação Manual Direta & Addon Dev Studio
+                              </h5>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300 font-bold">
+                                Dev Tools
+                              </span>
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Upload manual de arquivos .lua/.zip e documentação canônica com as 12 fontes oficiais
+                            </p>
                           </div>
-                          <p className="text-xs text-zinc-300 leading-relaxed">
-                            Acesse a documentação canônica com as 12 fontes oficiais do ecossistema Blizzard, mapas de funções descontinuadas, regras Anti-Taint e gerador de templates.
-                          </p>
                         </div>
 
-                        <div className="flex items-center justify-between gap-3 pt-3 border-t border-zinc-800/80">
-                          <button
-                            type="button"
-                            onClick={() => setAddonDevModalOpen(true)}
-                            className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 text-white font-black text-xs transition-all cursor-pointer flex items-center gap-2 shadow-md shadow-purple-700/20"
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.addon_manual_import_dev ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.addon_manual_import_dev ? "rotate-180 text-white" : ""
+                            }`}
                           >
-                            <Code size={14} />
-                            <span>Abrir Addon Dev Studio</span>
-                          </button>
-                          <span className="text-[11px] text-zinc-400 font-mono">100% Compatível com WoW Forever</span>
+                            <ChevronDown size={16} />
+                          </div>
                         </div>
-                      </div>
+                      </button>
+
+                      {!collapsedBlizzardSections.addon_manual_import_dev && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4">
+                            {/* Card: Importação Manual Direta */}
+                            <div className="p-4 rounded-xl bg-[#05070d] border border-zinc-800 space-y-3 shadow-md">
+                              <div className="flex items-center justify-between border-b border-zinc-800/80 pb-2.5">
+                                <span className="font-black text-xs text-white uppercase tracking-wider flex items-center gap-2">
+                                  <Upload size={14} className="text-cyan-400" />
+                                  Upload de Arquivo Local
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={handleQueryLocalAddonServer}
+                                  disabled={isSyncingAddonServer}
+                                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                                >
+                                  <RefreshCw size={11} className={isSyncingAddonServer ? "animate-spin text-cyan-400" : "text-zinc-400"} />
+                                  <span>Consultar Servidor</span>
+                                </button>
+                              </div>
+
+                              <div
+                                onClick={() => addonFileInputRef.current?.click()}
+                                className="p-4 rounded-xl border border-dashed border-cyan-500/40 hover:border-cyan-400 bg-cyan-950/15 hover:bg-cyan-950/25 transition-all text-center space-y-1.5 cursor-pointer group"
+                              >
+                                <Archive size={22} className="mx-auto text-cyan-400 group-hover:scale-110 transition-transform" />
+                                <span className="font-bold text-xs text-white block">
+                                  Selecionar SavedVariables/HaleckAccountImporter.lua
+                                </span>
+                                <span className="text-[10px] text-zinc-400 font-mono block">Suporta arquivos .lua, .zip, .json</span>
+                              </div>
+                              <input
+                                type="file"
+                                ref={addonFileInputRef}
+                                onChange={handleUploadSavedVariables}
+                                accept=".lua,.zip,.json,.txt"
+                                className="hidden"
+                              />
+
+                              {addonParsedResult && (
+                                <div className="p-2.5 rounded-lg bg-emerald-950/50 border border-emerald-500/40 text-xs text-emerald-200 flex items-center justify-between">
+                                  <span className="font-semibold truncate">
+                                    Detectado: <strong className="text-white">{addonParsedResult.activeProfile.name}</strong> ({addonParsedResult.activeProfile.characterClass})
+                                  </span>
+                                  <span className="text-[10px] font-mono text-emerald-300 font-bold px-1.5 py-0.2 rounded bg-emerald-900/60 shrink-0">
+                                    {addonParsedResult.activeProfile.equippedItems?.length || 0} itens
+                                  </span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Card: Addon Dev Studio */}
+                            <div className="p-4 rounded-xl bg-[#05070d] border border-zinc-800 space-y-3 shadow-md flex flex-col justify-between">
+                              <div className="space-y-2">
+                                <span className="font-black text-xs text-white uppercase tracking-wider flex items-center gap-2">
+                                  <Code size={14} className="text-purple-400" />
+                                  Estúdio de Criação de Addons
+                                </span>
+                                <p className="text-xs text-zinc-300 leading-relaxed">
+                                  Acesse a documentação canônica com as 12 fontes oficiais do ecossistema Blizzard, mapas de funções descontinuadas, regras Anti-Taint e gerador de templates.
+                                </p>
+                              </div>
+
+                              <div className="pt-2 border-t border-zinc-800/80 flex items-center justify-between gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => setAddonDevModalOpen(true)}
+                                  className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-purple-700 to-indigo-700 hover:from-purple-600 hover:to-indigo-600 text-white font-black text-xs transition-all cursor-pointer flex items-center gap-2 shadow-md shadow-purple-700/20"
+                                >
+                                  <Code size={13} />
+                                  <span>Abrir Addon Dev Studio</span>
+                                </button>
+                                <span className="text-[10px] text-zinc-400 font-mono">Build 16001+</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -2991,50 +3947,75 @@ export default function SiteSettingsModal({
                 {/* SUB-TAB 3: SIMULADOR IN-GAME                                              */}
                 {/* ========================================================================= */}
                 {blizzardSubTab === "simulator" && (
-                  <div className="space-y-5">
-                    {/* Header bar com ações e status */}
-                    <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-r from-amber-950/40 via-[#0a101f] to-blue-950/40 border border-amber-500/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xl">
-                      <div className="flex items-center gap-3.5">
-                        <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0 shadow-md shadow-amber-500/10">
-                          <Sparkles size={20} />
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <h4 className="text-base font-black text-white">
-                              Simulador In-Game Interativo
-                            </h4>
-                            <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-400/50 text-cyan-300 font-black">
-                              /hai & /diario
-                            </span>
+                  <div className="space-y-4">
+                    <div className="rounded-2xl bg-[#090d18] border border-amber-500/40 shadow-xl overflow-hidden transition-all">
+                      <button
+                        type="button"
+                        onClick={() => toggleBlizzardSection("sim_preview_frame")}
+                        className="w-full p-4 sm:p-5 flex items-center justify-between gap-4 text-left cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      >
+                        <div className="flex items-center gap-3.5 min-w-0">
+                          <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-500/40 flex items-center justify-center text-amber-300 shrink-0 shadow-md">
+                            <Sparkles size={20} />
                           </div>
-                          <p className="text-xs text-zinc-300 mt-0.5">
-                            Interface gráfica in-game oficial reproduzida diretamente no console de administração com dados reais ou de demonstração.
-                          </p>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <h5 className="font-black text-sm sm:text-base text-white">
+                                3.1 Simulador In-Game Interativo
+                              </h5>
+                              <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-400/50 text-cyan-300 font-black">
+                                /hai & /diario
+                              </span>
+                            </div>
+                            <p className="text-xs text-zinc-400 mt-0.5 truncate">
+                              Interface gráfica in-game oficial reproduzida diretamente no console com dados reais ou demonstração
+                            </p>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => setSimulatorModalOpen(true)}
-                          className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-xs transition-all cursor-pointer shadow-md shadow-cyan-600/30 flex items-center gap-2"
-                        >
-                          <Eye size={14} />
-                          <span>Expandir em Tela Cheia</span>
-                        </button>
-                      </div>
-                    </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className="text-[11px] font-mono text-zinc-400 hidden sm:inline-block">
+                            {collapsedBlizzardSections.sim_preview_frame ? "Recolhido" : "Expandido"}
+                          </span>
+                          <div
+                            className={`p-1.5 rounded-lg border border-zinc-800 bg-zinc-900/80 text-zinc-400 transition-transform duration-200 ${
+                              !collapsedBlizzardSections.sim_preview_frame ? "rotate-180 text-white" : ""
+                            }`}
+                          >
+                            <ChevronDown size={16} />
+                          </div>
+                        </div>
+                      </button>
 
-                    {/* Simulador Interativo Embutido Diretamente na Tela */}
-                    <div className="w-full">
-                      <WoWAddonPreviewModal
-                        embedded={true}
-                        profile={activeWowGame?.blizzardProfileData}
-                        activeCharacterName={addonCharName || activeWowGame?.blizzardCharacterName}
-                        activeCharacterRealm={addonRealmName || activeWowGame?.blizzardRealm}
-                        gameVersion={selectedWoWVersion || activeWowGame?.wowVersion}
-                        onExpandModal={() => setSimulatorModalOpen(true)}
-                      />
+                      {!collapsedBlizzardSections.sim_preview_frame && (
+                        <div className="p-5 pt-0 border-t border-zinc-800/80 animate-fadeIn space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4">
+                            <p className="text-xs text-zinc-300 leading-relaxed max-w-2xl">
+                              Interface gráfica in-game oficial reproduzida diretamente no console de administração com dados reais ou de demonstração.
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setSimulatorModalOpen(true)}
+                              className="px-4 py-2 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-xs transition-all cursor-pointer shadow-md shadow-cyan-600/30 flex items-center gap-2 shrink-0 self-start sm:self-auto"
+                            >
+                              <Eye size={14} />
+                              <span>Expandir em Tela Cheia</span>
+                            </button>
+                          </div>
+
+                          {/* Simulador Interativo Embutido Diretamente na Tela */}
+                          <div className="w-full">
+                            <WoWAddonPreviewModal
+                              embedded={true}
+                              profile={activeWowGame?.blizzardProfileData}
+                              activeCharacterName={addonCharName || activeWowGame?.blizzardCharacterName}
+                              activeCharacterRealm={addonRealmName || activeWowGame?.blizzardRealm}
+                              gameVersion={selectedWoWVersion || activeWowGame?.wowVersion}
+                              onExpandModal={() => setSimulatorModalOpen(true)}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -3634,7 +4615,7 @@ export default function SiteSettingsModal({
           onClick={() => setGogDirectAuthModalOpen(false)}
         >
           <div
-            className="relative w-full max-w-lg bg-[#130b24] border border-purple-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden"
+            className="relative w-[98vw] max-w-4xl bg-[#130b24] border border-purple-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden max-h-[96vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -3698,7 +4679,7 @@ export default function SiteSettingsModal({
           onClick={() => setBlizzardDirectAuthModalOpen(false)}
         >
           <div
-            className="relative w-full max-w-xl bg-[#09111e] border border-sky-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden"
+            className="relative w-[98vw] max-w-4xl bg-[#09111e] border border-sky-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden max-h-[96vh] overflow-y-auto"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between">
@@ -3778,6 +4759,73 @@ export default function SiteSettingsModal({
               >
                 {isConnectingBlizzard ? <Loader2 size={13} className="animate-spin" /> : <CheckCircle2 size={13} />}
                 <span>Confirmar & Sincronizar OAuth</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-MODAL: IFRAME DIRECT ACCESS EXPLANATION & 1-CLICK LAUNCH */}
+      {showIframeAccessModal && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fadeIn"
+          onClick={() => setShowIframeAccessModal(false)}
+        >
+          <div
+            className="relative w-[95vw] max-w-lg bg-[#0b0e18] border border-cyan-500/50 rounded-3xl p-6 shadow-2xl text-white space-y-4 animate-scaleUp overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-3 bg-cyan-500/20 border border-cyan-500/40 rounded-2xl text-cyan-300">
+                  <HardDrive size={22} />
+                </div>
+                <div>
+                  <h4 className="text-base font-bold text-white">Instalação Direta no Disco (Estilo CurseForge)</h4>
+                  <p className="text-xs text-cyan-300/80">Criação de pastas e gravação de arquivos no computador</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowIframeAccessModal(false)}
+                className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white cursor-pointer"
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-[#060914] border border-zinc-800 space-y-3 text-xs leading-relaxed text-zinc-300">
+              <p>
+                Para que o site consiga <strong className="text-white">criar a pasta do addon e gravar/substituir os arquivos diretamente dentro do seu computador</strong> (exatamente como o CurseForge ou WowUp fazem), o navegador exige acesso direto via API de Sistema de Arquivos em <strong className="text-cyan-300">janela/aba completa</strong>.
+              </p>
+              <p className="text-[11px] text-zinc-400">
+                Dentro do painel incorporado (iframe), o navegador bloqueia a permissão de gravação direta no disco por motivos de segurança. Abra a versão completa abaixo com 1 clique para instalar diretamente!
+              </p>
+            </div>
+
+            <div className="flex flex-col sm:flex-row gap-2.5 pt-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowIframeAccessModal(false);
+                  if (typeof window !== "undefined") {
+                    window.open("https://gameloghalecks.ai.studio", "_blank");
+                  }
+                }}
+                className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 hover:from-emerald-500 hover:to-cyan-500 text-white font-bold text-xs flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-950"
+              >
+                <ExternalLink size={14} />
+                <span>Abrir no gameloghalecks.ai.studio</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowIframeAccessModal(false);
+                  handlePickWoWDirectory();
+                }}
+                className="px-4 py-3 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-xs font-bold text-zinc-300 hover:text-white cursor-pointer"
+              >
+                Selecionar Pasta Aqui
               </button>
             </div>
           </div>

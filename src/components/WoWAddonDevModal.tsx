@@ -193,7 +193,7 @@ MANDATORY RULES:
       }}
     >
       <div
-        className="relative w-full max-w-5xl bg-[#0c0d14] border border-cyan-500/30 rounded-3xl p-5 sm:p-6 shadow-2xl text-white space-y-4 overflow-hidden max-h-[92vh] flex flex-col cursor-default"
+        className="relative w-[98vw] max-w-[98vw] h-[98vh] max-h-[98vh] bg-[#0c0d14] border border-cyan-500/30 rounded-3xl p-5 sm:p-6 shadow-2xl text-white space-y-4 overflow-hidden flex flex-col cursor-default"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top Decorative Gradient Bar */}
@@ -1015,7 +1015,7 @@ MANDATORY RULES:
                     </p>
                     <div className="mt-1 text-[10px] text-zinc-400 font-mono space-y-0.5">
                       <div>Addons: <span className="text-zinc-300">World of Warcraft/_classic_beta_/Interface/AddOns/</span></div>
-                      <div>SavedVariables: <span className="text-zinc-300">World of Warcraft/_classic_beta_/WTF/Account/&lt;CONTA&gt;/SavedVariables/HaleckAccountImporter.lua</span></div>
+                      <div>SavedVariables: <span className="text-zinc-300">World of Warcraft/_classic_beta_/WTF/Account/&lt;CONTA&gt;/SavedVariables/HaleckAccountImporterForever.lua</span></div>
                     </div>
                   </div>
 

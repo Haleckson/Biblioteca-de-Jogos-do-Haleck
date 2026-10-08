@@ -1,8 +1,8 @@
 ## Interface: 20504
-## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura (TBC Classic)
+## Title: |cff00f2feHaleck|r Account Importer & Adventure Journal (TBC Classic)
 ## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for TBC Classic.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled

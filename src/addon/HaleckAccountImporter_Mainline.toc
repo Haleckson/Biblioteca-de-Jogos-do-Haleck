@@ -1,8 +1,8 @@
-## Interface: 110100, 110200
-## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura (Retail)
+## Interface: 110200
+## Title: |cff00f2feHaleck|r Account Importer & Adventure Journal (Retail)
 ## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections & Adventure Journal for Retail.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled

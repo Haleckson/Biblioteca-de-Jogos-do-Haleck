@@ -1,20 +1,11 @@
 ## Interface: 16001
 ## AllowLoadGameType: camelot
-## Interface-Forever: 16001
-## Interface-Camelot: 16001
-## Interface-Vanilla: 11506
-## Interface-Classic: 11506
-## Interface-TBC: 20504
-## Interface-Wrath: 30403
-## Interface-Cata: 40400
-## Interface-MoP: 50400
-## Interface-Retail: 110200
 ## Title: |cff00f2feHaleck|r Account Importer & Diário de Aventura
 ## Title-enUS: |cff00f2feHaleck|r Account Importer & Adventure Journal
 ## Title-ptBR: |cff00f2feHaleck|r Importador de Conta & Diário de Aventura
-## Notes: Exporta armaria completa AllTheThings e diário de aventura para o Haleck GameLog. Comandos: /hai (Painel de Importação) e /diario (Jornal de Aventura). Botão no Minimapa compatível com Ellesmere e gavetas.
-## Notes-enUS: Export full AllTheThings-grade armory & adventure journal for Haleck GameLog. Commands: /hai (Import Panel) and /diario (Adventure Journal). Minimap button compatible with Ellesmere and button drawers.
-## Notes-ptBR: Exporta armaria completa AllTheThings e diário de aventura para o Haleck GameLog. Comandos: /hai (Painel de Importação) e /diario (Jornal de Aventura). Botão no Minimapa compatível com Ellesmere e gavetas.
+## Notes: Exporta armaria completa AllTheThings e diário de aventura para o Haleck GameLog (WoW Forever). Comandos: /hai (Painel de Importação) e /diario (Jornal de Aventura). Botão no Minimapa compatível com Ellesmere e gavetas.
+## Notes-enUS: Export full AllTheThings-grade armory & adventure journal for Haleck GameLog (WoW Forever). Commands: /hai (Import Panel) and /diario (Adventure Journal). Minimap button compatible with Ellesmere and button drawers.
+## Notes-ptBR: Exporta armaria completa AllTheThings e diário de aventura para o Haleck GameLog (WoW Forever). Comandos: /hai (Painel de Importação) e /diario (Jornal de Aventura). Botão no Minimapa compatível com Ellesmere e gavetas.
 ## Notes-deDE: Exportiert vollständige AllTheThings-Armory und Abenteuertagebuch für Haleck GameLog. Befehle: /hai (Import-Panel) und /diario (Abenteuertagebuch). Minimap-Button kompatibel mit Ellesmere und Schubladen.
 ## Notes-esES: Exporta armería completa AllTheThings y diario de aventuras para Haleck GameLog. Comandos: /hai (Panel de Importación) y /diario (Diario de Aventura). Botón de minimapa compatible con Ellesmere y cajones.
 ## Author: Haleck
@@ -26,5 +17,3 @@
 ## IconTexture: Interface\Icons\INV_Misc_Rune_01
 
 HaleckAccountImporter.lua
-AddonInterface.lua
-

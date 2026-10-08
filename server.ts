@@ -6814,7 +6814,12 @@ app.get("/api/blizzard/wow/addon-sync/detect-paths", (req, res) => {
 // 3b. Endpoint to query Addon Manifest & Version Info
 app.get("/api/blizzard/wow/addon/manifest", (req, res) => {
   const addonDir = path.join(process.cwd(), "src", "addon");
-  const files = ["HaleckAccountImporter.toc", "HaleckAccountImporter.lua", "AddonInterface.lua"];
+  const files = [
+    "HaleckAccountImporterForever.toc",
+    "HaleckAccountImporterForever.lua",
+    "HaleckAccountImporter.toc",
+    "HaleckAccountImporter.lua",
+  ];
   const fileDetails = files.map((file) => {
     const fullPath = path.join(addonDir, file);
     const exists = fs.existsSync(fullPath);
@@ -6824,25 +6829,24 @@ app.get("/api/blizzard/wow/addon/manifest", (req, res) => {
 
   return res.json({
     success: true,
-    name: "Haleck Account Importer",
-    version: "4.3.0",
-    targetVersion: "WoW Forever (Vanilla+ Build 16001 / 16002)",
+    name: "Haleck Account Importer Forever",
+    version: "5.0.0-Forever",
+    targetVersion: "WoW Forever (Vanilla+ Build 16001)",
     officialLaunchDate: "2026-11-04",
     clientFolder: "_classic_beta_",
-    folderExample: "World of Warcraft/_classic_beta_/Interface/AddOns/HaleckAccountImporter/",
+    folderExample: "World of Warcraft/_classic_beta_/Interface/AddOns/HaleckAccountImporterForever/",
     files: fileDetails,
     features: [
-      "Suporte prioritário ao WoW Forever Beta (16001/16002) com camada adaptativa anti-quebra",
-      "Pipeline de migração automática de SavedVariables (schemaVersion 430) com EnsureDB dinâmico",
-      "Resolução canônica de nome e sobrenome com UnitNameUnmodified via securecall contra secret unit name taint",
-      "Correções nativas para bugs de interface Blizzard no WoW Forever (PatchAchievementShield, StatusBars, Summary)",
-      "Histórico de trocas comerciais entre jogadores (Trade Ledger) e histórico de fortuna (Wealth History)",
-      "Protocolo peer-to-peer de verificação de versões via canais de guilda e grupo (HAIVER Protocol)",
-      "Visualizador de equipamentos e atributos em tempo real com isolamento de propagação de teclado no EditBox",
-      "ATT-Grade Harvest de Quests, Magias, Talentos, Coleções e Estatísticas nativas via GetStatisticsCategoryList",
-      "Meu Diário de Aventura com 11 subcategorias especializadas e rastreamento de passos em tempo real",
-      "Contador e alertas de Chefes Mundiais (Lord Kazzak, Azuregos, Dragões do Pesadelo)",
-      "Ícone customizado com o 'H' estilizado da marca Haleck",
+      "Foco exclusivo e absoluto no WoW Forever (Vanilla+ Build 16001 / Camelot Engine)",
+      "Coleta 100% de todas as variáveis da conta e personagens inspirada no DataStore e Forever Companion",
+      "Varredura completa de equipamentos, bolsas (0-4), banco pessoal (-1 e 5-11), talentos e árvores",
+      "Estatísticas vitais completas: atributos base, dano melee, ranged, defesa, bônus de magias e resistências",
+      "Missões completas (IDs) e missões ativas com objetivos e pontos de voo",
+      "Chefes mundiais canônicos de Azeroth (Lord Kazzak, Azuregos, Dragões do Pesadelo)",
+      "Reputações completas com facções e valores de amizade/exaltação",
+      "Coleções completas de montarias, mascotes e títulos",
+      "Botão no minimapa compatível com gavetas de addons (EllesmereUI) e Blizzard Addon Compartment",
+      "Comandos rápidos /haif e /foreverimporter com diálogo gráfico in-game para cópia manual ou varredura instantânea",
     ],
   });
 });
@@ -6851,7 +6855,7 @@ app.get("/api/blizzard/wow/addon/manifest", (req, res) => {
 app.get("/api/blizzard/wow/addon/definitions", (req, res) => {
   return res.json({
     success: true,
-    version: "4.3.0",
+    version: "4.4.0",
     clientBuild: "16001",
     targetGame: "WoW Forever (Vanilla+)",
     lastUpdated: new Date().toISOString(),
@@ -6872,15 +6876,69 @@ app.get("/api/blizzard/wow/addon/definitions", (req, res) => {
   });
 });
 
-// 3d. Endpoint to query Addon installation status and check for updates
+// 3d. Endpoint to serve Raw Addon Files directly as text/plain fallback
+app.get("/api/blizzard/wow/addon/raw/:filename", (req, res) => {
+  const filename = req.params.filename;
+  const allowed = [
+    "HaleckAccountImporterForever.toc",
+    "HaleckAccountImporterForever.lua",
+    "HaleckAccountImporter.toc",
+    "HaleckAccountImporter.lua",
+    "AddonInterface.lua",
+  ];
+  if (!allowed.includes(filename)) {
+    return res.status(404).send("Arquivo não permitido.");
+  }
+  const filePath = path.join(process.cwd(), "src", "addon", filename);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("Arquivo não encontrado.");
+  }
+  res.setHeader("Content-Type", "text/plain; charset=utf-8");
+  return res.send(fs.readFileSync(filePath, "utf-8"));
+});
+
+// 3e. Endpoint to compute SHA-256 and MD5 checksums for Addon files
+app.get("/api/blizzard/wow/addon/github-checksum", async (req, res) => {
+  const crypto = await import("crypto");
+  const addonDir = path.join(process.cwd(), "src", "addon");
+  const filenames = [
+    "HaleckAccountImporterForever.toc",
+    "HaleckAccountImporterForever.lua",
+    "HaleckAccountImporter.toc",
+    "HaleckAccountImporter.lua",
+    "AddonInterface.lua",
+  ];
+  const fileHashes: Record<string, { sha256: string; md5: string; size: number }> = {};
+
+  for (const f of filenames) {
+    const p = path.join(addonDir, f);
+    if (fs.existsSync(p)) {
+      const content = fs.readFileSync(p, "utf-8").replace(/\r\n/g, "\n");
+      const sha256 = crypto.createHash("sha256").update(content).digest("hex");
+      const md5 = crypto.createHash("md5").update(content).digest("hex");
+      fileHashes[f] = { sha256, md5, size: content.length };
+    }
+  }
+
+  return res.json({
+    success: true,
+    repository: "https://github.com/Haleckson/Biblioteca-de-Jogos-do-Haleck",
+    branch: "main",
+    version: "5.0.0-Forever",
+    files: fileHashes,
+    checkedAt: new Date().toISOString(),
+  });
+});
+
+// 3f. Endpoint to query Addon installation status and check for updates
 app.get("/api/blizzard/wow/addon/status", (req, res) => {
   const targetPath = (req.query.targetPath as string) || "";
-  const availableVersion = "4.1.0";
+  const availableVersion = "5.0.0-Forever";
   const compatibleForeverBuilds = ["16001", "16002", "16003", "11506", "11507"];
 
   let cleanPath = targetPath.trim();
-  if (cleanPath && !cleanPath.toLowerCase().endsWith("haleckaccountimporter")) {
-    cleanPath = path.join(cleanPath, "HaleckAccountImporter");
+  if (cleanPath && !cleanPath.toLowerCase().endsWith("haleckaccountimporterforever") && !cleanPath.toLowerCase().endsWith("haleckaccountimporter")) {
+    cleanPath = path.join(cleanPath, "HaleckAccountImporterForever");
   }
 
   let installedVersion: string | null = null;
@@ -6890,7 +6948,9 @@ app.get("/api/blizzard/wow/addon/status", (req, res) => {
 
   if (cleanPath && fs.existsSync(cleanPath)) {
     isInstalled = true;
-    const tocPath = path.join(cleanPath, "HaleckAccountImporter.toc");
+    const foreverTocPath = path.join(cleanPath, "HaleckAccountImporterForever.toc");
+    const legacyTocPath = path.join(cleanPath, "HaleckAccountImporter.toc");
+    const tocPath = fs.existsSync(foreverTocPath) ? foreverTocPath : legacyTocPath;
     if (fs.existsSync(tocPath)) {
       try {
         const tocContent = fs.readFileSync(tocPath, "utf-8");
@@ -6901,7 +6961,7 @@ app.get("/api/blizzard/wow/addon/status", (req, res) => {
       } catch {}
     }
 
-    if (installedVersion === availableVersion) {
+    if (installedVersion === availableVersion || installedVersion?.includes("5.0")) {
       isUpToDate = true;
       status = "up_to_date";
     } else {
@@ -6940,18 +7000,25 @@ app.get("/api/blizzard/wow/addon/status", (req, res) => {
 // 3e. Endpoint to install or update the Addon into a specified local folder
 app.post("/api/blizzard/wow/addon/install", (req, res) => {
   try {
-    const { targetPath, version = "forever" } = req.body;
-    if (!targetPath || typeof targetPath !== "string") {
-      return res.status(400).json({ success: false, error: "Caminho da pasta Interface/AddOns não informado." });
+    const { targetPath, rootPath, version = "forever" } = req.body || {};
+    const effectivePath = rootPath || targetPath;
+    if (!effectivePath || typeof effectivePath !== "string") {
+      return res.status(400).json({ success: false, error: "Caminho da pasta raiz ou Interface/AddOns não informado." });
     }
 
-    const cleanPath = targetPath.trim();
+    const cleanPath = effectivePath.trim();
     const addonDir = path.join(process.cwd(), "src", "addon");
 
-    // Ensure final folder is HaleckAccountImporter
+    // Automatically resolve final folder to Interface/AddOns/HaleckAccountImporterForever from root or addons folder
     let destinationFolder = cleanPath;
-    if (!destinationFolder.toLowerCase().endsWith("haleckaccountimporter")) {
-      destinationFolder = path.join(destinationFolder, "HaleckAccountImporter");
+    if (!destinationFolder.toLowerCase().includes("interface")) {
+      destinationFolder = path.join(destinationFolder, "Interface", "AddOns", "HaleckAccountImporterForever");
+    } else if (!destinationFolder.toLowerCase().endsWith("haleckaccountimporterforever")) {
+      if (!destinationFolder.toLowerCase().endsWith("addons")) {
+        destinationFolder = path.join(destinationFolder, "AddOns", "HaleckAccountImporterForever");
+      } else {
+        destinationFolder = path.join(destinationFolder, "HaleckAccountImporterForever");
+      }
     }
 
     let isLocalDiskReachable = false;
@@ -6963,7 +7030,12 @@ app.post("/api/blizzard/wow/addon/install", (req, res) => {
       }
       isLocalDiskReachable = true;
 
-      const files = ["HaleckAccountImporter.toc", "HaleckAccountImporter.lua", "AddonInterface.lua"];
+      const files = [
+        "HaleckAccountImporterForever.toc",
+        "HaleckAccountImporterForever.lua",
+        "HaleckAccountImporter.toc",
+        "HaleckAccountImporter.lua",
+      ];
       for (const f of files) {
         const src = path.join(addonDir, f);
         if (fs.existsSync(src)) {
@@ -6982,8 +7054,8 @@ app.post("/api/blizzard/wow/addon/install", (req, res) => {
         installedDirectly: true,
         destinationFolder,
         filesWritten,
-        version: "4.1.0",
-        message: `Addon 'HaleckAccountImporter' v4.1.0 instalado/atualizado com sucesso em ${destinationFolder}!`,
+        version: "5.0.0-Forever",
+        message: `Addon 'HaleckAccountImporterForever' v5.0.0 instalado/atualizado com sucesso em ${destinationFolder}!`,
       });
     }
 
@@ -6993,12 +7065,204 @@ app.post("/api/blizzard/wow/addon/install", (req, res) => {
       installedDirectly: false,
       isWindowsClientPath: true,
       destinationFolder,
-      version: "4.1.0",
+      version: "5.0.0-Forever",
       message: `Caminho local do Windows registrado (${destinationFolder}). Utilize o instalador automático (.BAT ou .PS1) de 1 clique gerado pelo sistema para copiar os arquivos instantaneamente.`,
     });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: "Falha ao processar instalação do Addon", details: err?.message });
   }
+});
+
+// 3g. Persistent Paths Configuration (Cross-Device Sync)
+const WOW_PATHS_FILE = path.join(WOW_DATA_DIR, "wow-paths.json");
+
+function getStoredWoWPaths() {
+  const defaultPaths = {
+    addonTargetPath: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns",
+    scannerRootPath: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_",
+    selectedWoWVersion: "forever",
+    versionPaths: {
+      forever: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_",
+      retail: "C:\\Program Files (x86)\\World of Warcraft\\_retail_",
+      classic: "C:\\Program Files (x86)\\World of Warcraft\\_classic_era_",
+      tbc: "C:\\Program Files (x86)\\World of Warcraft\\_classic_",
+      mop: "C:\\Program Files (x86)\\World of Warcraft\\_classic_",
+    },
+    lastUpdated: new Date().toISOString(),
+  };
+  try {
+    if (fs.existsSync(WOW_PATHS_FILE)) {
+      const data = JSON.parse(fs.readFileSync(WOW_PATHS_FILE, "utf-8"));
+      return {
+        ...defaultPaths,
+        ...data,
+        versionPaths: { ...defaultPaths.versionPaths, ...(data.versionPaths || {}) },
+      };
+    }
+  } catch (err: any) {
+    console.warn("[WoW Paths] Aviso ao ler caminhos:", err?.message);
+  }
+  return defaultPaths;
+}
+
+function saveStoredWoWPaths(paths: any) {
+  try {
+    if (!fs.existsSync(WOW_DATA_DIR)) {
+      fs.mkdirSync(WOW_DATA_DIR, { recursive: true });
+    }
+    const current = getStoredWoWPaths();
+    const updated = {
+      ...current,
+      ...paths,
+      versionPaths: {
+        ...current.versionPaths,
+        ...(paths.versionPaths || {}),
+      },
+      lastUpdated: new Date().toISOString(),
+    };
+    const tmp = `${WOW_PATHS_FILE}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(updated, null, 2), "utf-8");
+    fs.renameSync(tmp, WOW_PATHS_FILE);
+    return updated;
+  } catch (err: any) {
+    console.warn("[WoW Paths] Erro ao salvar caminhos:", err?.message);
+    return paths;
+  }
+}
+
+app.get("/api/blizzard/wow/paths", (_req, res) => {
+  return res.json(getStoredWoWPaths());
+});
+
+app.post("/api/blizzard/wow/paths", (req, res) => {
+  const { addonTargetPath, scannerRootPath, selectedWoWVersion, versionPaths, rootPath } = req.body || {};
+  const current = getStoredWoWPaths();
+  const targetVer = selectedWoWVersion || current.selectedWoWVersion || "forever";
+
+  const updatedVersionPaths = {
+    ...current.versionPaths,
+    ...(versionPaths || {}),
+  };
+  if (rootPath) {
+    updatedVersionPaths[targetVer] = rootPath.trim();
+  }
+
+  const updated = saveStoredWoWPaths({
+    ...(addonTargetPath ? { addonTargetPath: addonTargetPath.trim() } : {}),
+    ...(scannerRootPath ? { scannerRootPath: scannerRootPath.trim() } : {}),
+    ...(selectedWoWVersion ? { selectedWoWVersion: selectedWoWVersion.trim() } : {}),
+    versionPaths: updatedVersionPaths,
+  });
+  return res.json({ success: true, ...updated });
+});
+
+// 3h. Automated WoW Directory Scanner (Server-Side Walk)
+// Recursively scans the user's specified root path on the computer/server for SavedVariables
+app.post("/api/blizzard/wow/scan-directory", (req, res) => {
+  try {
+    const { rootPath } = req.body || {};
+    if (!rootPath || typeof rootPath !== "string") {
+      return res.status(400).json({ success: false, error: "Caminho raiz do World of Warcraft não informado." });
+    }
+
+    const cleanPath = rootPath.trim();
+
+    // Check if the path exists on this host machine (e.g. localhost dev or local Node server)
+    if (!fs.existsSync(cleanPath)) {
+      return res.json({
+        success: false,
+        isRemoteServer: true,
+        rootPath: cleanPath,
+        message: `O diretório "${cleanPath}" não é acessível diretamente pelo sistema de arquivos deste servidor em nuvem. Utilize o Seletor Nativo de Pastas no navegador ou execute o script de sincronização de 1-clique.`,
+      });
+    }
+
+    const discoveredFiles: Array<{ filePath: string; fileName: string; size: number }> = [];
+
+    function walkDir(dir: string, depth: number) {
+      if (depth <= 0) return;
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          const lowerName = entry.name.toLowerCase();
+          if (entry.isDirectory()) {
+            if (![".git", "node_modules", "screenshots", "logs", "cache", "data", "errors", "gpucache", "updates"].includes(lowerName)) {
+              walkDir(fullPath, depth - 1);
+            }
+          } else if (entry.isFile()) {
+            const isTargetAddon =
+              lowerName.includes("haleck") ||
+              lowerName.includes("accountimporter") ||
+              lowerName.includes("foreverstatistics") ||
+              lowerName.includes("foreverjourney") ||
+              (fullPath.toLowerCase().includes("savedvariables") && (lowerName.endsWith(".lua") || lowerName.endsWith(".json")));
+            const isExt = lowerName.endsWith(".lua") || lowerName.endsWith(".lua.bak") || lowerName.endsWith(".json");
+            if (isTargetAddon && isExt) {
+              const stat = fs.statSync(fullPath);
+              discoveredFiles.push({
+                filePath: fullPath,
+                fileName: entry.name,
+                size: stat.size,
+              });
+            }
+          }
+        }
+      } catch (err: any) {
+        console.warn("[WoW Auto-Scan] Aviso ao ler diretório:", dir, err?.message);
+      }
+    }
+
+    walkDir(cleanPath, 8);
+
+    let importedCount = 0;
+    const processedCharacters: string[] = [];
+
+    for (const f of discoveredFiles) {
+      try {
+        const content = fs.readFileSync(f.filePath, "utf-8");
+        if (content && content.length > 10) {
+          const parsed = parseAddonData(content);
+          if (parsed) {
+            importedCount++;
+            const charName = parsed.activeProfile?.name || parsed.rawPayload?.character?.name;
+            if (charName && !processedCharacters.includes(charName)) {
+              processedCharacters.push(charName);
+            }
+          }
+        }
+      } catch (fErr: any) {
+        console.warn("[WoW Auto-Scan] Erro ao analisar arquivo:", f.filePath, fErr?.message);
+      }
+    }
+
+    return res.json({
+      success: discoveredFiles.length > 0,
+      isRemoteServer: false,
+      rootPath: cleanPath,
+      filesFoundCount: discoveredFiles.length,
+      files: discoveredFiles,
+      importedCount,
+      characters: processedCharacters,
+      message: discoveredFiles.length > 0
+        ? `Varredura concluída com sucesso no caminho real do computador! ${discoveredFiles.length} arquivo(s) localizados e ${importedCount} importado(s) automaticamente para o banco de dados!`
+        : `Nenhum arquivo de SavedVariables de HaleckAccountImporter foi encontrado dentro de "${cleanPath}" e suas subpastas.`,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: "Erro na varredura automática do diretório", details: err?.message });
+  }
+});
+
+// 3f. Direct download endpoint for individual addon source files
+app.get("/api/blizzard/wow/addon/files/:fileName", (req, res) => {
+  const fileName = path.basename(req.params.fileName);
+  const addonDir = path.join(process.cwd(), "src", "addon");
+  const filePath = path.join(addonDir, fileName);
+  if (fs.existsSync(filePath)) {
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    return res.sendFile(filePath);
+  }
+  return res.status(404).json({ success: false, error: "Arquivo não encontrado" });
 });
 
 // 4. Endpoint to query account economy and total gold across all alts

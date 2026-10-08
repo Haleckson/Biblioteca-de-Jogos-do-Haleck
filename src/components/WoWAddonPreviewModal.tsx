@@ -568,7 +568,7 @@ HaleckAccountImporterDB = {
       className={`relative w-full ${
         embedded
           ? "border-2 border-[#b8860b] rounded-2xl shadow-[0_0_30px_rgba(0,0,0,0.9)] overflow-hidden flex flex-col bg-[#0c0d13] min-h-[720px] max-h-[85vh]"
-          : "w-[95vw] h-[95vh] max-w-[95vw] max-h-[95vh] bg-[#0c0d13] border-2 border-[#b8860b] rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.95),inset_0_0_25px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col select-none"
+          : "w-[98vw] h-[98vh] max-w-[98vw] max-h-[98vh] bg-[#0c0d13] border-2 border-[#b8860b] rounded-2xl shadow-[0_0_50px_rgba(0,0,0,0.95),inset_0_0_25px_rgba(0,0,0,0.8)] overflow-hidden flex flex-col select-none"
       }`}
     >
       {/* 4 Rivets Ornamentais de Canto (Estilo Moldura de Janela Blizzard) */}

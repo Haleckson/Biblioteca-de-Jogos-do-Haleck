@@ -19,7 +19,7 @@
 local ADDON_NAME, addon = ...
 ADDON_NAME = ADDON_NAME or "HaleckAccountImporter"
 addon = addon or {}
-local ADDON_VERSION = "4.3.0"
+local ADDON_VERSION = "4.4.0"
 addon.Version = ADDON_VERSION
 
 -- Opções Padrão de Extração
@@ -111,6 +111,15 @@ local function EnsureDB()
         }
     end
 
+    -- Inicialização Segura de SavedVariablesPerCharacter
+    if type(_G.HaleckAccountImporterCharDB) ~= "table" then
+        _G.HaleckAccountImporterCharDB = {}
+    end
+    _G.HaleckAccountImporterCharDB.version = ADDON_VERSION
+    if type(_G.HaleckAccountImporterCharDB.options) ~= "table" then
+        _G.HaleckAccountImporterCharDB.options = {}
+    end
+
     return DB
 end
 EnsureDB()
@@ -181,11 +190,27 @@ SafeRegisterEvent(fCore, "PLAYER_TARGET_CHANGED")
 SafeRegisterEvent(fCore, "UPDATE_MOUSEOVER_UNIT")
 
 -- ========================================================================
--- UTILITÁRIOS & HELPERS SEGUROS (CROSS-VERSION WRAPPERS)
+-- UTILITÁRIOS & HELPERS SEGUROS (CROSS-VERSION WRAPPERS & ANTI-TAINT)
+-- Proteção Nativa para WoW Forever (16001 / Camelot) & Retail (Secret Values)
 -- ========================================================================
+local function IsSecret(v)
+    return (issecretvalue and issecretvalue(v)) or false
+end
+
+local function SafeVal(v, fallback)
+    if issecretvalue and issecretvalue(v) then return fallback end
+    return v
+end
+
+local function Readable(v)
+    return not (issecretvalue and issecretvalue(v)) and v ~= nil
+end
+
 local function SafeCall(fn, ...)
-    local ok, res = pcall(fn, ...)
-    if ok then return res end
+    local results = { pcall(fn, ...) }
+    if results[1] then
+        return unpack(results, 2)
+    end
     return nil
 end
 
@@ -244,8 +269,8 @@ end
 -- ========================================================================
 -- CONTROLE DE VERSÃO, BUILD & ATUALIZAÇÕES CONTÍNUAS (WOW FOREVER ENGINE)
 -- ========================================================================
-local CURRENT_ADDON_VERSION = "4.3.0"
-local CURRENT_SCHEMA_VERSION = 430
+local CURRENT_ADDON_VERSION = "4.4.0"
+local CURRENT_SCHEMA_VERSION = 440
 
 -- ========================================================================
 -- CORREÇÕES DE ERROS NATIVOS DA INTERFACE BLIZZARD NO WOW FOREVER (16001)
@@ -469,9 +494,13 @@ local function CompareVersions(a, b)
 end
 
 local function SendVersionMsg(kind, channel, target)
-    if not C_ChatInfo or type(C_ChatInfo.SendAddonMessage) ~= "function" then return false end
     local msg = PROTOCOL_MSG .. "|" .. kind .. "|" .. CURRENT_ADDON_VERSION
-    return pcall(C_ChatInfo.SendAddonMessage, VERSION_PREFIX, msg, channel, target)
+    if C_ChatInfo and type(C_ChatInfo.SendAddonMessage) == "function" then
+        return pcall(C_ChatInfo.SendAddonMessage, VERSION_PREFIX, msg, channel, target)
+    elseif type(SendAddonMessage) == "function" then
+        return pcall(SendAddonMessage, VERSION_PREFIX, msg, channel, target)
+    end
+    return false
 end
 
 local function BroadcastAddonVersion()
@@ -851,6 +880,10 @@ local function Haleck_GetContainerItemDetails(bag, slot)
             if ok and id then itemId = id end
         end
     end
+    if not itemId and link then
+        local idFromLink = tonumber(link:match("item:(%d+)"))
+        if idFromLink and idFromLink > 0 then itemId = idFromLink end
+    end
     return itemId, count or 1, icon, quality, link
 end
 
@@ -942,37 +975,40 @@ local function GetPlayerCoordinates()
 end
 
 stepTrackerFrame:SetScript("OnUpdate", function(self, elapsed)
-    if HaleckAccountImporterDB.options and HaleckAccountImporterDB.options.stepCounter == false then return end
+    if isInCombat or (InCombatLockdown and InCombatLockdown()) then return end
+    if not HaleckAccountImporterDB or (HaleckAccountImporterDB.options and HaleckAccountImporterDB.options.stepCounter == false) then return end
 
     stepAccumulatorTimer = stepAccumulatorTimer + elapsed
-    if stepAccumulatorTimer < 0.35 then return end -- Amostragem a cada 350ms
+    if stepAccumulatorTimer < 0.40 then return end -- Amostragem a cada 400ms (Alta precisão e zero impacto em FPS)
     stepAccumulatorTimer = 0
 
-    local mapID, curX, curY = GetPlayerCoordinates()
-    if not curX or not curY or curX == 0 or curY == 0 then return end
+    pcall(function()
+        local mapID, curX, curY = GetPlayerCoordinates()
+        if not curX or not curY or curX == 0 or curY == 0 then return end
 
-    if lastMapID == mapID and lastPlayerX and lastPlayerY then
-        local dx = curX - lastPlayerX
-        local dy = curY - lastPlayerY
-        local distNorm = math.sqrt(dx * dx + dy * dy)
+        if lastMapID == mapID and lastPlayerX and lastPlayerY then
+            local dx = curX - lastPlayerX
+            local dy = curY - lastPlayerY
+            local distNorm = math.sqrt(dx * dx + dy * dy)
 
-        -- Filtro anti-teleporte / carregamento de tela
-        -- Movimentos humanos dentro de 0.35s ficam abaixo de 0.05 normalizado no mapa
-        if distNorm > 0.0001 and distNorm < 0.04 then
-            -- Aproximação canônica de distância em Azeroth:
-            -- 1 unidade inteira de mapa ~ 15.000 jardas em zonas médias
-            local approxYards = distNorm * 12500
-            local approxSteps = approxYards * 1.33 -- Cada jarda equivale a ~1.33 passos humanos
+            -- Filtro anti-teleporte / carregamento de tela
+            -- Movimentos normais dentro de 0.4s ficam abaixo de 0.04 normalizado no mapa
+            if distNorm > 0.0001 and distNorm < 0.04 then
+                local approxYards = distNorm * 12500
+                local approxSteps = approxYards * 1.33 -- Cada jarda equivale a ~1.33 passos humanos
 
-            local stats = HaleckAccountImporterDB.journal.statistics
-            stats.steps = (stats.steps or 0) + math.floor(approxSteps + 0.5)
-            stats.distanceYards = (stats.distanceYards or 0) + math.floor(approxYards + 0.5)
+                local stats = HaleckAccountImporterDB.journal and HaleckAccountImporterDB.journal.statistics
+                if stats then
+                    stats.steps = (stats.steps or 0) + math.floor(approxSteps + 0.5)
+                    stats.distanceYards = (stats.distanceYards or 0) + math.floor(approxYards + 0.5)
+                end
+            end
         end
-    end
 
-    lastMapID = mapID
-    lastPlayerX = curX
-    lastPlayerY = curY
+        lastMapID = mapID
+        lastPlayerX = curX
+        lastPlayerY = curY
+    end)
 end)
 
 -- ========================================================================
@@ -1290,22 +1326,32 @@ local function HarvestNativeGameStatistics()
         local int = (UnitStat and UnitStat("player", 4)) or 0
         local spi = (UnitStat and UnitStat("player", 5)) or 0
 
-        statsCatalog["stat_strength"] = tostring(math.floor(str))
-        statsCatalog["stat_agility"] = tostring(math.floor(agi))
-        statsCatalog["stat_stamina"] = tostring(math.floor(sta))
-        statsCatalog["stat_intellect"] = tostring(math.floor(int))
-        statsCatalog["stat_spirit"] = tostring(math.floor(spi))
+        if Readable(str) then statsCatalog["stat_strength"] = tostring(math.floor(str)) end
+        if Readable(agi) then statsCatalog["stat_agility"] = tostring(math.floor(agi)) end
+        if Readable(sta) then statsCatalog["stat_stamina"] = tostring(math.floor(sta)) end
+        if Readable(int) then statsCatalog["stat_intellect"] = tostring(math.floor(int)) end
+        if Readable(spi) then statsCatalog["stat_spirit"] = tostring(math.floor(spi)) end
 
-        -- Vida & Recurso
-        local maxHp = (UnitHealthMax and UnitHealthMax("player")) or 0
-        local maxPower = (UnitPowerMax and UnitPowerMax("player")) or 0
+        -- Vida & Recurso (Proteção Anti-Secret Value para WoW Forever / 16001)
+        local maxHp = 0
+        local maxPower = 0
+        pcall(function()
+            local hp = UnitHealthMax and UnitHealthMax("player")
+            if Readable(hp) then maxHp = hp end
+            local pwr = UnitPowerMax and UnitPowerMax("player")
+            if Readable(pwr) then maxPower = pwr end
+        end)
         statsCatalog["stat_max_hp"] = tostring(maxHp)
         statsCatalog["stat_max_power"] = tostring(maxPower)
 
         -- Armadura & Mitigação
         if UnitArmor then
-            local _, effArmor = UnitArmor("player")
-            statsCatalog["stat_armor"] = tostring(math.floor(effArmor or 0))
+            pcall(function()
+                local _, effArmor = UnitArmor("player")
+                if Readable(effArmor) then
+                    statsCatalog["stat_armor"] = tostring(math.floor(effArmor))
+                end
+            end)
         end
 
         -- Poder de Ataque
@@ -1408,6 +1454,11 @@ local function SerializeItem(slotId, includeAllIds)
 
     local name, _, quality, itemLevel, _, itemType, itemSubType, _, equipLoc, texture = GetItemInfo(itemLink or itemId)
     
+    -- Se o item ainda não estiver no cache, solicita carregamento assíncrono à engine
+    if (not name or name == "") and C_Item and C_Item.RequestLoadItemDataByID then
+        pcall(C_Item.RequestLoadItemDataByID, itemId)
+    end
+
     -- Fallback robusto usando C_Item.GetItemInfoInstant para itens ainda não carregados no cache
     if not texture or texture == "" then
         if C_Item and C_Item.GetItemInfoInstant then
@@ -1437,6 +1488,14 @@ local function SerializeItem(slotId, includeAllIds)
         equipLoc = equipLoc or "",
         link = itemLink or "",
     }
+
+    -- Extração de Encantamentos e Sufixos do ItemLink
+    if itemLink then
+        local enchant = tonumber(itemLink:match("item:%d+:(%d+)"))
+        if enchant and enchant > 0 then itemObj.enchantId = enchant end
+        local suffix = tonumber(itemLink:match("item:%d+:%d+:%d+:%d+:%d+:%d+:(%-?%d+)"))
+        if suffix and suffix ~= 0 then itemObj.suffixId = suffix end
+    end
 
     if includeAllIds ~= false then
         local displayId = 0
@@ -1999,9 +2058,12 @@ local function ExportCharacterSnapshot(userOpts)
     local charPower = 100
     local charArmor = 0
     pcall(function()
-        charHp = UnitHealthMax("player") or 5000
-        charPower = UnitPowerMax("player") or 100
-        charArmor = select(2, UnitArmor("player")) or 0
+        local hp = UnitHealthMax and UnitHealthMax("player")
+        if Readable(hp) then charHp = hp end
+        local pwr = UnitPowerMax and UnitPowerMax("player")
+        if Readable(pwr) then charPower = pwr end
+        local arm = UnitArmor and select(2, UnitArmor("player"))
+        if Readable(arm) then charArmor = arm end
     end)
 
     -- Snapshot Completo
@@ -2081,10 +2143,12 @@ local function ExportCharacterSnapshot(userOpts)
     HaleckAccountImporterDB.characters[charKey] = snapshot
 
     -- Suporte a SavedVariablesPerCharacter
-    if type(HaleckAccountImporterCharDB) == "table" then
-        HaleckAccountImporterCharDB.lastExport = snapshot
-        HaleckAccountImporterCharDB.character = snapshot.character
+    if type(_G.HaleckAccountImporterCharDB) ~= "table" then
+        _G.HaleckAccountImporterCharDB = {}
     end
+    _G.HaleckAccountImporterCharDB.lastExport = snapshot
+    _G.HaleckAccountImporterCharDB.character = snapshot.character
+    _G.HaleckAccountImporterCharDB.options = opts
 
     table.insert(HaleckAccountImporterDB.history, {
         date = snapshot.exportedAt,
@@ -2214,34 +2278,8 @@ end
 -- ========================================================================
 fCore:SetScript("OnEvent", function(self, event, arg1, arg2, arg3, arg4, arg5)
     if event == "ADDON_LOADED" and arg1 == ADDON_NAME then
-        -- Migração de Esquema & Inicialização dos Dados Persistentes
-        HaleckAccountImporterDB = HaleckAccountImporterDB or {}
-        HaleckAccountImporterDB.version = ADDON_VERSION
-        HaleckAccountImporterDB.options = HaleckAccountImporterDB.options or {}
-        for k, v in pairs(DEFAULT_OPTIONS) do
-            if HaleckAccountImporterDB.options[k] == nil then
-                HaleckAccountImporterDB.options[k] = v
-            end
-        end
-        HaleckAccountImporterDB.journal = HaleckAccountImporterDB.journal or {}
-        HaleckAccountImporterDB.journal.timeline = HaleckAccountImporterDB.journal.timeline or {}
-        HaleckAccountImporterDB.journal.bosses = HaleckAccountImporterDB.journal.bosses or {}
-        HaleckAccountImporterDB.journal.companions = HaleckAccountImporterDB.journal.companions or {}
-        HaleckAccountImporterDB.journal.exploration = HaleckAccountImporterDB.journal.exploration or {}
-        HaleckAccountImporterDB.journal.deaths = HaleckAccountImporterDB.journal.deaths or {}
-        HaleckAccountImporterDB.journal.statistics = HaleckAccountImporterDB.journal.statistics or {}
-        local s = HaleckAccountImporterDB.journal.statistics
-        s.steps = s.steps or 0
-        s.distanceYards = s.distanceYards or 0
-        s.totalQuestsCompleted = s.totalQuestsCompleted or 0
-        s.totalBossesDefeated = s.totalBossesDefeated or 0
-        s.totalCompanionsMet = s.totalCompanionsMet or 0
-        s.totalDeaths = s.totalDeaths or 0
-        HaleckAccountImporterDB.history = HaleckAccountImporterDB.history or {}
-        HaleckAccountImporterDB.worldBosses = HaleckAccountImporterDB.worldBosses or {}
-        HaleckAccountImporterDB.pendingChanges = HaleckAccountImporterDB.pendingChanges or {}
-
-        -- Executa pipeline de migrações automáticas
+        -- Inicialização dos Dados Persistentes & Migração Automática
+        EnsureDB()
         Haleck_RunMigrations()
     elseif event == "PLAYER_LOGIN" then
         EnsureDB()

@@ -304,8 +304,8 @@ export const AddonExportModal: React.FC<AddonExportModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-3 sm:p-4 bg-black/80 backdrop-blur-sm animate-in fade-in duration-200">
-      <div className="bg-zinc-950 border border-cyan-500/40 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl shadow-cyan-500/10 overflow-hidden text-left">
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-2 sm:p-3 bg-black/85 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="bg-[#0c0d14] border border-cyan-500/40 rounded-3xl w-[98vw] max-w-[98vw] h-[98vh] max-h-[98vh] flex flex-col shadow-2xl shadow-cyan-500/10 overflow-hidden text-left">
         {/* Modal Header */}
         <div className="p-4 sm:p-5 border-b border-zinc-800/80 bg-zinc-900/60 flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -315,14 +315,14 @@ export const AddonExportModal: React.FC<AddonExportModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-base sm:text-lg font-black text-white">
-                  Haleck Account Importer
+                  Haleck Account Importer Forever
                 </h3>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-950 border border-cyan-500/40 text-cyan-300 font-bold">
-                  WoW Addon Universal
+                  WoW Forever Exclusivo (Build 16001)
                 </span>
               </div>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Exporte diretamente do jogo e importe Armory, Inventário, Coleções e Conquistas.
+                Exporte diretamente do jogo e importe Armory, Bolsas, Banco, Estatísticas, Talentos, Missões e Coleções do WoW Forever.
               </p>
             </div>
           </div>
@@ -458,42 +458,34 @@ export const AddonExportModal: React.FC<AddonExportModalProps> = ({
               <div className="p-4 rounded-xl bg-cyan-950/20 border border-cyan-500/30 space-y-2">
                 <div className="flex items-center gap-2 text-cyan-300 font-bold text-sm">
                   <Sparkles size={16} />
-                  <span>Personalize seu Pacote Addon</span>
+                  <span>Haleck Account Importer Forever (HAIF)</span>
                 </div>
                 <p className="text-zinc-400">
-                  O pacote inclui <strong className="text-white">HaleckAccountImporter.toc</strong>, <strong className="text-white">HaleckAccountImporter.lua</strong> e instruções completas para sua versão do World of Warcraft.
+                  O pacote inclui <strong className="text-white">HaleckAccountImporterForever.toc</strong> e <strong className="text-white">HaleckAccountImporterForever.lua</strong> com foco exclusivo no WoW Forever (Build 16001 / Camelot Engine).
                 </p>
               </div>
 
-              {/* Version Selector */}
+              {/* Version & Realm display */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-[11px] font-bold uppercase text-zinc-400 mb-1">
-                    Versão do Cliente de WoW:
+                    Cliente Alvo:
                   </label>
-                  <select
-                    value={selectedVersion}
-                    onChange={(e) => setSelectedVersion(e.target.value)}
-                    className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-white font-medium focus:border-cyan-500 focus:outline-none"
-                  >
-                    <option value="forever">⭐ WoW Forever (Vanilla+ • Lançamento 04/Nov - Recomendado)</option>
-                    <option value="forever_beta">WoW Forever Beta (Build 16001)</option>
-                    <option value="retail">WoW Retail (The War Within 11.x / Midnight)</option>
-                    <option value="classic">WoW Classic Era (1.15.x)</option>
-                    <option value="mop">Mists of Pandaria Classic (5.4.8)</option>
-                    <option value="tbc">The Burning Crusade Classic</option>
-                  </select>
+                  <div className="p-2.5 rounded-xl bg-zinc-900 border border-cyan-500/40 text-cyan-300 font-bold flex items-center justify-between">
+                    <span>WoW Forever (Build 16001 • _classic_beta_)</span>
+                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-500/40">Exclusivo</span>
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-[11px] font-bold uppercase text-zinc-400 mb-1">
-                    Reino / Ruleset:
+                    Reino / Ruleset Padrão:
                   </label>
                   <input
                     type="text"
                     value={realmName}
                     onChange={(e) => setRealmName(e.target.value)}
-                    placeholder="Ex: Azralon, Whitemane ou Forever"
+                    placeholder="Ex: Whitemane ou Forever Beta"
                     className="w-full bg-zinc-900 border border-zinc-800 rounded-xl px-3 py-2 text-white placeholder-zinc-600 focus:border-cyan-500 focus:outline-none"
                   />
                 </div>
@@ -508,29 +500,24 @@ export const AddonExportModal: React.FC<AddonExportModalProps> = ({
                   className="w-full py-3 px-4 rounded-xl bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-black text-sm transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-500/20 disabled:opacity-50"
                 >
                   <Download size={16} className={isDownloading ? "animate-bounce" : ""} />
-                  <span>{isDownloading ? "Gerando Pacote..." : "Baixar HaleckAccountImporter.zip"}</span>
+                  <span>{isDownloading ? "Gerando Pacote..." : "Baixar HaleckAccountImporterForever-5.0.0.zip"}</span>
                 </button>
               </div>
 
-              {/* Interactive In-Game Simulator Preview Card */}
+              {/* In-Game Usage & Minimap Button Info Card */}
               <div className="p-3.5 rounded-xl bg-gradient-to-r from-cyan-950/60 via-blue-950/40 to-cyan-950/60 border border-cyan-500/40 flex items-center justify-between gap-3 flex-wrap shadow-inner">
                 <div className="space-y-0.5">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-white">
-                    <Sparkles size={14} className="text-amber-400" />
-                    <span>Quer ver como o Addon fica dentro do World of Warcraft?</span>
+                    <Terminal size={14} className="text-cyan-400" />
+                    <span>Comandos no Jogo:</span>
+                    <code className="text-cyan-300 font-mono bg-cyan-950 px-1.5 py-0.5 rounded text-[11px]">/haif</code>
+                    <code className="text-cyan-300 font-mono bg-cyan-950 px-1.5 py-0.5 rounded text-[11px]">/haif scan</code>
+                    <code className="text-cyan-300 font-mono bg-cyan-950 px-1.5 py-0.5 rounded text-[11px]">/haif export</code>
                   </div>
                   <p className="text-[11px] text-zinc-400">
-                    Abra o simulador in-game para explorar a Central de Extração e o Diário de Aventura com dados reais ou exemplo.
+                    O botão do minimapa é arrastável e 100% compatível com a gaveta de addons do <strong>EllesmereUI</strong> e Blizzard Addon Compartment!
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setPreviewModalOpen(true)}
-                  className="px-3.5 py-1.5 rounded-lg bg-cyan-600 hover:bg-cyan-500 text-white font-bold text-xs transition-all flex items-center gap-1.5 cursor-pointer shadow-md shadow-cyan-600/20"
-                >
-                  <Eye size={13} />
-                  <span>Abrir Simulador In-Game</span>
-                </button>
               </div>
 
               {/* Step by Step Guide */}
@@ -540,13 +527,13 @@ export const AddonExportModal: React.FC<AddonExportModalProps> = ({
                   Instruções de Instalação no Jogo:
                 </h4>
                 <ol className="list-decimal list-inside space-y-1.5 text-zinc-300 leading-relaxed text-[11px]">
-                  <li>Extraia o arquivo baixado na pasta <code className="bg-zinc-950 px-1 py-0.5 rounded text-cyan-300 font-mono">Interface/AddOns/</code> do seu World of Warcraft.</li>
+                  <li>Extraia a pasta <code className="bg-zinc-950 px-1 py-0.5 rounded text-cyan-300 font-mono">HaleckAccountImporterForever</code> dentro de <code className="bg-zinc-950 px-1 py-0.5 rounded text-cyan-300 font-mono">_classic_beta_/Interface/AddOns/</code> do seu World of Warcraft.</li>
                   <li className="text-cyan-200">
-                    <strong className="text-cyan-300">⚔️ WoW Forever Beta:</strong> A pasta do cliente vem nomeada no disco como <code className="bg-zinc-950 px-1 py-0.5 rounded text-amber-300 font-mono font-bold">World of Warcraft/_classic_beta_/</code>. Extraia o Addon em <code className="bg-zinc-950 px-1 py-0.5 rounded text-cyan-300 font-mono">_classic_beta_/Interface/AddOns/</code>.
+                    <strong className="text-cyan-300">⚔️ Pasta Oficial:</strong> O cliente de WoW Forever vem escrito no disco como <code className="bg-zinc-950 px-1 py-0.5 rounded text-amber-300 font-mono font-bold">World of Warcraft/_classic_beta_/</code>.
                   </li>
-                  <li>No jogo, certifique-se de que o Addon está ativo no botão <strong className="text-white">AddOns</strong>.</li>
-                  <li>Dentro do jogo com seu personagem, digite <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-amber-300 font-mono font-bold">/hai</code> ou <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-amber-300 font-mono font-bold">/haleck</code> no chat.</li>
-                  <li>Copie os dados gerados ou volte a esta janela na aba <strong className="text-cyan-300">2. Importar Dados</strong> e selecione o arquivo <code className="bg-zinc-950 px-1 py-0.5 rounded text-cyan-300 font-mono">WTF/.../SavedVariables/HaleckAccountImporter.lua</code>.</li>
+                  <li>No jogo, certifique-se de que o Addon está ativo no menu de AddOns e faça login no seu personagem.</li>
+                  <li>Use o comando <code className="bg-zinc-950 px-1.5 py-0.5 rounded text-amber-300 font-mono font-bold">/haif</code> ou clique no ícone do minimapa.</li>
+                  <li>Para importar aqui, selecione o arquivo <code className="bg-zinc-950 px-1 py-0.5 rounded text-cyan-300 font-mono">_classic_beta_/WTF/.../SavedVariables/HaleckAccountImporterForever.lua</code> ou use o scanner de 1 clique!</li>
                 </ol>
               </div>
             </div>

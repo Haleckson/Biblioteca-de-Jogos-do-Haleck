@@ -156,7 +156,7 @@ function convertLuaToJson(luaStr: string): string {
     .replace(/--.*$/gm, "")
     .trim();
 
-  const match = clean.match(/(?:HaleckAccountImporterDB|HaloWoWExporterDB|MyCharDataDB)\s*=\s*(\{[\s\S]*\})/);
+  const match = clean.match(/(?:HaleckAccountImporterForeverDB|HaleckAccountImporterDB|HaloWoWExporterDB|MyCharDataDB)\s*=\s*(\{[\s\S]*\})/);
   if (match && match[1]) {
     clean = match[1];
   }
@@ -180,6 +180,11 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
     root = input;
   } else if (typeof input === "string") {
     let trimmed = input.trim();
+
+    // Suporte para payload exportado do Haleck Account Importer Forever (HAIF)
+    if (trimmed.startsWith("HAIF_DATA:")) {
+      trimmed = trimmed.replace(/^HAIF_DATA:/, "").trim();
+    }
 
     // Suporte Canônico para LibDeflate Base64 (!HAI4:DEF: ou !HAI:DEF: ou !HAI:)
     if (trimmed.startsWith("!HAI4:DEF:") || trimmed.startsWith("!HAI:DEF:") || trimmed.startsWith("!HAI:")) {
@@ -216,8 +221,10 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
       try {
         const luaJs = parseLuaStringToJs(trimmed);
         const dbObj =
+          luaJs.HaleckAccountImporterForeverDB ||
           luaJs.HaleckAccountImporterDB ||
           luaJs.HaloWoWExporterDB ||
+          luaJs.HaleckAccountImporterForeverCharDB ||
           luaJs.HaleckAccountImporterCharDB ||
           luaJs.MyCharDataDB ||
           luaJs;
@@ -296,6 +303,9 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
     rawPath.includes("classic_beta") ||
     game.isForever ||
     game.isForeverBeta ||
+    char.isForever ||
+    root.addon === "HaleckAccountImporterForever" ||
+    root.clientBuild === "16001" ||
     detectedVersion.includes("forever") ||
     realm.toLowerCase().includes("forever") ||
     realm.toLowerCase().includes("16001") ||
@@ -320,7 +330,7 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
   const versionLabels: Record<string, string> = {
     retail: "WoW Retail (The War Within)",
     classic: "WoW Classic Era (1.15.x)",
-    forever: "WoW Forever Beta (Build 16001 • _classic_beta_)",
+    forever: "WoW Forever (Build 16001 • _classic_beta_)",
     mop: "Mists of Pandaria",
     tbc: "The Burning Crusade",
   };
@@ -331,102 +341,150 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
   const charGender = (char.gender || "MALE").toUpperCase();
   const charFaction = (char.faction || "HORDE").toUpperCase();
   const charLevel = Number(char.level) || 80;
-  const equippedItemLevel = Number(char.equippedItemLevel || char.itemLevel) || 0;
-  const averageItemLevel = Number(char.averageItemLevel || equippedItemLevel) || equippedItemLevel;
+  const equippedItemLevel = Number(char.equippedItemLevel || char.itemLevel || char.averageItemLvl) || 0;
+  const averageItemLevel = Number(char.averageItemLevel || char.averageItemLvl || equippedItemLevel) || equippedItemLevel;
   const achievementPoints = Number(char.achievementPoints ?? snapshot.achievementPoints) || 0;
 
-  // Process equipped items
-  const rawEquipped = snapshot.equippedItems || snapshot.gear || [];
+  // Process equipped items (supports Array or Record<slotName, itemObj>)
+  const rawEquipped = snapshot.equippedItems || snapshot.gear || char.gear || [];
   const equippedItems: BlizzardGearItem[] = [];
+  const gearList: any[] = Array.isArray(rawEquipped)
+    ? rawEquipped
+    : rawEquipped && typeof rawEquipped === "object"
+    ? Object.values(rawEquipped)
+    : [];
 
-  if (Array.isArray(rawEquipped)) {
-    for (const item of rawEquipped) {
-      if (item && (item.id || item.itemId)) {
-        const itemId = Number(item.itemId || item.id);
-        const slot = item.slot || "UNKNOWN";
-        const displayId = Number(item.displayId || item.itemDisplayId) || resolveDisplayIdForArmoryItem({
-          id: itemId,
-          itemId: itemId,
-          slot: slot,
-          slotId: item.slotId,
-          displayId: item.displayId || item.itemDisplayId,
-          transmog: item.transmog,
-        });
+  for (const item of gearList) {
+    if (item && (item.id || item.itemId || item.itemID)) {
+      const itemId = Number(item.itemId || item.itemID || item.id);
+      const slot = item.slot || item.slotName || "UNKNOWN";
+      const displayId = Number(item.displayId || item.itemDisplayId) || resolveDisplayIdForArmoryItem({
+        id: itemId,
+        itemId: itemId,
+        slot: slot,
+        slotId: item.slotId || item.slotID,
+        displayId: item.displayId || item.itemDisplayId,
+        transmog: item.transmog,
+      });
 
-        equippedItems.push({
-          id: itemId,
-          itemId: itemId,
-          displayId: displayId,
-          slot: slot,
-          name: item.name || `Item #${itemId}`,
-          quality: String(item.quality || "EPIC").toUpperCase(),
-          itemLevel: Number(item.itemLevel) || equippedItemLevel,
-          iconUrl: item.iconUrl || item.icon || "",
-          inventoryType: item.itemType || item.inventoryType || "Armor",
-          transmog: item.transmog,
-          enchantment: item.enchantment,
-          stats: Array.isArray(item.stats) ? item.stats : [],
-        });
-      }
+      equippedItems.push({
+        id: itemId,
+        itemId: itemId,
+        displayId: displayId,
+        slot: slot,
+        name: item.name || `Item #${itemId}`,
+        quality: String(item.quality || "EPIC").toUpperCase(),
+        itemLevel: Number(item.itemLevel || item.ilvl) || equippedItemLevel,
+        iconUrl: item.iconUrl || item.icon || "",
+        inventoryType: item.itemType || item.inventoryType || "Armor",
+        transmog: item.transmog,
+        enchantment: item.enchantment || (item.enchantID ? `Encanto #${item.enchantID}` : undefined),
+        stats: Array.isArray(item.stats) ? item.stats : [],
+      });
     }
   }
 
-  // Process inventory
-  const inventory = snapshot.inventory || {
-    backpack: { id: 0, name: "Backpack", iconUrl: "", slotCount: 16, bagSlotIndex: 0, items: [] },
-    bags: [],
-    currencies: [],
-    gold: 0,
-    silver: 0,
-    copper: 0,
-  };
+  // Process inventory & bags (supports HAIF bags structure 0-4)
+  let inventory = snapshot.inventory;
+  const rawBags = snapshot.bags || char.bags;
+  if (!inventory && rawBags) {
+    const bagsList = Array.isArray(rawBags) ? rawBags : Object.values(rawBags);
+    const backpackBag = bagsList.find((b: any) => b && (b.bagID === 0 || b.id === 0));
+    const extraBags = bagsList.filter((b: any) => b && (b.bagID > 0 || (b.id > 0 && b.id <= 4)));
 
-  // Process collections (mounts, pets)
+    const mapBagItems = (bag: any) => {
+      if (!bag || !bag.items) return [];
+      const itemsList = Array.isArray(bag.items) ? bag.items : Object.values(bag.items);
+      return itemsList.filter((it: any) => it && (it.itemID || it.itemId || it.id)).map((it: any) => ({
+        id: Number(it.itemID || it.itemId || it.id),
+        name: it.name || `Item #${it.itemID || it.id}`,
+        iconUrl: it.icon || it.iconUrl || "",
+        quality: String(it.quality || "COMMON").toUpperCase(),
+        count: Number(it.count || 1),
+        slotIndex: Number(it.slot || 0),
+      }));
+    };
+
+    const goldTotal = Number(char.money || 0);
+    inventory = {
+      backpack: {
+        id: 0,
+        name: "Mochila",
+        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_08.jpg",
+        slotCount: backpackBag?.numSlots || 16,
+        bagSlotIndex: 0,
+        items: mapBagItems(backpackBag),
+      },
+      bags: extraBags.map((b: any, idx: number) => ({
+        id: b.bagID || idx + 1,
+        name: b.name || `Bolsa ${idx + 1}`,
+        iconUrl: "https://wow.zamimg.com/images/wow/icons/large/inv_misc_bag_08.jpg",
+        slotCount: b.numSlots || 16,
+        bagSlotIndex: idx + 1,
+        items: mapBagItems(b),
+      })),
+      currencies: [],
+      gold: Math.floor(goldTotal / 10000),
+      silver: Math.floor((goldTotal % 10000) / 100),
+      copper: goldTotal % 100,
+    };
+  } else if (!inventory) {
+    const goldTotal = Number(char.money || 0);
+    inventory = {
+      backpack: { id: 0, name: "Backpack", iconUrl: "", slotCount: 16, bagSlotIndex: 0, items: [] },
+      bags: [],
+      currencies: [],
+      gold: Math.floor(goldTotal / 10000),
+      silver: Math.floor((goldTotal % 10000) / 100),
+      copper: goldTotal % 100,
+    };
+  }
+
+  // Process collections (mounts, pets, titles)
   const collectionsMounts: BlizzardCollectionMount[] = [];
-  const rawMounts = snapshot.collections?.mounts || snapshot.mounts || [];
-  if (Array.isArray(rawMounts)) {
-    for (const m of rawMounts) {
-      if (m && (m.id || m.name)) {
-        collectionsMounts.push({
-          id: Number(m.id || m.spellId || Date.now()),
-          name: m.name || "Mount",
-          iconUrl: m.iconUrl || m.icon || "",
-          spellId: m.spellId ? Number(m.spellId) : undefined,
-          itemId: m.itemId ? Number(m.itemId) : undefined,
-          mountType: m.mountType || "ground",
-          source: m.source || "Addon Sync",
-          description: m.description || "",
-          isCollected: true,
-        });
-      }
+  const rawMounts = snapshot.collections?.mounts || snapshot.mounts || char.mounts || [];
+  const mountsList = Array.isArray(rawMounts) ? rawMounts : Object.values(rawMounts);
+  for (const m of mountsList) {
+    if (m && (m.id || m.name || m.spellID || m.spellId)) {
+      collectionsMounts.push({
+        id: Number(m.id || m.spellID || m.spellId || Date.now()),
+        name: m.name || "Mount",
+        iconUrl: m.iconUrl || m.icon || "",
+        spellId: m.spellID || m.spellId ? Number(m.spellID || m.spellId) : undefined,
+        itemId: m.itemId ? Number(m.itemId) : undefined,
+        mountType: m.mountType || "ground",
+        source: m.source || "HAIF Sync",
+        description: m.description || "",
+        isCollected: true,
+      });
     }
   }
 
   const collectionsPets: BlizzardCollectionPet[] = [];
-  const rawPets = snapshot.collections?.pets || snapshot.pets || [];
-  if (Array.isArray(rawPets)) {
-    for (const p of rawPets) {
-      if (p && (p.id || p.speciesId || p.name)) {
-        collectionsPets.push({
-          id: Number(p.id || p.speciesId || Date.now()),
-          speciesId: p.speciesId ? Number(p.speciesId) : Number(p.id),
-          name: p.name || "Pet",
-          iconUrl: p.iconUrl || p.icon || "",
-          family: p.family || "Beast",
-          level: Number(p.level) || 1,
-          quality: String(p.quality || "RARE").toUpperCase(),
-          source: p.source || "Addon Sync",
-          isCollected: true,
-          isFavorite: !!p.isFavorite,
-        });
-      }
+  const rawPets = snapshot.collections?.pets || snapshot.pets || char.pets || [];
+  const petsList = Array.isArray(rawPets) ? rawPets : Object.values(rawPets);
+  for (const p of petsList) {
+    if (p && (p.id || p.speciesId || p.speciesID || p.name)) {
+      collectionsPets.push({
+        id: Number(p.id || p.speciesId || p.speciesID || Date.now()),
+        speciesId: Number(p.speciesId || p.speciesID || p.id || 0),
+        name: p.name || "Pet",
+        iconUrl: p.iconUrl || p.icon || "",
+        family: p.family || "Beast",
+        level: Number(p.level) || 1,
+        quality: String(p.quality || "RARE").toUpperCase(),
+        source: p.source || "HAIF Sync",
+        isCollected: true,
+        isFavorite: !!p.isFavorite,
+      });
     }
   }
 
-  // Process reputations
-  const rawReps = snapshot.reputations || [];
+  // Process reputations (supports Array or Record)
+  const rawReps = snapshot.reputations || char.reputations || [];
   const parsedReputations: BlizzardReputation[] = [];
-  if (Array.isArray(rawReps)) {
+  const repsList = Array.isArray(rawReps) ? rawReps : typeof rawReps === "object" ? Object.values(rawReps) : [];
+  if (repsList.length > 0) {
     const standingPtBRMap: Record<string, string> = {
       Exalted: "Exaltado",
       Revered: "Reverenciado",
@@ -447,10 +505,10 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
       Hostile: "text-red-400 bg-red-950/80 border-red-500/40",
       Hated: "text-rose-500 bg-rose-950/80 border-rose-500/40",
     };
-    for (const r of rawReps) {
+    for (const r of repsList) {
       if (r && (r.factionName || r.name)) {
         const repName = r.factionName || r.name;
-        const standing = r.standing || "Neutral";
+        const standing = r.standingLabel || r.standing || "Neutral";
         const current = Number(r.value ?? r.current ?? 0);
         const max = Number(r.max ?? 1) || 1;
         const percent = Math.min(100, Math.max(0, Math.round((current / max) * 100)));
@@ -463,23 +521,40 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
           max,
           percent,
           tierColor: tierColorMap[standing] || "text-zinc-400 bg-zinc-900 border-zinc-800",
-          category: r.category || (detectedVersion === "retail" ? "The War Within" : "Azeroth"),
+          category: r.category || (detectedVersion === "retail" ? "The War Within" : "Azeroth (WoW Forever)"),
         });
       }
     }
   }
 
-  // Process professions
-  const rawProfessions = snapshot.professions || { primary: [], secondary: [] };
+  // Process professions (supports HAIF skills breakdown)
+  const rawProfessions = snapshot.professions || char.skills?.professions || { primary: [], secondary: [] };
+  let primaryProfs: any[] = [];
+  let secondaryProfs: any[] = [];
+  if (Array.isArray(rawProfessions)) {
+    primaryProfs = rawProfessions.filter((p: any) => p.category === "Profissões" || p.category === "Professions" || !p.category);
+    secondaryProfs = rawProfessions.filter((p: any) => p.category === "Profissões Secundárias" || p.category === "Secondary Professions");
+  } else if (rawProfessions && typeof rawProfessions === "object") {
+    primaryProfs = Array.isArray(rawProfessions.primary) ? rawProfessions.primary : [];
+    secondaryProfs = Array.isArray(rawProfessions.secondary) ? rawProfessions.secondary : [];
+  }
   const professions = {
-    primary: Array.isArray(rawProfessions.primary) ? rawProfessions.primary : [],
-    secondary: Array.isArray(rawProfessions.secondary) ? rawProfessions.secondary : [],
+    primary: primaryProfs.map((p: any) => ({
+      name: p.name,
+      skillLevel: p.rank || p.skillLevel || 300,
+      maxSkillLevel: p.maxRank || p.maxSkillLevel || 300,
+    })),
+    secondary: secondaryProfs.map((p: any) => ({
+      name: p.name,
+      skillLevel: p.rank || p.skillLevel || 300,
+      maxSkillLevel: p.maxRank || p.maxSkillLevel || 300,
+    })),
   };
 
   // Process PvP
-  const rawPvp = snapshot.pvp || {};
+  const rawPvp = snapshot.pvp || char.pvp || {};
   const pvp = {
-    lifetimeHK: Number(rawPvp.lifetimeHK || 0),
+    lifetimeHK: Number(rawPvp.lifetimeHK || rawPvp.honorableKills || 0),
     honorPoints: Number(rawPvp.honorPoints || 0),
     rankName: rawPvp.rankName || (charLevel >= 60 ? "Centurion" : "Soldier"),
     rankNumber: Number(rawPvp.rankNumber || 0),
@@ -487,38 +562,47 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
   };
 
   // Process Lockouts
-  const rawLockouts = snapshot.lockouts || [];
+  const rawLockouts = snapshot.lockouts || char.lockouts || [];
   const lockouts = Array.isArray(rawLockouts) ? rawLockouts : [];
 
-  // Process Hardcore
-  const rawHardcore = snapshot.hardcore || {};
-  const isHardcore = !!(rawHardcore.isHardcore || isForever || realm.toLowerCase().includes("hardcore"));
-  const isDead = !!rawHardcore.isDead;
-  const hardcore = {
-    isHardcore,
-    isDead,
-    survivalStatus: isDead ? "DEAD" : "ALIVE",
-    snapshotTime: rawHardcore.snapshotTime || Date.now(),
-    deathCertificate: snapshot.hardcoreDeathCertificate || rawHardcore.deathCertificate || undefined,
-  };
-
-  // Process Quests (ATT-grade)
+  // Process Quests (supports HAIF completedQuests dictionary or array)
   const rawQuests = snapshot.quests || {};
+  let completedQuestIds: number[] = [];
+  if (char.completedQuests) {
+    if (Array.isArray(char.completedQuests)) {
+      completedQuestIds = char.completedQuests.map(Number);
+    } else if (typeof char.completedQuests === "object") {
+      completedQuestIds = Object.keys(char.completedQuests).map(Number).filter((n) => !isNaN(n) && n > 0);
+    }
+  } else if (Array.isArray(rawQuests.completedQuests)) {
+    completedQuestIds = rawQuests.completedQuests.map(Number);
+  }
+
+  const activeQuestsList = Array.isArray(char.activeQuests)
+    ? char.activeQuests
+    : Array.isArray(rawQuests.activeQuests)
+    ? rawQuests.activeQuests
+    : [];
+
   const parsedQuests: BlizzardQuestLog = {
-    completedCount: Number(rawQuests.completedCount || (Array.isArray(rawQuests.completedQuests) ? rawQuests.completedQuests.length : 0)),
-    completedQuests: Array.isArray(rawQuests.completedQuests) ? rawQuests.completedQuests.map(Number) : [],
-    activeQuests: Array.isArray(rawQuests.activeQuests) ? rawQuests.activeQuests.map((q: any) => ({
-      id: Number(q.id || 0),
+    completedCount: completedQuestIds.length > 0 ? completedQuestIds.length : Number(rawQuests.completedCount || 0),
+    completedQuests: completedQuestIds,
+    activeQuests: activeQuestsList.map((q: any) => ({
+      id: Number(q.questID || q.id || 0),
       title: String(q.title || "Missão"),
       level: Number(q.level || 1),
       isComplete: !!q.isComplete,
       isFailed: !!q.isFailed,
-      zone: q.zone || "Mundo",
-    })) : [],
+      zone: q.zone || "Azeroth",
+    })),
   };
 
   // Process Spells & Flight Paths (ATT-grade)
   const rawSpells = snapshot.spells || {};
+  const flightPathsCount = char.flightPaths
+    ? Object.keys(char.flightPaths).length
+    : Number(rawSpells.flightPathsCount || (Array.isArray(rawSpells.flightPaths) ? rawSpells.flightPaths.length : 0));
+
   const parsedSpells: BlizzardSpellbook = {
     totalSpells: Number(rawSpells.totalSpells || (Array.isArray(rawSpells.spells) ? rawSpells.spells.length : 0)),
     spells: Array.isArray(rawSpells.spells) ? rawSpells.spells.map((s: any) => ({
@@ -529,7 +613,7 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
       tab: s.tab || "Geral",
       isPassive: !!s.isPassive,
     })) : [],
-    flightPathsCount: Number(rawSpells.flightPathsCount || (Array.isArray(rawSpells.flightPaths) ? rawSpells.flightPaths.length : 0)),
+    flightPathsCount,
   };
 
   // Process Adventure Journal ("Meu Diário de Aventura")
@@ -677,7 +761,7 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
     faction: charFaction,
     equippedItemLevel,
     averageItemLevel,
-    activeSpec: char.activeSpec || "Primary Spec",
+    activeSpec: char.talents?.specString || char.activeSpec || "31/20/0",
     achievementPoints,
     achievementPointsTotal: achievementPoints,
     guild: char.guild,
@@ -693,7 +777,7 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
       mounts: collectionsMounts,
       pets: collectionsPets,
       toys: snapshot.collections?.toys || [],
-      titles: snapshot.collections?.titles || [],
+      titles: snapshot.collections?.titles || char.titles || [],
       totalMountsCount: collectionsMounts.length,
       totalPetsCount: collectionsPets.length,
       totalToysCount: (snapshot.collections?.toys || []).length,
@@ -703,18 +787,52 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
     professions,
     pvp,
     lockouts,
-    hardcore,
-    hardcoreDeathCertificate: hardcore.deathCertificate,
-    bank: snapshot.bank || {
-      mainBank: [],
-      reagentBank: [],
-      warbandBank: [],
-      lastBankVisit: undefined,
-    },
-    accountEconomy: snapshot.accountEconomy || {
-      totalGold: 0,
-      charactersGold: [],
-      sessionDeltaGold: 0,
+    hardcore: snapshot.hardcore || char.hardcore || { isDead: false, survivalStatus: "Alive" },
+    hardcoreDeathCertificate: (snapshot.hardcore || char.hardcore)?.deathCertificate,
+    bank: (function() {
+      const rawBank = snapshot.bank || char.bank;
+      if (!rawBank) {
+        return { mainBank: [], reagentBank: [], warbandBank: [], lastBankVisit: undefined };
+      }
+      if (Array.isArray(rawBank.mainBank)) return rawBank;
+      const bankContainers = Array.isArray(rawBank) ? rawBank : Object.values(rawBank);
+      const itemsList: any[] = [];
+      for (const container of bankContainers) {
+        if (container && container.items) {
+          const cItems = Array.isArray(container.items) ? container.items : Object.values(container.items);
+          for (const it of cItems) {
+            if (it && (it.itemID || it.id || it.itemId)) {
+              itemsList.push({
+                id: Number(it.itemID || it.itemId || it.id),
+                name: it.name || `Item #${it.itemID || it.id}`,
+                iconUrl: it.icon || it.iconUrl || "",
+                quality: String(it.quality || "COMMON").toUpperCase(),
+                count: Number(it.count || 1),
+              });
+            }
+          }
+        }
+      }
+      return {
+        mainBank: itemsList,
+        reagentBank: [],
+        warbandBank: [],
+        lastBankVisit: char.bankLastScanned ? new Date(char.bankLastScanned * 1000).toISOString() : undefined,
+      };
+    })(),
+    accountEconomy: {
+      totalGold: Number(root.totalAccountGold || root.accountGold || snapshot.accountEconomy?.totalGold || char.money || 0),
+      charactersGold: root.characters
+        ? Object.values(root.characters).map((c: any) => ({
+            characterName: c.name || "Alt",
+            realm: c.realm || realm,
+            gold: Math.floor(Number(c.money || 0) / 10000),
+            faction: c.faction || "HORDE",
+            class: c.class || "Warrior",
+            level: Number(c.level) || 60,
+          }))
+        : [],
+      sessionDeltaGold: snapshot.accountEconomy?.sessionDeltaGold || 0,
     },
     mythicPlus: snapshot.mythicPlus || {
       rating: 0,
@@ -726,11 +844,26 @@ export function parseAddonData(input: string | any): ParsedAddonResult {
     quests: parsedQuests,
     spells: parsedSpells,
     adventureJournal: parsedAdventureJournal,
-    stats: snapshot.stats || {
-      health: charLevel <= 60 ? 5200 : 6400000,
-      power: 100,
-      armor: 8500,
-    },
+    stats: (function() {
+      const rawStats = snapshot.stats || char.stats;
+      if (!rawStats) {
+        return { health: charLevel <= 60 ? 5200 : 6400000, power: 100, armor: 8500 };
+      }
+      return {
+        health: Number(rawStats.health || 5200),
+        maxHealth: Number(rawStats.maxHealth || rawStats.health || 5200),
+        power: Number(rawStats.power || 100),
+        maxPower: Number(rawStats.maxPower || rawStats.power || 100),
+        powerType: rawStats.powerType || "MANA",
+        armor: Number(rawStats.armor?.effective ?? rawStats.armor ?? 8500),
+        attributes: rawStats.attributes || {},
+        melee: rawStats.melee || {},
+        ranged: rawStats.ranged || {},
+        defense: rawStats.defense || {},
+        spell: rawStats.spell || {},
+        resistances: rawStats.resistances || {},
+      };
+    })(),
   };
 
   // Handle multi-character history if available

@@ -5,9 +5,18 @@
 
 import JSZip from "jszip";
 import { BlizzardProfileData } from "../types";
+import addonForeverLuaRaw from "../addon/HaleckAccountImporterForever.lua?raw";
+import addonForeverTocRaw from "../addon/HaleckAccountImporterForever.toc?raw";
 import addonLuaRaw from "../addon/HaleckAccountImporter.lua?raw";
 import addonInterfaceLuaRaw from "../addon/AddonInterface.lua?raw";
 import addonTocRaw from "../addon/HaleckAccountImporter.toc?raw";
+import addonCamelotTocRaw from "../addon/HaleckAccountImporter_Camelot.toc?raw";
+import addonVanillaTocRaw from "../addon/HaleckAccountImporter_Vanilla.toc?raw";
+import addonMainlineTocRaw from "../addon/HaleckAccountImporter_Mainline.toc?raw";
+import addonTbcTocRaw from "../addon/HaleckAccountImporter_TBC.toc?raw";
+import addonWrathTocRaw from "../addon/HaleckAccountImporter_Wrath.toc?raw";
+import addonCataTocRaw from "../addon/HaleckAccountImporter_Cata.toc?raw";
+import addonMopTocRaw from "../addon/HaleckAccountImporter_MoP.toc?raw";
 
 export interface AddonExportOptions {
   gameVersion?: string;
@@ -346,32 +355,42 @@ export function generateAddonInterfaceLua(): string {
 export function generateAddonToc(version: string = "forever"): string {
   const interfaceVersions: Record<string, string> = {
     forever: "16001",
-    retail: "110100",
+    retail: "110200",
     classic: "11506",
+    era: "11506",
+    vanilla: "11506",
     mop: "50400",
+    cata: "40400",
+    wrath: "30403",
     tbc: "20504",
+    midnight: "120100",
   };
 
-  const clientInterface = interfaceVersions[version] || "16001";
+  const clientInterface = interfaceVersions[version.toLowerCase()] || "16001";
 
-  return `## Interface: ${clientInterface}, 160001, 16001, 11506, 50400, 20504, 110100, 110200
-## Interface-Forever: 160001, 16001
+  return `## Interface: ${clientInterface}
+## AllowLoadGameType: camelot
+## Interface-Forever: 16001
+## Interface-Camelot: 16001
 ## Interface-Vanilla: 11506
 ## Interface-Classic: 11506
 ## Interface-TBC: 20504
 ## Interface-Wrath: 30403
 ## Interface-Cata: 40400
 ## Interface-MoP: 50400
-## Interface-Retail: 110100, 110200
-## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
-## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections & Adventure Journal ("Meu Diário de Aventura") for Haleck GameLog.
+## Interface-Retail: 110200
+## Title: |cff00f2feHaleck|r Account Importer & Diário de Aventura
+## Title-ptBR: |cff00f2feHaleck|r Importador de Conta & Diário de Aventura
+## Title-enUS: |cff00f2feHaleck|r Account Importer & Adventure Journal
+## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections & Adventure Journal for Haleck GameLog (Optimized for WoW Forever).
+## Notes-ptBR: Exporta armaria completa AllTheThings, missões, magias, talentos, contador de passos e diário de aventura para o Haleck GameLog.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
 ## LoadOnDemand: 0
-## IconTexture: Interface\\Icons\\INV_Misc_Book_09
+## IconTexture: Interface\\Icons\\INV_Misc_Rune_01
 
 HaleckAccountImporter.lua
 AddonInterface.lua
@@ -594,19 +613,24 @@ set "FOUND_FILE="
 
 rem 1. Procura com prioridade maxima no WoW Forever Beta (_classic_beta_)
 for %%P in (
-    "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "C:\\Program Files\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "D:\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "E:\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "C:\\Games\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "D:\\Games\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "%ProgramFiles%\\World of Warcraft\\_classic_beta_\\WTF\\Account"
-    "%ProgramFiles(x86)%\\World of Warcraft\\_classic_beta_\\WTF\\Account"
+    "C:\Program Files (x86)\World of Warcraft\_classic_beta_\WTF\Account"
+    "C:\Program Files\World of Warcraft\_classic_beta_\WTF\Account"
+    "D:\World of Warcraft\_classic_beta_\WTF\Account"
+    "E:\World of Warcraft\_classic_beta_\WTF\Account"
+    "C:\Games\World of Warcraft\_classic_beta_\WTF\Account"
+    "D:\Games\World of Warcraft\_classic_beta_\WTF\Account"
+    "%ProgramFiles%\World of Warcraft\_classic_beta_\WTF\Account"
+    "%ProgramFiles(x86)%\World of Warcraft\_classic_beta_\WTF\Account"
 ) do (
     if exist "%%~P" (
-        for /d %%A in ("%%~P\\*") do (
-            if exist "%%~A\\SavedVariables\\HaleckAccountImporter.lua" (
-                set "FOUND_FILE=%%~A\\SavedVariables\\HaleckAccountImporter.lua"
+        for /d %%A in ("%%~P\*") do (
+            if exist "%%~A\SavedVariables\HaleckAccountImporterForever.lua" (
+                set "FOUND_FILE=%%~A\SavedVariables\HaleckAccountImporterForever.lua"
+                echo [OK] Detectado HaleckAccountImporterForever.lua no WoW Forever: %%~A
+                goto :found
+            )
+            if exist "%%~A\SavedVariables\HaleckAccountImporter.lua" (
+                set "FOUND_FILE=%%~A\SavedVariables\HaleckAccountImporter.lua"
                 echo [OK] Detectado cliente WoW Forever Beta (_classic_beta_): %%~A
                 goto :found
             )
@@ -616,23 +640,27 @@ for %%P in (
 
 rem 2. Procura nas outras versoes (Classic Era, Progression e Retail)
 for %%P in (
-    "C:\\Program Files (x86)\\World of Warcraft\\_classic_era_\\WTF\\Account"
-    "C:\\Program Files (x86)\\World of Warcraft\\_classic_\\WTF\\Account"
-    "C:\\Program Files (x86)\\World of Warcraft\\_retail_\\WTF\\Account"
-    "D:\\World of Warcraft\\_classic_era_\\WTF\\Account"
-    "D:\\World of Warcraft\\_classic_\\WTF\\Account"
-    "D:\\World of Warcraft\\_retail_\\WTF\\Account"
-    "E:\\World of Warcraft\\_classic_era_\\WTF\\Account"
-    "E:\\World of Warcraft\\_retail_\\WTF\\Account"
-    "%ProgramFiles%\\World of Warcraft\\_classic_era_\\WTF\\Account"
-    "%ProgramFiles%\\World of Warcraft\\_retail_\\WTF\\Account"
-    "%ProgramFiles(x86)%\\World of Warcraft\\_classic_era_\\WTF\\Account"
-    "%ProgramFiles(x86)%\\World of Warcraft\\_retail_\\WTF\\Account"
+    "C:\Program Files (x86)\World of Warcraft\_classic_era_\WTF\Account"
+    "C:\Program Files (x86)\World of Warcraft\_classic_\WTF\Account"
+    "C:\Program Files (x86)\World of Warcraft\_retail_\WTF\Account"
+    "D:\World of Warcraft\_classic_era_\WTF\Account"
+    "D:\World of Warcraft\_classic_\WTF\Account"
+    "D:\World of Warcraft\_retail_\WTF\Account"
+    "E:\World of Warcraft\_classic_era_\WTF\Account"
+    "E:\World of Warcraft\_retail_\WTF\Account"
+    "%ProgramFiles%\World of Warcraft\_classic_era_\WTF\Account"
+    "%ProgramFiles%\World of Warcraft\_retail_\WTF\Account"
+    "%ProgramFiles(x86)%\World of Warcraft\_classic_era_\WTF\Account"
+    "%ProgramFiles(x86)%\World of Warcraft\_retail_\WTF\Account"
 ) do (
     if exist "%%~P" (
-        for /d %%A in ("%%~P\\*") do (
-            if exist "%%~A\\SavedVariables\\HaleckAccountImporter.lua" (
-                set "FOUND_FILE=%%~A\\SavedVariables\\HaleckAccountImporter.lua"
+        for /d %%A in ("%%~P\*") do (
+            if exist "%%~A\SavedVariables\HaleckAccountImporterForever.lua" (
+                set "FOUND_FILE=%%~A\SavedVariables\HaleckAccountImporterForever.lua"
+                goto :found
+            )
+            if exist "%%~A\SavedVariables\HaleckAccountImporter.lua" (
+                set "FOUND_FILE=%%~A\SavedVariables\HaleckAccountImporter.lua"
                 goto :found
             )
         )
@@ -646,9 +674,9 @@ if not "%FOUND_FILE%"=="" (
 ) else (
     echo [!] Nao foi possivel detectar automaticamente a pasta da sua conta.
     echo Exemplo de caminho do WoW Forever Beta:
-    echo C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\WTF\\Account\\<SUA_CONTA>\\SavedVariables\\HaleckAccountImporter.lua
+    echo C:\Program Files (x86)\World of Warcraft\_classic_beta_\WTF\Account\<SUA_CONTA>\SavedVariables\HaleckAccountImporterForever.lua
     echo.
-    echo Por favor, arraste o arquivo HaleckAccountImporter.lua aqui ou digite o caminho completo:
+    echo Por favor, arraste o arquivo HaleckAccountImporterForever.lua aqui ou digite o caminho completo:
     set /p "FOUND_FILE=Caminho: "
 )
 
@@ -664,13 +692,13 @@ pause
  */
 export function generateSyncAgentPs1(webhookUrl?: string): string {
   return `param(
-    [string]$luaPath = "HaleckAccountImporter.lua",
+    [string]$luaPath = "HaleckAccountImporterForever.lua",
     [string]$serverUrl = "http://localhost:3000/api/blizzard/wow/addon-sync",
     [string]$discordWebhook = "${webhookUrl ? webhookUrl.replace(/"/g, '`"') : ""}"
 )
 
 Write-Host "==========================================================" -ForegroundColor Cyan
-Write-Host "   HALECK ACCOUNT IMPORTER - POWERSHELL AUTO-SYNC AGENT" -ForegroundColor Green
+Write-Host "   HALECK ACCOUNT IMPORTER FOREVER - AUTO-SYNC AGENT" -ForegroundColor Green
 Write-Host "==========================================================" -ForegroundColor Cyan
 
 # Se o caminho passado for relativo ou padrao e nao existir, tenta autodetectar
@@ -692,6 +720,12 @@ if (-not (Test-Path $luaPath)) {
             if (Test-Path $testFolder) {
                 $accFolders = Get-ChildItem -Path $testFolder -Directory -ErrorAction SilentlyContinue
                 foreach ($acc in $accFolders) {
+                    $testForeverFile = Join-Path $acc.FullName "SavedVariables\\HaleckAccountImporterForever.lua"
+                    if (Test-Path $testForeverFile) {
+                        $detected = $testForeverFile
+                        Write-Host "[OK] HaleckAccountImporterForever.lua localizado!" -ForegroundColor Cyan
+                        break
+                    }
                     $testFile = Join-Path $acc.FullName "SavedVariables\\HaleckAccountImporter.lua"
                     if (Test-Path $testFile) {
                         $detected = $testFile
@@ -711,7 +745,7 @@ if (-not (Test-Path $luaPath)) {
         $luaPath = $detected
         Write-Host "[OK] Caminho configurado automaticamente: $luaPath" -ForegroundColor Green
     } else {
-        Write-Host "AVISO: Arquivo $luaPath ainda nao encontrado no disco. Aguardando exportacao in-game (/hai)..." -ForegroundColor Yellow
+        Write-Host "AVISO: Arquivo $luaPath ainda nao encontrado no disco. Aguardando exportacao in-game (/haif)..." -ForegroundColor Yellow
     }
 }
 
@@ -778,6 +812,51 @@ while ($true) {
  */
 export async function downloadWoWAddonZip(options: AddonExportOptions = {}): Promise<void> {
   const zip = new JSZip();
+  const folder = zip.folder("HaleckAccountImporterForever");
+
+  if (!folder) {
+    throw new Error("Não foi possível criar o pacote zip do addon.");
+  }
+
+  // Pacote Oficial Haleck Account Importer Forever (WoW Forever Build 16001)
+  folder.file("HaleckAccountImporterForever.toc", addonForeverTocRaw);
+  folder.file("HaleckAccountImporterForever.lua", addonForeverLuaRaw);
+  folder.file(
+    "README.txt",
+    `========================================================================
+HALECK ACCOUNT IMPORTER FOREVER (HAIF) - WOW FOREVER (BUILD 16001)
+========================================================================
+
+Instalação:
+1. Extraia esta pasta "HaleckAccountImporterForever" dentro de:
+   World of Warcraft/_classic_beta_/Interface/AddOns/
+2. Inicie o jogo ou faça /reload.
+3. Utilize o comando /haif ou clique no botão do minimapa!
+========================================================================
+`
+  );
+  folder.file("sync-agent.bat", generateSyncAgentBat());
+  folder.file("sync-agent.ps1", generateSyncAgentPs1());
+
+  const content = await zip.generateAsync({
+    type: "blob",
+    compression: "DEFLATE",
+    compressionOptions: { level: 9 },
+  });
+
+  const url = URL.createObjectURL(content);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `HaleckAccountImporterForever-5.0.0.zip`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return;
+}
+
+export async function downloadLegacyWoWAddonZip(options: AddonExportOptions = {}): Promise<void> {
+  const zip = new JSZip();
   const folder = zip.folder("HaleckAccountImporter");
 
   if (!folder) {
@@ -786,11 +865,11 @@ export async function downloadWoWAddonZip(options: AddonExportOptions = {}): Pro
 
   const version = options.gameVersion || "forever";
 
-  const mainlineToc = `## Interface: 110100, 110200
+  const mainlineToc = `## Interface: 110200
 ## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
 ## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps, Collections & Adventure Journal for Retail.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
@@ -801,16 +880,32 @@ HaleckAccountImporter.lua
 AddonInterface.lua
 `;
 
-  const vanillaToc = `## Interface: 160001, 16001, 11506
+  const vanillaToc = `## Interface: 11506
 ## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
 ## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps & Adventure Journal for WoW Forever (Vanilla+) & Classic Era.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
 ## LoadOnDemand: 0
 ## IconTexture: Interface\\Icons\\INV_Misc_Book_09
+
+HaleckAccountImporter.lua
+AddonInterface.lua
+`;
+
+  const camelotToc = `## Interface: 16001
+## AllowLoadGameType: camelot
+## Title: |cff00f2feHaleck|r Account Importer & Diário de Aventura (WoW Forever)
+## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Real-Time Steps & Adventure Journal for WoW Forever (Camelot Beta 16001).
+## Author: Haleck
+## Version: 4.4.0
+## SavedVariables: HaleckAccountImporterDB
+## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\\Icons\\INV_Misc_Rune_01
 
 HaleckAccountImporter.lua
 AddonInterface.lua
@@ -820,7 +915,7 @@ AddonInterface.lua
 ## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
 ## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for TBC Classic.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
@@ -835,7 +930,7 @@ AddonInterface.lua
 ## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
 ## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for WotLK Classic.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
@@ -846,11 +941,26 @@ HaleckAccountImporter.lua
 AddonInterface.lua
 `;
 
-  const cataToc = `## Interface: 40400, 50400
+  const cataToc = `## Interface: 40400
 ## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
-## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for Cataclysm & MoP Classic.
+## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for Cataclysm Classic.
 ## Author: Haleck
-## Version: 4.0.0
+## Version: 4.4.0
+## SavedVariables: HaleckAccountImporterDB
+## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
+## DefaultState: enabled
+## LoadOnDemand: 0
+## IconTexture: Interface\\Icons\\INV_Misc_Book_09
+
+HaleckAccountImporter.lua
+AddonInterface.lua
+`;
+
+  const mopToc = `## Interface: 50400
+## Title: |cff00f2feHaleck|r Account Importer & Meu Diário de Aventura
+## Notes: Export full AllTheThings-grade WoW Armory & Adventure Journal for Mists of Pandaria Classic.
+## Author: Haleck
+## Version: 4.4.0
 ## SavedVariables: HaleckAccountImporterDB
 ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
 ## DefaultState: enabled
@@ -863,11 +973,13 @@ AddonInterface.lua
 
   // Universal e multi-client TOCs para compatibilidade 100% nativa em qualquer versão oficial
   folder.file("HaleckAccountImporter.toc", generateAddonToc(version));
+  folder.file("HaleckAccountImporter_Camelot.toc", addonCamelotTocRaw || camelotToc);
   folder.file("HaleckAccountImporter_Mainline.toc", mainlineToc);
   folder.file("HaleckAccountImporter_Vanilla.toc", vanillaToc);
   folder.file("HaleckAccountImporter_TBC.toc", tbcToc);
   folder.file("HaleckAccountImporter_Wrath.toc", wrathToc);
   folder.file("HaleckAccountImporter_Cata.toc", cataToc);
+  folder.file("HaleckAccountImporter_MoP.toc", addonMopTocRaw || mopToc);
 
   // Arquivos de código fonte (HaleckAccountImporter.lua carregado primeiro, AddonInterface.lua em seguida)
   folder.file("HaleckAccountImporter.lua", generateAddonLua());
@@ -931,6 +1043,146 @@ export function downloadSyncAgentPs1File(webhookUrl?: string): void {
 const ADDON_TARGET_PATH_STORAGE_KEY = "haleck_wow_addon_target_path";
 export const DEFAULT_WOW_FOREVER_ADDON_PATH = "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\Interface\\AddOns";
 
+export const DEFAULT_WOW_PATHS_BY_VERSION: Record<string, string> = {
+  forever: "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_",
+  retail: "C:\\Program Files (x86)\\World of Warcraft\\_retail_",
+  classic: "C:\\Program Files (x86)\\World of Warcraft\\_classic_era_",
+  tbc: "C:\\Program Files (x86)\\World of Warcraft\\_classic_",
+  mop: "C:\\Program Files (x86)\\World of Warcraft\\_classic_",
+};
+
+export const WOW_VERSION_DISPLAY_LABELS: Record<string, string> = {
+  forever: "WoW: Forever",
+  retail: "WoW Retail",
+  classic: "Classic",
+  tbc: "TBC",
+  mop: "MoP",
+};
+
+export function normalizeRootPath(pathStr: string): string {
+  let clean = (pathStr || "").trim().replace(/\//g, "\\");
+  while (clean.endsWith("\\")) clean = clean.slice(0, -1);
+  const lower = clean.toLowerCase();
+  if (lower.endsWith("\\haleckaccountimporter")) {
+    clean = clean.slice(0, -"\\haleckaccountimporter".length);
+  }
+  if (clean.toLowerCase().endsWith("\\interface\\addons")) {
+    clean = clean.slice(0, -"\\interface\\addons".length);
+  } else if (clean.toLowerCase().endsWith("\\addons")) {
+    clean = clean.slice(0, -"\\addons".length);
+    if (clean.toLowerCase().endsWith("\\interface")) {
+      clean = clean.slice(0, -"\\interface".length);
+    }
+  } else if (clean.toLowerCase().endsWith("\\interface")) {
+    clean = clean.slice(0, -"\\interface".length);
+  } else if (clean.toLowerCase().endsWith("\\wtf")) {
+    clean = clean.slice(0, -"\\wtf".length);
+  }
+  while (clean.endsWith("\\")) clean = clean.slice(0, -1);
+  return clean;
+}
+
+export function getAddonTargetPathFromRoot(rootPath: string): string {
+  const clean = (rootPath || "").trim().replace(/\//g, "\\");
+  if (clean.toLowerCase().includes("interface\\addons")) {
+    return clean;
+  }
+  return clean ? `${clean.replace(/\\+$/, "")}\\Interface\\AddOns` : DEFAULT_WOW_FOREVER_ADDON_PATH;
+}
+
+export function getWtfPathFromRoot(rootPath: string): string {
+  const clean = (rootPath || "").trim().replace(/\//g, "\\");
+  if (clean.toLowerCase().includes("\\wtf")) {
+    return clean;
+  }
+  return clean ? `${clean.replace(/\\+$/, "")}\\WTF` : "C:\\Program Files (x86)\\World of Warcraft\\_classic_beta_\\WTF";
+}
+
+const WOW_PATHS_BY_VERSION_STORAGE_KEY = "haleck_wow_paths_by_version";
+
+export function getStoredRootPathForVersion(version: string = "forever"): string {
+  const key = version.toLowerCase();
+  try {
+    const raw = localStorage.getItem(WOW_PATHS_BY_VERSION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed[key]) return parsed[key];
+    }
+  } catch {}
+  return DEFAULT_WOW_PATHS_BY_VERSION[key] || DEFAULT_WOW_PATHS_BY_VERSION.forever;
+}
+
+export function setStoredRootPathForVersion(version: string, rootPath: string): void {
+  const key = version.toLowerCase();
+  try {
+    const raw = localStorage.getItem(WOW_PATHS_BY_VERSION_STORAGE_KEY);
+    const existing = raw ? JSON.parse(raw) : {};
+    existing[key] = rootPath.trim();
+    localStorage.setItem(WOW_PATHS_BY_VERSION_STORAGE_KEY, JSON.stringify(existing));
+    // Also keep active target and scanner path synchronized
+    setStoredAddonTargetPath(getAddonTargetPathFromRoot(rootPath));
+    localStorage.setItem("haleck_wow_scanner_root_path", rootPath.trim());
+  } catch {}
+}
+
+export async function savePersistentRootPathForVersion(version: string, rootPath: string): Promise<void> {
+  const key = version.toLowerCase();
+  const clean = rootPath.trim();
+  setStoredRootPathForVersion(key, clean);
+
+  const payload = {
+    selectedWoWVersion: key,
+    rootPath: clean,
+    addonTargetPath: getAddonTargetPathFromRoot(clean),
+    scannerRootPath: clean,
+    versionPaths: { [key]: clean },
+  };
+
+  try {
+    await fetch("/api/blizzard/wow/paths", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  } catch {}
+
+  try {
+    const { saveWoWPathsToFirebase } = await import("./firebase");
+    await saveWoWPathsToFirebase(payload);
+  } catch {}
+}
+
+export async function loadPersistentPathsByVersion(): Promise<{
+  selectedWoWVersion: string;
+  paths: Record<string, string>;
+}> {
+  const result: Record<string, string> = { ...DEFAULT_WOW_PATHS_BY_VERSION };
+  let selected = "forever";
+  try {
+    const res = await fetch("/api/blizzard/wow/paths");
+    if (res.ok) {
+      const data = await res.json();
+      if (data.selectedWoWVersion) selected = data.selectedWoWVersion;
+      if (data.versionPaths) {
+        Object.assign(result, data.versionPaths);
+      }
+      if (data.scannerRootPath && selected) {
+        result[selected] = data.scannerRootPath;
+      }
+    }
+  } catch {}
+
+  try {
+    const raw = localStorage.getItem(WOW_PATHS_BY_VERSION_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      Object.assign(result, parsed);
+    }
+  } catch {}
+
+  return { selectedWoWVersion: selected, paths: result };
+}
+
 export function getStoredAddonTargetPath(): string {
   try {
     return localStorage.getItem(ADDON_TARGET_PATH_STORAGE_KEY) || DEFAULT_WOW_FOREVER_ADDON_PATH;
@@ -946,57 +1198,100 @@ export function setStoredAddonTargetPath(targetPath: string): void {
 }
 
 /**
+ * Persists Addon Target Path across devices (Backend API + Firebase Firestore + LocalStorage)
+ */
+export async function savePersistentAddonPath(targetPath: string): Promise<void> {
+  const clean = targetPath.trim();
+  setStoredAddonTargetPath(clean);
+  try {
+    await fetch("/api/blizzard/wow/paths", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ addonTargetPath: clean }),
+    });
+  } catch {}
+  try {
+    const { saveWoWPathsToFirebase } = await import("./firebase");
+    await saveWoWPathsToFirebase({ addonTargetPath: clean });
+  } catch {}
+}
+
+/**
+ * Loads Addon Target Path from backend/Firebase with local fallback
+ */
+export async function loadPersistentAddonPath(): Promise<string> {
+  try {
+    const res = await fetch("/api/blizzard/wow/paths");
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.addonTargetPath) {
+        setStoredAddonTargetPath(data.addonTargetPath);
+        return data.addonTargetPath;
+      }
+    }
+  } catch {}
+  return getStoredAddonTargetPath();
+}
+
+/**
  * Generates an automated 1-click installer .BAT file pre-configured for the target path
+ */
+function toBase64String(str: string): string {
+  try {
+    if (typeof Buffer !== "undefined") {
+      return Buffer.from(str, "utf-8").toString("base64");
+    }
+    const bytes = new TextEncoder().encode(str);
+    let binary = "";
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Generates an automated 1-click installer .BAT that unpacks all addon files for HaleckAccountImporterForever
  */
 export function generateAddonInstallerBat(targetAddonPath?: string): string {
   const dest = targetAddonPath || getStoredAddonTargetPath();
+  const luaBase64 = toBase64String(addonForeverLuaRaw);
+  const tocBase64 = toBase64String(addonForeverTocRaw);
+
   return `@echo off
-title Instalador Haleck Account Importer - WoW Forever (Build 16001)
+title Instalador Haleck Account Importer Forever - WoW Forever (Build 16001)
 color 0b
 echo ========================================================================
-echo        HALECK ACCOUNT IMPORTER - INSTALADOR AUTOMATICO WOW FOREVER
+echo   HALECK ACCOUNT IMPORTER FOREVER - INSTALADOR AUTOMATICO WOW FOREVER
 echo ========================================================================
-echo Destino configurado:
+echo Destino configurado no seu computador:
 echo "${dest}"
 echo.
 
-set "DEST_DIR=${dest}\\HaleckAccountImporter"
+set "DEST_DIR=${dest}\\HaleckAccountImporterForever"
 
 echo [1/3] Criando pasta do Addon no diretorio do jogo...
 if not exist "%DEST_DIR%" (
     mkdir "%DEST_DIR%"
 )
 
-echo [2/3] Baixando arquivos oficiais mais recentes do servidor local...
-powershell -Command "try { Invoke-WebRequest -Uri 'http://localhost:3000/api/blizzard/wow/addon-sync/detect-paths' -TimeoutSec 2 | Out-Null; Write-Host 'Servidor online' } catch {}"
+echo [2/3] Gravando HaleckAccountImporterForever.toc (WoW Forever Build 16001)...
+powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes('%DEST_DIR%\\HaleckAccountImporterForever.toc', [System.Convert]::FromBase64String('${tocBase64}'))"
 
-rem Criando arquivos essenciais do Addon HaleckAccountImporter
-echo [3/3] Gravando HaleckAccountImporter.toc e modulos Lua...
-
-(
-echo ## Interface: 160001, 16001, 16002, 16003, 11506, 11507, 50400, 20504, 110100, 110200
-echo ## Interface-Forever: 160001, 16001, 16002, 16003
-echo ## Interface-Vanilla: 11506, 11507
-echo ## Title: ^|cff00f2feHaleck^|r Account Importer ^& Meu Diario de Aventura
-echo ## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Collections ^& Adventure Journal for WoW Forever.
-echo ## Author: Haleck
-echo ## Version: 4.3.0
-echo ## SavedVariables: HaleckAccountImporterDB
-echo ## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
-echo ## DefaultState: enabled
-echo ## LoadOnDemand: 0
-echo ## IconTexture: Interface\\Icons\\INV_Misc_Rune_01
-echo.
-echo HaleckAccountImporter.lua
-echo AddonInterface.lua
-) > "%DEST_DIR%\\HaleckAccountImporter.toc"
+echo [3/3] Gravando modulo principal HaleckAccountImporterForever.lua...
+powershell -NoProfile -Command "[System.IO.File]::WriteAllBytes('%DEST_DIR%\\HaleckAccountImporterForever.lua', [System.Convert]::FromBase64String('${luaBase64}'))"
 
 echo.
 echo ========================================================================
-echo [SUCESSO] Addon HaleckAccountImporter v4.3.0 instalado/atualizado com sucesso!
-echo Pasta: "%DEST_DIR%"
+echo [SUCESSO TOTAL] Addon Haleck Account Importer Forever instalado com sucesso!
+echo Arquivos gravados em:
+echo "%DEST_DIR%"
 echo.
-echo No World of Warcraft, faca /reload ou inicie o jogo e digite /hai ou /diario!
+echo 100%% compativel com WoW Forever (Build 16001 / Camelot)!
+echo No World of Warcraft, faca /reload ou inicie o jogo e digite /haif!
 echo ========================================================================
 pause
 `;
@@ -1019,16 +1314,19 @@ export function downloadAddonInstallerBat(targetAddonPath?: string): void {
 }
 
 /**
- * Generates an automated 1-click installer .PS1 (PowerShell)
+ * Generates an automated 1-click installer .PS1 (PowerShell) containing all files embedded
  */
 export function generateAddonInstallerPs1(targetAddonPath?: string): string {
   const dest = targetAddonPath || getStoredAddonTargetPath();
-  return `# Haleck Account Importer - Instalador PowerShell para WoW Forever
+  const luaBase64 = toBase64String(addonForeverLuaRaw);
+  const tocBase64 = toBase64String(addonForeverTocRaw);
+
+  return `# Haleck Account Importer Forever - Instalador PowerShell para WoW Forever
 Write-Host "========================================================================" -ForegroundColor Cyan
-Write-Host "       HALECK ACCOUNT IMPORTER - INSTALADOR WOW FOREVER (16001/16002)" -ForegroundColor Yellow
+Write-Host "   HALECK ACCOUNT IMPORTER FOREVER - INSTALADOR WOW FOREVER (BUILD 16001)" -ForegroundColor Yellow
 Write-Host "========================================================================" -ForegroundColor Cyan
 
-$destPath = "${dest}\\HaleckAccountImporter"
+$destPath = "${dest}\\HaleckAccountImporterForever"
 Write-Host "Destino: $destPath" -ForegroundColor White
 
 if (-not (Test-Path $destPath)) {
@@ -1036,30 +1334,20 @@ if (-not (Test-Path $destPath)) {
     Write-Host "[OK] Pasta criada: $destPath" -ForegroundColor Green
 }
 
-$tocContent = @"
-## Interface: 16001, 160001, 16002, 16003, 11506, 11507, 50400, 20504, 110100, 110200
-## Interface-Forever: 16001, 160001, 16002, 16003
-## Interface-Vanilla: 11506, 11507
-## Title: |cff00f2feHaleck|r Account Importer & Meu Diario de Aventura
-## Notes: Export full AllTheThings-grade WoW Armory, Quests, Spells, Talents, Collections, Trade History & Adventure Journal for WoW Forever.
-## Author: Haleck
-## Version: 4.3.0
-## SavedVariables: HaleckAccountImporterDB
-## SavedVariablesPerCharacter: HaleckAccountImporterCharDB
-## DefaultState: enabled
-## LoadOnDemand: 0
-## IconTexture: Interface\\Icons\\INV_Misc_Rune_01
+# 1. HaleckAccountImporterForever.toc (WoW Forever Build 16001)
+$tocBytes = [System.Convert]::FromBase64String("${tocBase64}")
+[System.IO.File]::WriteAllBytes("$destPath\\HaleckAccountImporterForever.toc", $tocBytes)
+Write-Host "[OK] HaleckAccountImporterForever.toc gravado com sucesso!" -ForegroundColor Green
 
-HaleckAccountImporter.lua
-AddonInterface.lua
-"@
-
-Set-Content -Path "$destPath\\HaleckAccountImporter.toc" -Value $tocContent -Encoding UTF8
-Write-Host "[OK] HaleckAccountImporter.toc v4.3.0 gerado com sucesso!" -ForegroundColor Green
+# 2. HaleckAccountImporterForever.lua
+$luaBytes = [System.Convert]::FromBase64String("${luaBase64}")
+[System.IO.File]::WriteAllBytes("$destPath\\HaleckAccountImporterForever.lua", $luaBytes)
+Write-Host "[OK] HaleckAccountImporterForever.lua gravado com sucesso!" -ForegroundColor Green
 
 Write-Host "========================================================================" -ForegroundColor Cyan
-Write-Host "[SUCESSO] Addon Haleck Account Importer v4.3.0 configurado para WoW Forever!" -ForegroundColor Green
-Write-Host "Inicie o cliente WoW Forever (_classic_beta_) e use /hai ou /diario!" -ForegroundColor Yellow
+Write-Host "[SUCESSO] Addon Haleck Account Importer Forever instalado com sucesso!" -ForegroundColor Green
+Write-Host "100% compativel com WoW Forever (Build 16001 / Camelot)! Sem acusar incompatibilidade!" -ForegroundColor Green
+Write-Host "Inicie o cliente WoW Forever (_classic_beta_) e use /haif!" -ForegroundColor Yellow
 Write-Host "========================================================================" -ForegroundColor Cyan
 `;
 }
@@ -1074,6 +1362,36 @@ export function downloadAddonInstallerPs1(targetAddonPath?: string): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = "instalar-addon-wow-forever.ps1";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Downloads individual HaleckAccountImporterForever.lua file directly
+ */
+export function downloadAddonLuaFile(): void {
+  const blob = new Blob([addonForeverLuaRaw || addonLuaRaw], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "HaleckAccountImporterForever.lua";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Downloads individual HaleckAccountImporterForever.toc file directly
+ */
+export function downloadAddonTocFile(): void {
+  const blob = new Blob([addonForeverTocRaw || addonTocRaw], { type: "text/plain;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "HaleckAccountImporterForever.toc";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1133,14 +1451,22 @@ export async function validateWoWDirectoryStructure(dirHandle: any): Promise<WoW
   try {
     const lowerName = rootName.toLowerCase();
 
-    // Case 1: User selected "Interface/AddOns" directly
-    if (lowerName === "addons") {
+    // Case 1: User selected "HaleckAccountImporter" directly
+    if (lowerName === "haleckaccountimporter") {
+      hasAddOns = true;
+      hasInterface = true;
+      hasHaleckAddon = true;
+      addonsHandle = dirHandle;
+      resolvedPathLabel = `${rootName}`;
+    }
+    // Case 2: User selected "Interface/AddOns" directly
+    else if (lowerName === "addons") {
       hasAddOns = true;
       hasInterface = true;
       addonsHandle = dirHandle;
       resolvedPathLabel = `${rootName}`;
     }
-    // Case 2: User selected "Interface"
+    // Case 3: User selected "Interface"
     else if (lowerName === "interface") {
       hasInterface = true;
       try {
@@ -1151,9 +1477,9 @@ export async function validateWoWDirectoryStructure(dirHandle: any): Promise<WoW
         hasAddOns = false;
       }
     }
-    // Case 3: User selected "_classic_beta_" (WoW Forever Client Folder)
-    else if (lowerName === "_classic_beta_") {
-      hasClassicBeta = true;
+    // Case 4: User selected a specific WoW client version folder (_classic_beta_, _classic_era_, _classic_, _retail_)
+    else if (lowerName === "_classic_beta_" || lowerName === "_classic_era_" || lowerName === "_classic_" || lowerName === "_retail_") {
+      if (lowerName === "_classic_beta_") hasClassicBeta = true;
       resolvedPathLabel = `${rootName}\\Interface\\AddOns`;
       try {
         const interfaceHandle = await dirHandle.getDirectoryHandle("Interface");
@@ -1168,27 +1494,34 @@ export async function validateWoWDirectoryStructure(dirHandle: any): Promise<WoW
         hasInterface = false;
       }
     }
-    // Case 4: User selected root "World of Warcraft"
+    // Case 5: User selected root "World of Warcraft"
     else {
-      // Check for _classic_beta_ subfolder first
-      try {
-        const betaHandle = await dirHandle.getDirectoryHandle("_classic_beta_");
-        hasClassicBeta = true;
-        resolvedPathLabel = `${rootName}\\_classic_beta_\\Interface\\AddOns`;
+      // Check for _classic_beta_ subfolder first (priority: WoW Forever)
+      let matchedVersionFolder = "";
+      for (const flavor of ["_classic_beta_", "_classic_era_", "_retail_", "_classic_"]) {
         try {
-          const interfaceHandle = await betaHandle.getDirectoryHandle("Interface");
-          hasInterface = true;
+          const subHandle = await dirHandle.getDirectoryHandle(flavor);
+          if (flavor === "_classic_beta_") hasClassicBeta = true;
+          matchedVersionFolder = flavor;
+          resolvedPathLabel = `${rootName}\\${flavor}\\Interface\\AddOns`;
           try {
-            addonsHandle = await interfaceHandle.getDirectoryHandle("AddOns");
-            hasAddOns = true;
+            const interfaceHandle = await subHandle.getDirectoryHandle("Interface");
+            hasInterface = true;
+            try {
+              addonsHandle = await interfaceHandle.getDirectoryHandle("AddOns");
+              hasAddOns = true;
+              break;
+            } catch {
+              hasAddOns = false;
+            }
           } catch {
-            hasAddOns = false;
+            hasInterface = false;
           }
-        } catch {
-          hasInterface = false;
-        }
-      } catch {
-        // Try direct Interface if not in _classic_beta_
+        } catch {}
+      }
+
+      // If no version folder had Interface/AddOns, try direct Interface in root
+      if (!addonsHandle) {
         try {
           const interfaceHandle = await dirHandle.getDirectoryHandle("Interface");
           hasInterface = true;
@@ -1200,7 +1533,7 @@ export async function validateWoWDirectoryStructure(dirHandle: any): Promise<WoW
             hasAddOns = false;
           }
         } catch {
-          hasInterface = false;
+          if (!matchedVersionFolder) hasInterface = false;
         }
       }
     }
@@ -1277,16 +1610,72 @@ export async function createMissingAddOnsFolder(dirHandle: any): Promise<{ succe
   }
 }
 
+export interface AddonFileInstallStep {
+  name: string;
+  size: number;
+  status: "pending" | "checking" | "up_to_date" | "updated" | "installed" | "error";
+  message: string;
+}
+
+export interface AddonInstallProgressReport {
+  success: boolean;
+  folderExisted: boolean;
+  folderCreated: boolean;
+  targetFolderLabel: string;
+  version: string;
+  steps: AddonFileInstallStep[];
+  filesUpdatedCount: number;
+  filesUnchangedCount: number;
+  message: string;
+}
+
 /**
- * Writes addon files directly to local disk using File System Access API
+ * CurseForge/WowUp-style direct Addon Manager installer:
+ * 1. Checks if the addon directory (HaleckAccountImporter) already exists in Interface/AddOns.
+ * 2. If it does not exist, creates the addon folder.
+ * 3. Inspects and installs file by file:
+ *    - HaleckAccountImporter.toc
+ *    - HaleckAccountImporter.lua
+ *    - AddonInterface.lua
+ * 4. Checks if each file exists, verifies if updated, and replaces/writes missing or outdated files.
+ * 5. Returns real-time step by step execution report with zero unwanted downloads.
  */
-export async function writeAddonViaFileSystemApi(
+export async function installOrUpdateAddonDirectlyToDisk(
   addonsHandle: any,
-  options?: { isUpdate?: boolean }
-): Promise<{ success: boolean; version: string; filesWritten: string[]; message: string }> {
+  onProgress?: (step: AddonFileInstallStep, current: number, total: number) => void
+): Promise<AddonInstallProgressReport> {
+  const filesToInstall = [
+    { name: "HaleckAccountImporterForever.toc", content: addonForeverTocRaw, desc: "TOC Oficial WoW Forever (Build 16001)" },
+    { name: "HaleckAccountImporterForever.lua", content: addonForeverLuaRaw, desc: "Motor de Coleta e Exportação Completa de Conta e Personagem" },
+  ];
+
+  const steps: AddonFileInstallStep[] = filesToInstall.map((f) => ({
+    name: f.name,
+    size: f.content.length,
+    status: "pending",
+    message: "Aguardando verificação...",
+  }));
+
+  let folderExisted = false;
+  let folderCreated = false;
+
   try {
-    // 1. Check version from server
-    let serverVersion = "4.3.0";
+    // 1. Procurar no diretório se a pasta do addon já existe
+    try {
+      await addonsHandle.getDirectoryHandle("HaleckAccountImporterForever");
+      folderExisted = true;
+    } catch {
+      folderExisted = false;
+    }
+
+    // 2. Se não existir, criar a pasta do addon
+    const addonFolder = await addonsHandle.getDirectoryHandle("HaleckAccountImporterForever", { create: true });
+    if (!folderExisted) {
+      folderCreated = true;
+    }
+
+    // 3. Obter versão mais recente do manifesto
+    let serverVersion = "5.0.0-Forever";
     try {
       const manifestRes = await fetch("/api/blizzard/wow/addon/manifest");
       if (manifestRes.ok) {
@@ -1295,38 +1684,109 @@ export async function writeAddonViaFileSystemApi(
       }
     } catch {}
 
-    // 2. Obtain or create HaleckAccountImporter folder
-    const addonFolder = await addonsHandle.getDirectoryHandle("HaleckAccountImporter", { create: true });
+    let filesUpdatedCount = 0;
+    let filesUnchangedCount = 0;
 
-    // 3. Write all 3 files
-    const files = [
-      { name: "HaleckAccountImporter.toc", content: addonTocRaw },
-      { name: "HaleckAccountImporter.lua", content: addonLuaRaw },
-      { name: "AddonInterface.lua", content: addonInterfaceLuaRaw },
-    ];
+    // 4. Instalar arquivo por arquivo dentro da pasta do addon
+    for (let i = 0; i < filesToInstall.length; i++) {
+      const file = filesToInstall[i];
+      const step = steps[i];
 
-    const filesWritten: string[] = [];
+      step.status = "checking";
+      step.message = "Verificando integridade no disco...";
+      if (onProgress) onProgress(step, i + 1, filesToInstall.length);
 
-    for (const f of files) {
-      const fileHandle = await addonFolder.getFileHandle(f.name, { create: true });
-      const writable = await fileHandle.createWritable();
-      await writable.write(f.content);
-      await writable.close();
-      filesWritten.push(f.name);
+      let existingContent = "";
+      let fileExists = false;
+
+      try {
+        const existingHandle = await addonFolder.getFileHandle(file.name);
+        const existingFile = await existingHandle.getFile();
+        existingContent = await existingFile.text();
+        fileExists = true;
+      } catch {
+        fileExists = false;
+      }
+
+      // Normalizar quebras de linha para comparação justa de conteúdo
+      const normalizedExisting = existingContent.replace(/\r\n/g, "\n").trim();
+      const normalizedNew = file.content.replace(/\r\n/g, "\n").trim();
+
+      if (fileExists && normalizedExisting === normalizedNew) {
+        // Arquivo já está perfeitamente em dia
+        step.status = "up_to_date";
+        step.message = `Em dia (v${serverVersion}, ${(file.content.length / 1024).toFixed(1)} KB)`;
+        filesUnchangedCount++;
+      } else {
+        // Arquivo ausente ou desatualizado: escrever / substituir
+        step.status = "checking";
+        step.message = fileExists ? "Substituindo por versão mais recente..." : "Gravando arquivo no disco...";
+        if (onProgress) onProgress(step, i + 1, filesToInstall.length);
+
+        const fileHandle = await addonFolder.getFileHandle(file.name, { create: true });
+        const writable = await fileHandle.createWritable();
+        await writable.write(file.content);
+        await writable.close();
+
+        step.status = fileExists ? "updated" : "installed";
+        step.message = fileExists
+          ? `Atualizado com sucesso (v${serverVersion}, ${(file.content.length / 1024).toFixed(1)} KB)`
+          : `Instalado com sucesso (v${serverVersion}, ${(file.content.length / 1024).toFixed(1)} KB)`;
+        filesUpdatedCount++;
+      }
+
+      if (onProgress) onProgress(step, i + 1, filesToInstall.length);
     }
 
-    const actionLabel = options?.isUpdate ? "atualizado" : "instalado";
+    const message = filesUpdatedCount > 0
+      ? `[Sucesso] Addon Haleck Account Importer Forever v${serverVersion} instalado com sucesso! ${filesUpdatedCount} arquivo(s) gravado(s)/substituído(s) em Interface/AddOns/HaleckAccountImporterForever/.`
+      : `[Em Sincronia] Todos os arquivos do Addon já estão 100% atualizados na versão v${serverVersion} na pasta Interface/AddOns/HaleckAccountImporterForever/.`;
 
     return {
       success: true,
+      folderExisted,
+      folderCreated,
+      targetFolderLabel: "Interface/AddOns/HaleckAccountImporterForever",
       version: serverVersion,
-      filesWritten,
-      message: `Addon 'Haleck Account Importer' v${serverVersion} ${actionLabel} com sucesso na pasta Interface/AddOns!`,
+      steps,
+      filesUpdatedCount,
+      filesUnchangedCount,
+      message,
     };
   } catch (err: any) {
     return {
       success: false,
-      version: "4.3.0",
+      folderExisted,
+      folderCreated,
+      targetFolderLabel: "Interface/AddOns/HaleckAccountImporterForever",
+      version: "5.0.0-Forever",
+      steps,
+      filesUpdatedCount: 0,
+      filesUnchangedCount: 0,
+      message: err?.message || "Falha ao gravar arquivos na pasta do addon.",
+    };
+  }
+}
+
+/**
+ * Writes addon files directly to local disk using File System Access API
+ */
+export async function writeAddonViaFileSystemApi(
+  addonsHandle: any,
+  options?: { isUpdate?: boolean }
+): Promise<{ success: boolean; version: string; filesWritten: string[]; message: string }> {
+  try {
+    const report = await installOrUpdateAddonDirectlyToDisk(addonsHandle);
+    return {
+      success: report.success,
+      version: report.version,
+      filesWritten: report.steps.filter((s) => s.status !== "error").map((s) => s.name),
+      message: report.message,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      version: "4.4.0",
       filesWritten: [],
       message: err?.message || "Falha ao gravar arquivos via File System Access API.",
     };
