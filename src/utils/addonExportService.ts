@@ -847,7 +847,7 @@ Instalação:
   const url = URL.createObjectURL(content);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `HaleckAccountImporterForever-5.0.0.zip`;
+  a.download = `HaleckAccountImporterForever-1.0.zip`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -1660,22 +1660,30 @@ export async function installOrUpdateAddonDirectlyToDisk(
   let folderCreated = false;
 
   try {
+    // 0. Se o handle fornecido for a pasta raiz do WoW, navegar para Interface/AddOns automaticamente
+    let targetParentFolder = addonsHandle;
+    try {
+      const iface = await addonsHandle.getDirectoryHandle("Interface", { create: true });
+      const aons = await iface.getDirectoryHandle("AddOns", { create: true });
+      targetParentFolder = aons;
+    } catch {}
+
     // 1. Procurar no diretório se a pasta do addon já existe
     try {
-      await addonsHandle.getDirectoryHandle("HaleckAccountImporterForever");
+      await targetParentFolder.getDirectoryHandle("HaleckAccountImporterForever");
       folderExisted = true;
     } catch {
       folderExisted = false;
     }
 
     // 2. Se não existir, criar a pasta do addon
-    const addonFolder = await addonsHandle.getDirectoryHandle("HaleckAccountImporterForever", { create: true });
+    const addonFolder = await targetParentFolder.getDirectoryHandle("HaleckAccountImporterForever", { create: true });
     if (!folderExisted) {
       folderCreated = true;
     }
 
     // 3. Obter versão mais recente do manifesto
-    let serverVersion = "5.0.0-Forever";
+    let serverVersion = "1.0.0";
     try {
       const manifestRes = await fetch("/api/blizzard/wow/addon/manifest");
       if (manifestRes.ok) {

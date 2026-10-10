@@ -1,7 +1,7 @@
 --[[
   =============================================================================
   Haleck Account Importer Forever (HAIF)
-  Versão: 5.0.0-Forever (World of Warcraft: Forever / Vanilla+ Build 16001)
+  Versão: 1.0.0 (World of Warcraft: Forever / Vanilla+ Build 16001)
   Autor: Haleck
   
   Coleta e exporta dados completos de conta e personagens para o Haleck GameLog.
@@ -17,7 +17,7 @@
 --]]
 
 local ADDON_NAME = "HaleckAccountImporterForever"
-local ADDON_VERSION = "5.0.0-Forever"
+local ADDON_VERSION = "1.0.0"
 local CLIENT_BUILD = "16001"
 
 -- Proteção Anti-Taint e Chamadas Seguras

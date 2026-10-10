@@ -7,7 +7,7 @@
 ## Notes-enUS: Ultimate account and character exporter for WoW Forever (Vanilla+ Build 16001). Full capture of gear, bags, bank, talents, full stats, quests, reputations, collections, and milestones. Commands: /haif or /foreverimporter. Minimap button compatible with EllesmereUI and addon drawers.
 ## Notes-ptBR: Exportador definitivo de conta e personagens para WoW Forever (Vanilla+ Build 16001). Coleta completa de equipamentos, bolsas, banco, talentos, estatísticas completas, missões, reputações, coleções e marcos. Comandos: /haif ou /foreverimporter. Botão no Minimapa compatível com EllesmereUI e gavetas de addons.
 ## Author: Haleck
-## Version: 5.0.0-Forever
+## Version: 1.0.0
 ## X-Build-Target: World of Warcraft: Forever 1.60.1 (build 70170)
 ## X-Category: Character & Account Sync
 ## SavedVariables: HaleckAccountImporterForeverDB

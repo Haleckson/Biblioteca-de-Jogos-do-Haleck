@@ -6724,7 +6724,10 @@ app.get("/api/blizzard/wow/addon-sync/all", (req, res) => {
       realm: record.profile?.realm,
       level: record.profile?.level,
       characterClass: record.profile?.characterClass,
-      equippedItemLevel: record.profile?.equippedItemLevel,
+      race: record.profile?.race,
+      gender: record.profile?.gender,
+      faction: record.profile?.faction,
+      equippedItemLevel: record.profile?.equippedItemLevel || 0,
       detectedVersion: record.detectedVersion,
       isForever: record.isForever,
       receivedAt: record.receivedAt,
@@ -6733,6 +6736,13 @@ app.get("/api/blizzard/wow/addon-sync/all", (req, res) => {
         (record.profile?.bank?.mainBank?.length || 0) +
         (record.profile?.bank?.reagentBank?.length || 0) +
         (record.profile?.bank?.warbandBank?.length || 0),
+      gearCount: (record.profile?.equippedItems || []).length,
+      stats: record.profile?.stats,
+      talents: record.profile?.talents,
+      questsCount: (record.profile?.quests || []).length || (record.profile?.completedQuests ? Object.keys(record.profile.completedQuests).length : 0),
+      mountsCount: (record.profile?.mounts || []).length,
+      petsCount: (record.profile?.pets || []).length,
+      fullProfile: record.profile,
     }));
 
   const alts = Object.values(wowAddonEconomyStore);
@@ -6830,7 +6840,7 @@ app.get("/api/blizzard/wow/addon/manifest", (req, res) => {
   return res.json({
     success: true,
     name: "Haleck Account Importer Forever",
-    version: "5.0.0-Forever",
+    version: "1.0.0",
     targetVersion: "WoW Forever (Vanilla+ Build 16001)",
     officialLaunchDate: "2026-11-04",
     clientFolder: "_classic_beta_",
@@ -6924,7 +6934,7 @@ app.get("/api/blizzard/wow/addon/github-checksum", async (req, res) => {
     success: true,
     repository: "https://github.com/Haleckson/Biblioteca-de-Jogos-do-Haleck",
     branch: "main",
-    version: "5.0.0-Forever",
+    version: "1.0.0",
     files: fileHashes,
     checkedAt: new Date().toISOString(),
   });
@@ -6933,7 +6943,7 @@ app.get("/api/blizzard/wow/addon/github-checksum", async (req, res) => {
 // 3f. Endpoint to query Addon installation status and check for updates
 app.get("/api/blizzard/wow/addon/status", (req, res) => {
   const targetPath = (req.query.targetPath as string) || "";
-  const availableVersion = "5.0.0-Forever";
+  const availableVersion = "1.0.0";
   const compatibleForeverBuilds = ["16001", "16002", "16003", "11506", "11507"];
 
   let cleanPath = targetPath.trim();
@@ -6961,7 +6971,7 @@ app.get("/api/blizzard/wow/addon/status", (req, res) => {
       } catch {}
     }
 
-    if (installedVersion === availableVersion || installedVersion?.includes("5.0")) {
+    if (installedVersion === availableVersion || installedVersion?.includes("1.0")) {
       isUpToDate = true;
       status = "up_to_date";
     } else {
@@ -7054,8 +7064,8 @@ app.post("/api/blizzard/wow/addon/install", (req, res) => {
         installedDirectly: true,
         destinationFolder,
         filesWritten,
-        version: "5.0.0-Forever",
-        message: `Addon 'HaleckAccountImporterForever' v5.0.0 instalado/atualizado com sucesso em ${destinationFolder}!`,
+        version: "1.0.0",
+        message: `Addon 'HaleckAccountImporterForever' v1.0.0 instalado/atualizado com sucesso em ${destinationFolder}!`,
       });
     }
 
@@ -7065,7 +7075,7 @@ app.post("/api/blizzard/wow/addon/install", (req, res) => {
       installedDirectly: false,
       isWindowsClientPath: true,
       destinationFolder,
-      version: "5.0.0-Forever",
+      version: "1.0.0",
       message: `Caminho local do Windows registrado (${destinationFolder}). Utilize o instalador automático (.BAT ou .PS1) de 1 clique gerado pelo sistema para copiar os arquivos instantaneamente.`,
     });
   } catch (err: any) {
@@ -7322,11 +7332,23 @@ app.get("/api/blizzard/wow/addon-sync/:realm/:name", (req, res) => {
   return res.json(data);
 });
 
-// 6. Endpoint to clear sync storage
+// 6. Endpoint to delete a specific synced character from database
+app.delete("/api/blizzard/wow/addon-sync/:key", (req, res) => {
+  const key = req.params.key;
+  delete wowAddonSyncStore[key];
+  delete wowAddonEconomyStore[key];
+  delete wowCharacterProfilesStore[key];
+  saveWoWStorage();
+  return res.json({ success: true, message: `Personagem '${key}' removido da database com sucesso.` });
+});
+
+// 7. Endpoint to clear sync storage
 app.post("/api/blizzard/wow/addon-sync/clear", (req, res) => {
   for (const k in wowAddonSyncStore) delete wowAddonSyncStore[k];
   for (const k in wowAddonEconomyStore) delete wowAddonEconomyStore[k];
-  return res.json({ success: true, message: "Histórico de sincronização do Add-on limpo com sucesso." });
+  for (const k in wowCharacterProfilesStore) delete wowCharacterProfilesStore[k];
+  saveWoWStorage();
+  return res.json({ success: true, message: "Histórico de sincronização e database de personagens limpos com sucesso." });
 });
 
 // ========================================================================
